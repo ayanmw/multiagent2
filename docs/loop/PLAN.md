@@ -24,7 +24,7 @@
 | M0-13 | **前端: 登录/注册页面**：Naive UI 表单，登录成功存储 JWT 到 localStorage，router 守卫实现未登录跳转 | ✅ | 注册→登录→跳转到主页 |
 | M0-14 | **前端: 主布局**：左侧 sidebar（对话/Sessions/Provider/Model/设置导航），顶部 header（用户信息/退出），dark theme 适配 | ✅ | 各导航项切换正常，dark 主题一致 |
 | M0-15 | **前端: Provider 管理页面**：表格列表 + 新建/编辑对话框（含 protocol 选择）+ 测试连接按钮 + 删除确认 | ✅ | 创建 Provider → 测试连接 → 模型列表自动加载 |
-| M0-16 | **前端: Model 管理页面**：按 Provider 分组展示，每个 Provider 下手动刷新模型列表，每个 Model 可启用/禁用 | ○ | 点击刷新 → 从 Provider 拉取 → 列表更新 |
+| M0-16 | **前端: Model 管理页面**：按 Provider 分组展示，每个 Provider 下手动刷新模型列表，每个 Model 可启用/禁用 | ✅ | 点击刷新 → 从 Provider 拉取 → 列表更新 |
 | M0-17 | **前端: 对话工作台（核心）**：左侧 Session 列表（可新建/切换），右侧对话区（消息气泡 + Markdown 渲染 + 流式逐字输出），底部输入框 + 发送按钮 | ○ | 新建 Session → 选 Model → 发消息 → 看到流式回复 |
 | M0-18 | **前端: 对话工具栏**：消息区上方显示当前 Model/Provider，可点击切换；消息区支持 /clear 清空上下文 | ○ | 切换 Model → 后续回复用新 Model；/clear 后上下文重置 |
 | M0-19 | **集成验证**：端到端测试——注册→登录→创建 OpenAI Provider（可配 Ollama 本地或真实 API）→拉取模型列表→启用模型→新建 Session→发消息→收到流式回复→刷新后历史仍在 | ○ | 全链路走通 |

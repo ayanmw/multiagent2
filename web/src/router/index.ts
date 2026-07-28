@@ -35,8 +35,8 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'models',
         name: 'models',
-        component: () => import('@/views/PlaceholderView.vue'),
-        meta: { title: 'Model 管理', desc: 'M0-16 将在此按 Provider 分组展示并启用/禁用模型' },
+        component: () => import('@/views/ModelsView.vue'),
+        meta: { title: 'Model 管理', desc: '按 Provider 分组展示模型，手动刷新并启用/禁用' },
       },
       {
         path: 'settings',

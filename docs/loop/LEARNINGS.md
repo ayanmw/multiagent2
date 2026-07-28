@@ -155,6 +155,12 @@ server/
 - 路由守卫：受保护路由置 `route.meta.requiresAuth`；`beforeEach` 中若 requiresAuth 且未登录 → 跳 `/login?redirect=fullPath`，已登录却访问 `/login` 或 `/register` → 跳 `/`。App.vue 顶层用 `<router-view/>`，`/` 路由以 DefaultLayout 为父、home/about 为其 children，登录/注册为独立顶层路由（全屏、不套布局）。
 - M0-13 仅前端改动：`npm run build` + `vue-tsc --noEmit` 通过即为验收；runtime 端到端（注册→登录→跳转）留待 M0-19 集成验证。
 
+### 2026-07-28 | 前端 | Provider 管理页（M0-15，src/api/provider.ts + src/views/ProvidersView.vue）
+- 前端 Provider API 封装约定：`src/api/provider.ts` 的 `listProviders/getProvider/createProvider/updateProvider/deleteProvider/fetchProviderModels` 全部走 `request('/api/...')`（client.ts 自动拼 `/api` + JWT）；响应契约与 M0-07/08 后端一致：`list` 返回 `{providers:[...]}`，`fetchProviderModels` 返回 `{provider_id,protocol,base_url,cached,models:[{id,owned_by}]}`（owned_by 后端 omitempty，可能缺省为 '-'）。
+- 「测试连接」不另起后端接口：直接复用 `GET /api/providers/:id/models` 做连通性探测——200 即地址/密钥可达并顺带展示模型列表，502 即连接失败（弹窗显示 error）。M0-16/17/19 的模型相关交互可复用同一端点。
+- 编辑 Provider 时 APIKey 字段留空语义：前端不传 `api_key` 字段或传空串，后端 `UpdateProviderHandler` 仅在 `req.APIKey != ""` 时重新加密覆盖，故编辑表单的 api_key 默认空、placeholder 提示「留空则不修改」，避免误清空已有密钥。
+- NDataTable 固定列 `fixed:'right'` 必须配 `:scroll-x` 才生效；`flex-height` + 外层 `flex-1` 让表格在卡片内自适应高度。`NPopconfirm` 用 `#trigger` 插槽嵌按钮，`onPositiveClick` 触发删除。
+
 ### 2026-07-28 | 前端 | UnoCSS 深色模式配置（M0-14，uno.config.ts）
 - UnoCSS 0.63.0 的 `dark` 是 **preset 级选项**，不能写在顶层 `defineConfig({ dark: 'class' })`（vue-tsc 报 `dark does not exist in type UserConfig`）；正确写法是 `presetUno({ dark: 'class' })`，生成 `.dark` 选择器使 `dark:` 工具类生效。
 - 暗色状态由 `stores/ui.ts`（Pinia）管理：`dark` ref 持久化到 localStorage `gm_agent_theme`，并在 store 初始化/切换时 `document.documentElement.classList.toggle('dark', ...)`；`App.vue` 的 `NConfigProvider` 绑定 `darkTheme`（null=浅色）使 Naive UI 组件同步变色。`NLayout`/`NMenu` 等组件随 Naive 主题自适应，布局 chrome（header/sider/content 背景与边框）用 `dark:bg-*`/`dark:border-*` 工具类补齐。
