@@ -126,3 +126,14 @@ server/
 - **/api/chat 流程（api/chat.go）**：解析已启用 Model（指定 `model_id` 校验归属+启用，否则取默认启用模型，退化取首个启用）→ 关联 Provider（校验归属）→ `crypto.Decrypt` 还原 AES-GCM 的 api_key → `engine.New(ModelConfig{ModelID,BaseURL,APIKey,Protocol})` → `eng.Chat(ctx, sessionID, message)`。M0-10 仅支持 `protocol=openai` 兼容路径（anthropic/gemini 需后续里程碑加专属适配器，引擎返回明确错误）。
 - 引擎每请求新建 Runner（含独立内存会话），M0-10 不做跨请求持久化（M0-12 接 DB 会话）；`defer eng.Close()` 释放资源。
 - 运行时验证：用临时 mock OpenAI 服务（非流式 `/chat/completions` 返回标准 `chat.completion` JSON）跑通「注册→建 Provider→sync 模型→启用→/api/chat 拿到回复」全链路。注意本机 safe-delete shim 在回收站异常时「删除失败即中止」，临时大目录用 `mv` 移出仓库而非 `rm` 删除。
+
+### 2026-07-28 | 架构 | AG-UI SSE 流式端点（M0-11，internal/api/sse.go）
+- 框架 v1.10.0 无内置 agui 包，需手动把 `event.Event` 流映射成 AG-UI 协议 SSE：`event.Event` 嵌入 `model.Response`，文本在 `Choices[].Delta.Content`（流式）或 `Choices[].Message.Content`（非流式）；工具调用在 `Choices[].Delta.ToolCalls` 或 `Choices[].Message.ToolCalls`，每项 `ToolCall{ID, Function.Name, Function.Arguments([]byte JSON)}`。
+- 转换核心抽成纯函数 `aguiConverter.Convert(ch <-chan *event.Event, emit func(string, gin.H))`（不依赖 gin.Context），便于单测；emit 由 handler 包成 SSE 写出（`data: {json}\n\n` + Flush），json 内含 `type` 字段。事件顺序：RUN_STARTED→(TEXT_MESSAGE_CONTENT / TOOL_CALL_START→TOOL_CALL_ARGS→TOOL_CALL_END)→RUN_FINISHED，出错发 RUN_ERROR。
+- engine 新增 `Stream(ctx, sessionID, userMessage) (<-chan *event.Event, error)`：内部 goroutine 桥接 Runner 输出 channel，ctx 取消/90s 超时后 `cancel()` 并关闭输出；`Chat` 复用 `Stream` 累积文本（DRY）。handler 用 `c.Request.Context()` 作 Stream 入参，客户端断开即停止推送。
+- Session 持久化：model.Session（SessionKey 全局唯一、随机生成、对外暴露为 URL :session_id）/ model.Message；repo.GetOrCreateSession 在 key 不存在时【用传入 key 建行】（最初误写成重新生成随机 key，导致客户端 session_id 丢失，已修）；AppendMessage 落 user/assistant 消息，仅正常结束时写 assistant。
+
+### 2026-07-28 | 测试 | 后台 go run 服务写库的磁盘可见性（沙箱）
+- `go run ./cmd/server &` 后台起服务做 curl 验证时，服务进程对 DB 的写入在后续独立的 bash 命令（python/sqlite 或 find）中常看不到（文件显示 0 字节或 sqlite_master 为空），疑似 Bash 工具沙箱的跨命令文件系统视图隔离。
+- 对策：跨命令可见性不可靠时，用「同进程内 go run 一个小校验程序直接调 repo 包创建+读回」来证明持久化逻辑正确（已验证 Session/Message 落库 + 按 key 回读成功）。SSE handler 的 DB 调用是否成功以「无 RUN_ERROR 事件 + 服务日志有 INSERT」为准。
+- 残留 go run 进程会锁 build cache（go build 报 a.out.exe 被占用）：用 `netstat -ano | grep :PORT` 取 PID，再用 PowerShell 的 Stop-Process -Force 结束（cmd 的 for/taskkill 与 & 在本环境不可靠；不要在 bash 里内联调用 powershell 进程）。
