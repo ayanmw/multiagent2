@@ -11,7 +11,7 @@
 |---|------|------|----------|------|
 | M0-01 | **Go 项目初始化**：server/go.mod（模块路径 `github.com/anmingwei/go-multi-agent-v2`）、目录骨架（cmd/internal/pkg）、main.go 启动 Gin HTTP 服务器 + 健康检查 /health | ✅ | `go build ./...` 通过 + `curl /health` 返回 200 |
 | M0-02 | **GORM + SQLite3 底座**：DB 连接管理、AutoMigrate 框架、User/Role/RolePermission 基础数据模型 | ✅ | `go test ./...` 通过，表自动创建成功 |
-| M0-03 | **Vue3 前端项目初始化**：Vite + Vue3 + TS + Pinia + Vue Router + Naive UI + UnoCSS，基础布局骨架（sidebar + header + router-view） | ○ | `npm run build` 通过，首页可访问 |
+| M0-03 | **Vue3 前端项目初始化**：Vite + Vue3 + TS + Pinia + Vue Router + Naive UI + UnoCSS，基础布局骨架（sidebar + header + router-view） | ✅ | `npm run build` 通过，首页可访问 |
 | M0-04 | **Auth: 注册/登录 API**：POST /api/auth/register、POST /api/auth/login，bcrypt 密码哈希，JWT 签发与验证 | ○ | curl 注册→登录→拿 token→访问受保护端点 |
 | M0-05 | **Auth: JWT 中间件 + RBAC**：认证中间件提取 user_id + role，角色权限枚举（admin/developer/viewer），路由级权限检查 | ○ | 未登录返回 401，viewer 访问 admin 路由返回 403 |
 | M0-06 | **Auth: APIKey 管理**：POST /api/auth/apikeys（创建）、GET /api/auth/apikeys（列表）、DELETE /api/auth/apikeys/:id（吊销），SHA256 哈希存储 | ○ | 创建 APIKey → 用 X-API-Key header 访问受保护端点 |

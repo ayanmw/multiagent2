@@ -20,6 +20,13 @@
 
 ---
 
+### 2026-07-28 11:13 | M0-02 | ✅
+- 完成内容：GORM + SQLite3 数据库底座，User/Role/RolePermission 模型 + AutoMigrate + 角色种子数据
+- Commit: 0cdd747
+- 验证: go build ✓ | DB 表创建 ✓ | 角色种子 3 条 + 权限 11 条 ✓
+
+---
+
 ### 2026-07-28 11:04 | M0-01 | ✅
 - 完成内容：Go 项目初始化，Gin HTTP 服务器 + /health 健康检查端点
 - Commit: 6f8d152
