@@ -1,0 +1,35 @@
+# Go
+server/bin/
+server/vendor/
+*.exe
+*.test
+*.out
+
+# Node
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Database
+data/
+*.db
+*.db-journal
+*.db-wal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# WorkBuddy
+.workbuddy/
