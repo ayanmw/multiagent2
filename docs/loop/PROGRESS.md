@@ -92,3 +92,8 @@
 - 完成内容：前端登录/注册页面。新增 src/api/client.ts（统一 HTTP 客户端 + 自动附加 JWT + ApiError）、src/api/auth.ts（register/login/me 封装）、src/stores/auth.ts（Pinia 认证仓库，token+user 持久化到 localStorage）；LoginView/RegisterView 用 Naive UI 表单 + 前端校验；router 增加 /login /register 独立路由 + beforeEach 守卫（未登录访问受保护路由跳 /login 并带 redirect，已登录访问登录页跳首页）；App.vue 改为顶层 <router-view/> 使认证页独立全屏；DefaultLayout 接入 auth 仓库显示用户名并接线「退出」。
 - Commit: 9e5cddd
 - 验证: npm install ✓ | npm run build ✓（LoginView/RegisterView chunk 生成）| vue-tsc typecheck ✓
+
+### 2026-07-28 20:34 | M0-14 | ✅
+- 完成内容：前端主布局。DefaultLayout 侧边栏导航改为 对话/Provider/Model/设置（内联 SVG 图标、随路由高亮、可折叠）；头部新增深色主题切换按钮 + 用户信息 + 退出；新增 stores/ui.ts（深色偏好持久化到 localStorage 并切 <html class="dark">），App.vue 的 NConfigProvider 绑定 darkTheme，uno.config.ts 用 presetUno({ dark: 'class' }) 开启 dark: 变体；路由重构为 chat/providers/models/settings 四子路由（首页默认进 /chat），并用单一 PlaceholderView.vue 占位为 M0-15/16/17 预留路由。
+- Commit: 9cc9e0c
+- 验证: npm run build ✓ | vue-tsc typecheck ✓（UnoCSS dark 配置从顶层移到 preset 级以通过类型检查）

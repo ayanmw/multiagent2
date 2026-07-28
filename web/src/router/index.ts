@@ -29,8 +29,8 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'providers',
         name: 'providers',
-        component: () => import('@/views/PlaceholderView.vue'),
-        meta: { title: 'Provider 管理', desc: 'M0-15 将在此实现 Provider 增删改、连接测试与模型自动拉取' },
+        component: () => import('@/views/ProvidersView.vue'),
+        meta: { title: 'Provider 管理', desc: 'Provider 增删改、连接测试与模型自动拉取' },
       },
       {
         path: 'models',
