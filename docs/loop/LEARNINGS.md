@@ -96,3 +96,12 @@ server/
 - 决策：Provider 与 APIKey 一致，按 `user_id` 归属，每个用户管理自己的 LLM 配置（Bring-Your-Own-Key）；列表/详情/更新/删除均校验 `providers.user_id == 当前用户` 防越权。
 - 理由：M0 简化、与 APIKey 模式一致、使 M0-19 集成测试用普通 developer 账号即可创建 Provider，无需 admin 专属全局 Provider。
 - RBAC 矩阵中的 `providers:read` 资源为未来「全局共享 Provider」治理预留；M0 暂不对 Provider 写操作做 RBAC 拦截（任何已登录用户可管自己的）。
+
+### 2026-07-28 | 架构 | Model 自动发现（M0-08，internal/provider）
+- 新增 `internal/provider` 包：`Discoverer.FetchModels(p)` 按 protocol 拉取模型列表并缓存（默认 5 分钟，按 provider id 内存缓存，单实例）。
+- **BaseURL 约定**：OpenAI 兼容端点的 `base_url` 应包含 `/v1`（如 `http://localhost:8080/v1`），发现时请求 `{base}/models`（不再额外加 `/v1`）；base 为空直接报错。
+- **三协议适配**：openai / anthropic 均请求 `{base}/models`，openai 用 `Authorization: Bearer <key>`，anthropic 用 `x-api-key` + `anthropic-version: 2023-06-01`；gemini 走 `?key=<key>` 查询参数（host 缺省 googleapis）。
+- **响应解析**：openai/anthropic 取顶层 `data[]` 数组；gemini 取 `models[]` 并剥 `models/` 前缀；均无 `data/models` 或上游非 2xx → 返回清晰错误（handler 转 502）。
+- api_key 解密（AES-GCM）后用于上游调用；无 key 的本地 proxy（如 Ollama）也能拉取（`fetchBearerModels` 仅在有 key 时设鉴权头）。
+- 缓存不随 provider 更新主动失效（M0-09 前的可接受简化）；handler 返回 `cached` 布尔便于前端提示新鲜度。
+- 登录字段是 `account`（非 `username`）；注册返回体中已含 `token`，测试可直接复用。

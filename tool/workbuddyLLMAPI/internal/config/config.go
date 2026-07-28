@@ -12,10 +12,13 @@ type Config struct {
 	Backend          string   // passthrough | mock | codebuddy
 	BaseURL          string   // passthrough 模式的上游 OpenAI 兼容 base URL
 	APIKey           string   // passthrough 模式的上游 API Key
-	CodeBuddySidecar string   // codebuddy 模式的 Python sidecar 脚本路径
-	CodeBuddyAPIKey  string   // CodeBuddy API Key（消耗积分），即 CODEBUDDY_API_KEY
+	CodeBuddySidecar string   // codebuddy 模式的 Python sidecar 脚本路径（legacy，已被 ACP 直连取代）
+	CodeBuddyAPIKey  string   // CodeBuddy API Key（消耗积分），即 CODEBUDDY_API_KEY（legacy sidecar 用）
 	CodeBuddyEnv     string   // 中国版=internal / iOA 版=ioa，留空为海外版
 	SidecarPython    string   // 运行 sidecar 的 python 可执行文件
+	CodeBuddyDaemonURL string // 本地 CodeBuddy/WorkBuddy 守护进程 HTTP 地址（ACP 直连，消耗积分）
+	CodeBuddyCWD       string // 守护进程 agent 的工作目录（ACP session/new 的 cwd）
+	CodeBuddyModel     string // 透传给守护进程的模型 id（auto/hy3/glm-5.2/...），空=默认
 	DefaultModel     string   // 请求未指定 model 时使用的默认模型名
 	Models           []string // /v1/models 返回的模型列表
 }
@@ -39,6 +42,9 @@ func Load() *Config {
 		CodeBuddyAPIKey:  getenv("CODEBUDDY_API_KEY", ""),
 		CodeBuddyEnv:     getenv("CODEBUDDY_INTERNET_ENVIRONMENT", ""),
 		SidecarPython:    getenv("WB_PYTHON", "python"),
+		CodeBuddyDaemonURL: getenv("WB_DAEMON_URL", "http://127.0.0.1:18765"),
+		CodeBuddyCWD:       getenv("WB_DAEMON_CWD", "."),
+		CodeBuddyModel:     getenv("WB_DAEMON_MODEL", "auto"),
 		DefaultModel:     getenv("WB_DEFAULT_MODEL", "codebuddy-default"),
 	}
 	for _, m := range strings.Split(models, ",") {

@@ -8,6 +8,7 @@ import (
 	"github.com/anmingwei/go-multi-agent-v2/internal/crypto"
 	"github.com/anmingwei/go-multi-agent-v2/internal/middleware"
 	"github.com/anmingwei/go-multi-agent-v2/internal/model"
+	"github.com/anmingwei/go-multi-agent-v2/internal/provider"
 	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -208,6 +209,42 @@ func DeleteProviderHandler(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "deleted", "id": p.ID})
+	}
+}
+
+// ListProviderModelsHandler handles GET /api/providers/:id/models. It
+// discovers the models exposed by the provider's upstream model-list endpoint
+// and returns them. The discoverer caches results per provider for 5 minutes.
+func ListProviderModelsHandler(db *gorm.DB, disc *provider.Discoverer) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid, ok := currentUserID(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+			return
+		}
+		p, ok2 := lookupOwnedProvider(c, db, uid)
+		if !ok2 {
+			return // handler already wrote the response
+		}
+
+		models, cached, err := disc.FetchModels(p)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error":    "failed to discover models from provider",
+				"detail":   err.Error(),
+				"protocol": string(p.Protocol),
+				"base_url": p.BaseURL,
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"provider_id": p.ID,
+			"protocol":    string(p.Protocol),
+			"base_url":    p.BaseURL,
+			"cached":      cached,
+			"models":      models,
+		})
 	}
 }
 

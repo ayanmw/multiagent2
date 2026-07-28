@@ -6,11 +6,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/anmingwei/go-multi-agent-v2/internal/api"
 	"github.com/anmingwei/go-multi-agent-v2/internal/config"
 	"github.com/anmingwei/go-multi-agent-v2/internal/middleware"
 	"github.com/anmingwei/go-multi-agent-v2/internal/model"
+	"github.com/anmingwei/go-multi-agent-v2/internal/provider"
 	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
 	"github.com/gin-gonic/gin"
 )
@@ -29,6 +31,9 @@ func main() {
 	// Setup Gin router
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
+
+	// Model auto-discovery (provider /v1/models, cached 5 minutes).
+	discoverer := provider.NewDiscoverer(cfg.EncryptionKey, 5*time.Minute)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -68,6 +73,7 @@ func main() {
 		protected.GET("/providers/:id", api.GetProviderHandler(db.DB))
 		protected.PUT("/providers/:id", api.UpdateProviderHandler(db.DB, cfg.EncryptionKey))
 		protected.DELETE("/providers/:id", api.DeleteProviderHandler(db.DB))
+		protected.GET("/providers/:id/models", api.ListProviderModelsHandler(db.DB, discoverer))
 	}
 
 	// Graceful shutdown
