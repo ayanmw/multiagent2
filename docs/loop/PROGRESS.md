@@ -20,6 +20,11 @@
 
 ---
 
+### 2026-07-28 12:53 | M0-06 | ✅
+- 完成内容：APIKey 管理（创建/列表/吊销）。model/APIKey（SHA256 哈希存储，明文仅创建时回显一次）；auth.GenerateAPIKey；repo CRUD；api 处理器 POST/GET/DELETE /api/auth/apikeys（owner 归属校验）；middleware.AuthMiddleware 升级为同时支持 Bearer JWT 与 X-API-Key 双鉴权；/api/me 改用 context 身份（兼容两种鉴权）
+- Commit: f52274b
+- 验证: go build/vet ✓ | runtime curl ✓（创建→回显明文；列表不含明文；无鉴权401；X-API-Key→/api/me 200 且身份正确；X-API-Key→/api/admin/roles 403；吊销后该 key→401）
+
 ### 2026-07-28 12:47 | M0-05 | ✅
 - 完成内容：JWT 认证中间件 + RBAC。middleware/auth.go（AuthMiddleware 注入 user_id/role、RequireRole 角色白名单、RequirePermission 基于 RolePermission 表资源/动作校验，支持 * 通配）；repo 新增 GetPermissionsByRoleID/ListRoles；新增 admin 演示端点 GET /api/admin/roles（admin 专属）；main.go 接好受保护路由组
 - Commit: e267da3

@@ -36,6 +36,7 @@ func NewDB(cfg *config.Config) (*DB, error) {
 	if err := db.AutoMigrate(
 		&model.User{},
 		&model.APIKey{},
+		&model.Provider{},
 		&model.Role{},
 		&model.RolePermission{},
 	); err != nil {

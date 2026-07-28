@@ -61,6 +61,13 @@ func main() {
 		{
 			admin.GET("/roles", api.ListRolesHandler(db.DB))
 		}
+
+		// Provider management (user-scoped CRUD; API key encrypted at rest)
+		protected.GET("/providers", api.ListProvidersHandler(db.DB))
+		protected.POST("/providers", api.CreateProviderHandler(db.DB, cfg.EncryptionKey))
+		protected.GET("/providers/:id", api.GetProviderHandler(db.DB))
+		protected.PUT("/providers/:id", api.UpdateProviderHandler(db.DB, cfg.EncryptionKey))
+		protected.DELETE("/providers/:id", api.DeleteProviderHandler(db.DB))
 	}
 
 	// Graceful shutdown

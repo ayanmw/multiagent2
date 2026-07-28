@@ -79,4 +79,10 @@ server/
 - 对策：① 每轮用全新端口（如 8066）；② 或验证前 `netstat -ano | grep :PORT` 确认无残留；③ 端口 8099 已被 `tool/workbuddyLLMAPI` 的 mock 占用，勿用，否则 `bind` 失败且所有 curl 打到 mock。
 - 另：Windows git bash 下 `go run /tmp/x.go` 因 /tmp 路径解析不一致报 "file not specified"；临时验证程序应放仓库内（如 `server/cmd/dump`）或写绝对 Windows 路径。
 
+### 2026-07-28 | 架构 | 统一鉴权中间件（JWT + APIKey 双通道）
+- `middleware.AuthMiddleware(jwtSecret, db)` 同时支持 `Authorization: Bearer <JWT>` 与 `X-API-Key: <raw>` 两种鉴权，X-API-Key 优先；命中后在 context 注入 `auth_user_id`/`auth_user_role`，下游 handler 统一从 context 读身份（不再各自解析 token）。
+- raw key 入库只存 `SHA256(raw)`（`auth.HashAPIKey`），明文仅在创建接口返回一次；列表接口绝不回显明文。
+- APIKey 归属校验：吊销/删除需校验 `api_keys.user_id == 当前用户`，防越权。
+- 受保护路由组统一挂 `AuthMiddleware`，RBAC（RequireRole/RequirePermission）在其后链式执行，两种鉴权方式下 RBAC 均生效。
+
 （以下由自动化循环追加）
