@@ -74,4 +74,9 @@ server/
 - 仓库根 `.gitignore` 已忽略 `*.exe` / `*.db` / `web/node_modules` / `web/dist` 等
 - `tool/workbuddyLLMAPI/workbuddy-llm-api` 是 9.3M 编译二进制，已加入 `.gitignore`（`tool/**/workbuddy-llm-api`），只提交源码
 
+### 2026-07-28 | 测试 | 后台 `go run` 服务残留会命中旧代码
+- 用 `go run ./cmd/server &` 后台起服务做 curl 验证时，`kill $SRV` 未必立即释放端口/进程；下一轮复用同端口（如 8077）可能打到上一轮未退出的「旧二进制」进程，返回旧逻辑结果，造成「修复无效」假象（已踩坑：角色默认 viewer 其实是旧代码在跑）。
+- 对策：① 每轮用全新端口（如 8066）；② 或验证前 `netstat -ano | grep :PORT` 确认无残留；③ 端口 8099 已被 `tool/workbuddyLLMAPI` 的 mock 占用，勿用，否则 `bind` 失败且所有 curl 打到 mock。
+- 另：Windows git bash 下 `go run /tmp/x.go` 因 /tmp 路径解析不一致报 "file not specified"；临时验证程序应放仓库内（如 `server/cmd/dump`）或写绝对 Windows 路径。
+
 （以下由自动化循环追加）

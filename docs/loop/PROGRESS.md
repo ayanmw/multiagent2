@@ -39,3 +39,10 @@
 - Commit: 6f8d152
 - 验证: go build ✓ | curl /health → 200 ✓
 
+---
+
+### 2026-07-28 12:29 | M0-04 | ✅
+- 完成内容：Auth 注册/登录 API（POST /api/auth/register、/login、/me），bcrypt 密码哈希 + HS256 JWT 签发验证，新用户默认 developer 角色
+- Commit: eb7f8f6
+- 验证: go build ✓ | go test ✓ (无测试) | runtime curl ✓（注册→登录→/me，错误密码401、重复注册409、无token401、弱密码400）
+

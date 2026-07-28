@@ -21,3 +21,21 @@ func GetRoleByName(db *gorm.DB, name string) (*model.Role, error) {
 	}
 	return &r, nil
 }
+
+// GetPermissionsByRoleID returns all permissions assigned to a role.
+func GetPermissionsByRoleID(db *gorm.DB, roleID uint) ([]model.RolePermission, error) {
+	var perms []model.RolePermission
+	if err := db.Where("role_id = ?", roleID).Find(&perms).Error; err != nil {
+		return nil, err
+	}
+	return perms, nil
+}
+
+// ListRoles returns all roles, each with its permissions preloaded.
+func ListRoles(db *gorm.DB) ([]model.Role, error) {
+	var roles []model.Role
+	if err := db.Preload("Permissions").Order("id asc").Find(&roles).Error; err != nil {
+		return nil, err
+	}
+	return roles, nil
+}

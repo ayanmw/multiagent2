@@ -9,6 +9,8 @@ import (
 
 	"github.com/anmingwei/go-multi-agent-v2/internal/api"
 	"github.com/anmingwei/go-multi-agent-v2/internal/config"
+	"github.com/anmingwei/go-multi-agent-v2/internal/middleware"
+	"github.com/anmingwei/go-multi-agent-v2/internal/model"
 	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
 	"github.com/gin-gonic/gin"
 )
@@ -35,12 +37,25 @@ func main() {
 		})
 	})
 
-	// Auth routes
+	// Public auth routes
 	authGroup := r.Group("/api/auth")
 	{
 		authGroup.POST("/register", api.RegisterHandler(cfg.JWTSecret, db.DB))
 		authGroup.POST("/login", api.LoginHandler(cfg.JWTSecret, db.DB))
-		authGroup.GET("/me", api.MeHandler(cfg.JWTSecret, db.DB))
+	}
+
+	// Protected routes (require a valid JWT)
+	protected := r.Group("/api")
+	protected.Use(middleware.AuthMiddleware(cfg.JWTSecret))
+	{
+		protected.GET("/me", api.MeHandler(cfg.JWTSecret, db.DB))
+
+		// Admin-only sub-group
+		admin := protected.Group("/admin")
+		admin.Use(middleware.RequireRole(model.RoleAdmin))
+		{
+			admin.GET("/roles", api.ListRolesHandler(db.DB))
+		}
 	}
 
 	// Graceful shutdown
