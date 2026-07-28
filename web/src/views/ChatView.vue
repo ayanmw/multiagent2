@@ -3,8 +3,7 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import {
   NButton,
   NInput,
-  NSelect,
-  NText,
+  NPopselect,
   NEmpty,
   NScrollbar,
   NTag,
@@ -54,6 +53,20 @@ const activeSession = computed(
 const modelOptions = computed(() =>
   models.value.map((m) => ({ label: `${m.name} · ${m.provider_name}`, value: m.id })),
 )
+// 当前选中的模型（选中项为空时走后端默认模型）。
+const currentModel = computed(() => models.value.find((m) => m.id === selectedModelId.value) ?? null)
+// 默认模型（后端标记 is_default），用于未显式选择时的 Provider 展示。
+const defaultModel = computed(() => models.value.find((m) => m.is_default) ?? null)
+// 工具条展示的模型标签。
+const currentModelLabel = computed(() => {
+  if (currentModel.value) return `${currentModel.value.name} · ${currentModel.value.provider_name}`
+  return models.value.length ? '默认模型（自动选择）' : '无可用模型'
+})
+// 工具条展示的 Provider 名称（未显式选模型时取默认模型所属 Provider）。
+const currentProviderName = computed(() => {
+  if (currentModel.value) return currentModel.value.provider_name
+  return defaultModel.value ? defaultModel.value.provider_name : '—'
+})
 
 // 拉取会话列表与可用模型。
 async function loadSessions() {
@@ -95,6 +108,12 @@ async function newSession() {
 async function send() {
   const text = input.value.trim()
   if (!text || !activeKey.value || streaming.value) return
+  // 支持 /clear 命令：清空当前会话上下文（不发送给模型）。
+  if (text === '/clear') {
+    input.value = ''
+    clearContext()
+    return
+  }
   if (models.value.length === 0) {
     message.warning('请先在「Model 管理」启用至少一个模型')
     return
@@ -159,6 +178,14 @@ function stopStreaming() {
   abortController.value?.abort()
 }
 
+// 清空当前会话的本地上下文（前端展示重置）。
+// 说明：引擎每次请求新建 Runner（内存会话不跨请求保留），故清空展示即等价于上下文重置；
+// 后续消息不会携带历史，模型视角已无上下文。
+function clearContext() {
+  messages.value = []
+  message.success('上下文已清空')
+}
+
 // Enter 发送，Shift+Enter 换行。
 function onEnter(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -217,24 +244,42 @@ onMounted(async () => {
 
     <!-- 右侧对话区 -->
     <main class="flex-1 flex flex-col min-w-0">
-      <!-- 顶部工具条：Model 选择 -->
+      <!-- 顶部工具条：会话标题 -->
       <header
         class="flex items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
       >
-        <n-text depth="3" class="text-sm">模型</n-text>
-        <n-select
-          v-model:value="selectedModelId"
-          :options="modelOptions"
-          :placeholder="models.length ? '默认模型（自动选择）' : '无可用模型'"
-          clearable
-          size="small"
-          class="w-72"
-          :disabled="models.length === 0"
-        />
         <n-tag v-if="activeSession" size="small" :bordered="false" type="info">
           {{ activeSession.title }}
         </n-tag>
+        <span class="ml-auto text-xs text-gray-400">对话工作台 · 输入 /clear 可重置上下文</span>
       </header>
+
+      <!-- 对话工具栏：当前模型/Provider 可点击切换 + 清空上下文 -->
+      <div
+        class="flex items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 text-sm"
+      >
+        <span class="text-gray-500 dark:text-gray-400">当前模型</span>
+        <n-popselect
+          v-model:value="selectedModelId"
+          :options="modelOptions"
+          :disabled="models.length === 0"
+          trigger="click"
+          size="small"
+          placement="bottom-start"
+        >
+          <n-tag :bordered="false" type="success" class="cursor-pointer select-none">
+            🤖 {{ currentModelLabel }}
+            <span class="ml-1 opacity-60">▾</span>
+          </n-tag>
+        </n-popselect>
+        <span class="text-gray-500 dark:text-gray-400">
+          Provider:
+          <span class="font-medium text-gray-700 dark:text-gray-200">{{ currentProviderName }}</span>
+        </span>
+        <div class="ml-auto">
+          <n-button size="small" tertiary @click="clearContext">清空上下文</n-button>
+        </div>
+      </div>
 
       <!-- 消息区 -->
       <div ref="scrollRef" class="flex-1 overflow-auto px-4 py-4">
@@ -283,7 +328,7 @@ onMounted(async () => {
             v-model:value="input"
             type="textarea"
             :autosize="{ minRows: 1, maxRows: 5 }"
-            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+            placeholder="输入消息，Enter 发送，Shift+Enter 换行；输入 /clear 清空上下文"
             @keydown="onEnter"
           />
           <n-button
