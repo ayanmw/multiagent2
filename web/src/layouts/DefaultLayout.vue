@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { h, ref, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import {
   NLayout,
   NLayoutHeader,
@@ -9,18 +9,69 @@ import {
   NMenu,
   NText,
   NButton,
+  NIcon,
 } from 'naive-ui'
 import type { MenuOption } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
+const ui = useUiStore()
 const collapsed = ref(false)
 
+// 内联 SVG 图标，避免引入额外图标依赖；统一渲染为 Naive UI 的 NIcon。
+function svgIcon(path: string) {
+  return () =>
+    h(NIcon, null, {
+      default: () =>
+        h(
+          'svg',
+          { viewBox: '0 0 24 24', width: '1.2em', height: '1.2em', fill: 'currentColor' },
+          [h('path', { d: path })],
+        ),
+    })
+}
+
 const menuOptions: MenuOption[] = [
-  { label: '首页', key: 'home' },
-  { label: '关于', key: 'about' },
+  {
+    label: '对话',
+    key: 'chat',
+    icon: svgIcon('M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z'),
+  },
+  {
+    label: 'Provider',
+    key: 'providers',
+    icon: svgIcon('M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z'),
+  },
+  {
+    label: 'Model',
+    key: 'models',
+    icon: svgIcon(
+      'M4 4h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 10h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 16h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4z',
+    ),
+  },
+  {
+    label: '设置',
+    key: 'settings',
+    icon: svgIcon(
+      'M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58z',
+    ),
+  },
 ]
+
+// 主题切换按钮图标：深色显示「太阳」(切回浅色)，浅色显示「月亮」(切到深色)。
+const sunIcon = svgIcon(
+  'M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0 .39-.39.39-1.03 0-1.41l-1.06-1.06zm1.06-10.96c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z',
+)
+const moonIcon = svgIcon(
+  'M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z',
+)
+const themeIcon = computed(() => (ui.dark ? sunIcon : moonIcon))
+
+// 当前激活菜单项跟随路由名（chat/providers/models/settings）。
+const activeKey = computed(() => route.name as string)
 
 function handleMenuClick(key: string) {
   router.push({ name: key })
@@ -35,11 +86,14 @@ function handleLogout() {
 <template>
   <n-layout class="h-screen">
     <n-layout-header
-      class="flex items-center px-4 border-b border-gray-200"
+      class="flex items-center px-4 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700"
       style="height: 56px"
     >
       <div class="text-lg font-bold tracking-wide">GoMultiAgent</div>
       <div class="ml-auto flex items-center gap-3">
+        <n-button quaternary circle title="切换深色/浅色主题" @click="ui.toggleDark()">
+          <component :is="themeIcon" />
+        </n-button>
         <n-text v-if="auth.isAuthenticated" depth="3">
           {{ auth.user?.display_name || auth.user?.username }}
         </n-text>
@@ -55,12 +109,13 @@ function handleLogout() {
         :width="220"
         :collapsed="collapsed"
         show-trigger
+        class="bg-white dark:bg-gray-800"
         @collapse="collapsed = true"
         @expand="collapsed = false"
       >
-        <n-menu :options="menuOptions" @update:value="handleMenuClick" />
+        <n-menu :value="activeKey" :options="menuOptions" @update:value="handleMenuClick" />
       </n-layout-sider>
-      <n-layout-content class="p-4 overflow-auto">
+      <n-layout-content class="p-4 overflow-auto bg-gray-50 dark:bg-gray-900">
         <router-view />
       </n-layout-content>
     </n-layout>

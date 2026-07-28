@@ -148,3 +148,14 @@ server/
 - **注册** `POST /api/auth/register` 字段：`username`(required,min=3,max=64) / `email`(required,email) / `password`(required,min=6) / `display_name`(可选)；返回体含 `token`（注册即登录，可直接复用）。
 - **登录** `POST /api/auth/login` 字段：`account`(required，可为 username 或 email) / `password`。
 - M0-08 笔记写「登录字段是 account」仅针对 login；前端 M0-13 登录/注册页面须用各自正确的字段名，勿混用。
+### 2026-07-28 | 前端 | 认证架构约定（M0-13，src/api + src/stores/auth + router 守卫）
+- 统一 HTTP 客户端：`src/api/client.ts` 的 `request(path, opts)` 在 path 前自动拼 `/api`，默认带 `Authorization: Bearer <token>`（token 取自 localStorage `gm_agent_token`），登录/注册传 `auth:false`；错误抛 `ApiError(status, data.error)`。
+- Pinia `useAuthStore`：`token`（来自 localStorage）+ `user`（来自 `gm_agent_user`）+ `isAuthenticated` getter；`login/register` 成功后 `persist` 同时写内存 ref 与 localStorage；`logout` 清空；`fetchMe` 用 token 拉 `/api/me` 校验并刷新 user（失败则 logout）。
+- 后端响应契约：`POST /api/auth/register` 与 `/api/auth/login` 均返回 `{token, user}`，user 含 `id/username/email/display_name/role_id/role/status`；错误返回 `{error}`。注册字段 `username/email/password/display_name?`，登录字段 `account/password`（account 可为用户名或邮箱）。
+- 路由守卫：受保护路由置 `route.meta.requiresAuth`；`beforeEach` 中若 requiresAuth 且未登录 → 跳 `/login?redirect=fullPath`，已登录却访问 `/login` 或 `/register` → 跳 `/`。App.vue 顶层用 `<router-view/>`，`/` 路由以 DefaultLayout 为父、home/about 为其 children，登录/注册为独立顶层路由（全屏、不套布局）。
+- M0-13 仅前端改动：`npm run build` + `vue-tsc --noEmit` 通过即为验收；runtime 端到端（注册→登录→跳转）留待 M0-19 集成验证。
+
+### 2026-07-28 | 前端 | UnoCSS 深色模式配置（M0-14，uno.config.ts）
+- UnoCSS 0.63.0 的 `dark` 是 **preset 级选项**，不能写在顶层 `defineConfig({ dark: 'class' })`（vue-tsc 报 `dark does not exist in type UserConfig`）；正确写法是 `presetUno({ dark: 'class' })`，生成 `.dark` 选择器使 `dark:` 工具类生效。
+- 暗色状态由 `stores/ui.ts`（Pinia）管理：`dark` ref 持久化到 localStorage `gm_agent_theme`，并在 store 初始化/切换时 `document.documentElement.classList.toggle('dark', ...)`；`App.vue` 的 `NConfigProvider` 绑定 `darkTheme`（null=浅色）使 Naive UI 组件同步变色。`NLayout`/`NMenu` 等组件随 Naive 主题自适应，布局 chrome（header/sider/content 背景与边框）用 `dark:bg-*`/`dark:border-*` 工具类补齐。
+- 路由改造：原 `/` 的 home/about 子路由改为 chat/providers/models/settings 四个子路由（首页默认进 `/chat`），并用单一 `PlaceholderView.vue` 占位（按 `route.meta.title/desc` 渲染「功能建设中」），避免为 M0-15/16/17 预建后弃的页面文件；后续里程碑只需把对应路由的 component 指向真实视图即可。

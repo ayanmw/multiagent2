@@ -22,7 +22,7 @@
 | M0-11 | **AG-UI SSE 流式端点**：GET /api/chat/:session_id/stream，将 Agent Event 流转换为 AG-UI 协议 SSE 事件（RUN_STARTED/TEXT_MESSAGE_CONTENT/TOOL_CALL_START/TOOL_CALL_ARGS/TOOL_CALL_END/RUN_FINISHED），Session 持久化到 DB | ✅ | curl SSE 端点 → 逐条收到标准 AG-UI 事件 |
 | M0-12 | **Session 管理 API**：POST /api/sessions（新建）、GET /api/sessions（列表）、GET /api/sessions/:id（含历史消息） | ✅ | 创建 session → 对话 → 刷新页面后历史消息仍在 |
 | M0-13 | **前端: 登录/注册页面**：Naive UI 表单，登录成功存储 JWT 到 localStorage，router 守卫实现未登录跳转 | ✅ | 注册→登录→跳转到主页 |
-| M0-14 | **前端: 主布局**：左侧 sidebar（对话/Sessions/Provider/Model/设置导航），顶部 header（用户信息/退出），dark theme 适配 | ○ | 各导航项切换正常，dark 主题一致 |
+| M0-14 | **前端: 主布局**：左侧 sidebar（对话/Sessions/Provider/Model/设置导航），顶部 header（用户信息/退出），dark theme 适配 | ✅ | 各导航项切换正常，dark 主题一致 |
 | M0-15 | **前端: Provider 管理页面**：表格列表 + 新建/编辑对话框（含 protocol 选择）+ 测试连接按钮 + 删除确认 | ○ | 创建 Provider → 测试连接 → 模型列表自动加载 |
 | M0-16 | **前端: Model 管理页面**：按 Provider 分组展示，每个 Provider 下手动刷新模型列表，每个 Model 可启用/禁用 | ○ | 点击刷新 → 从 Provider 拉取 → 列表更新 |
 | M0-17 | **前端: 对话工作台（核心）**：左侧 Session 列表（可新建/切换），右侧对话区（消息气泡 + Markdown 渲染 + 流式逐字输出），底部输入框 + 发送按钮 | ○ | 新建 Session → 选 Model → 发消息 → 看到流式回复 |

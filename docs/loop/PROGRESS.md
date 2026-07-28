@@ -87,3 +87,8 @@
 - 完成内容：Session 管理 API（POST /api/sessions 新建、GET /api/sessions 列表、GET /api/sessions/:id 详情含历史消息）。复用 M0-11 的 Session/Message 持久层；:id 路径参数即对外 session_key；用户隔离 + 跨用户 404；新增 repo/session_test.go 覆盖隔离/排序/消息正序/越权；新增 internal/api/session.go + main.go 三条路由注册。
 - Commit: b739055
 - 验证: go build ✓ | go vet ✓ | go test ✓（repo session 单测绿）| runtime curl ✓（注册→建会话带标题/默认标题均 201；列表按最近活动倒序；详情空历史；无 token→401；错误 key→404）
+
+### 2026-07-28 19:35 | M0-13 | ✅
+- 完成内容：前端登录/注册页面。新增 src/api/client.ts（统一 HTTP 客户端 + 自动附加 JWT + ApiError）、src/api/auth.ts（register/login/me 封装）、src/stores/auth.ts（Pinia 认证仓库，token+user 持久化到 localStorage）；LoginView/RegisterView 用 Naive UI 表单 + 前端校验；router 增加 /login /register 独立路由 + beforeEach 守卫（未登录访问受保护路由跳 /login 并带 redirect，已登录访问登录页跳首页）；App.vue 改为顶层 <router-view/> 使认证页独立全屏；DefaultLayout 接入 auth 仓库显示用户名并接线「退出」。
+- Commit: 9e5cddd
+- 验证: npm install ✓ | npm run build ✓（LoginView/RegisterView chunk 生成）| vue-tsc typecheck ✓
