@@ -102,3 +102,13 @@
 - 完成内容：前端 Provider 管理页面。新增 src/api/provider.ts（list/get/create/update/delete/fetchModels 封装，api_key 仅入参不回显、响应读 has_api_key）；新增 src/views/ProvidersView.vue（NDataTable 列表：名称/协议/地址/密钥状态/描述/操作，协议与密钥用 NTag 着色；NModal 新建/编辑表单含 protocol 选择 + BaseURL + 密码型 APIKey「编辑时留空=不修改」+ 描述；NPopconfirm 删除确认；「测试连接」复用 GET /api/providers/:id/models 拉取模型并弹窗展示 id/owned_by + 缓存命中标记，成功即代表连接可达）；router 将 /providers 由 PlaceholderView 切到 ProvidersView。
 - Commit: c6659c1
 - 验证: npm install ✓ | npm run build ✓（ProvidersView chunk 6.39KB）| vue-tsc typecheck ✓（修掉可选字段可空告警，用 ?? '' 与局部变量收窄）
+
+### 2026-07-28 22:42 | M0-16 | ✅
+- 完成内容：前端 Model 管理页面。新增 src/api/model.ts（listManagedModels/syncProviderModels/updateModel，对齐 server/internal/api/model.go 契约）；新增 src/views/ModelsView.vue（按 Provider 分组卡片 + 每 Provider「刷新模型」按钮触发 sync 拉取上游并落库 + 模型表「启用/默认」开关，设为默认时一并启用、默认模型锁定启用开关）；router 把 /models 由 PlaceholderView 切到 ModelsView。
+- Commit: ddf7d21
+- 验证: npm install ✓ | npm run build ✓（ModelsView chunk 4.11KB）| vue-tsc typecheck ✓（exit 0）
+
+### 2026-07-28 23:44 | M0-17 | ✅
+- 完成内容：前端对话工作台（核心）。新增 web/src/api/session.ts（createSession/listSessions/getSession 封装，契约对齐 server/internal/api/session.go）；web/src/api/chat.ts（listEnabledModels 取可用模型 + streamChat 用 fetch+ReadableStream 手动解析 AG-UI SSE 帧，原生 EventSource 无法带 JWT 头故改用 fetch）；web/src/utils/markdown.ts（markdown-it + DOMPurify 安全渲染，html:false 防注入）；web/src/views/ChatView.vue（左侧 Session 列表可新建/切换、右侧消息气泡 + Markdown 渲染 + 流式逐字输出、顶部 Model 选择器、底部输入框 Enter 发送/Shift+Enter 换行、生成中可「停止」）；router 把 /chat 由 PlaceholderView 切到 ChatView；web/package.json 加 markdown-it@14.1.0 / dompurify@3.2.4 / @types/markdown-it。
+- Commit: <pending>
+- 验证: npm install ✓ | npm run build ✓（ChatView chunk 120KB 含 markdown-it+dompurify）| vue-tsc typecheck ✓（exit 0）| server go build ✓（本轮未改后端）

@@ -23,8 +23,8 @@ const routes: RouteRecordRaw[] = [
       {
         path: '',
         name: 'chat',
-        component: () => import('@/views/PlaceholderView.vue'),
-        meta: { title: '对话工作台', desc: 'M0-17 将在此实现 Session 列表、流式对话与 Markdown 渲染' },
+        component: () => import('@/views/ChatView.vue'),
+        meta: { title: '对话工作台' },
       },
       {
         path: 'providers',

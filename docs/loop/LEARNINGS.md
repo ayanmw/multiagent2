@@ -165,3 +165,16 @@ server/
 - UnoCSS 0.63.0 的 `dark` 是 **preset 级选项**，不能写在顶层 `defineConfig({ dark: 'class' })`（vue-tsc 报 `dark does not exist in type UserConfig`）；正确写法是 `presetUno({ dark: 'class' })`，生成 `.dark` 选择器使 `dark:` 工具类生效。
 - 暗色状态由 `stores/ui.ts`（Pinia）管理：`dark` ref 持久化到 localStorage `gm_agent_theme`，并在 store 初始化/切换时 `document.documentElement.classList.toggle('dark', ...)`；`App.vue` 的 `NConfigProvider` 绑定 `darkTheme`（null=浅色）使 Naive UI 组件同步变色。`NLayout`/`NMenu` 等组件随 Naive 主题自适应，布局 chrome（header/sider/content 背景与边框）用 `dark:bg-*`/`dark:border-*` 工具类补齐。
 - 路由改造：原 `/` 的 home/about 子路由改为 chat/providers/models/settings 四个子路由（首页默认进 `/chat`），并用单一 `PlaceholderView.vue` 占位（按 `route.meta.title/desc` 渲染「功能建设中」），避免为 M0-15/16/17 预建后弃的页面文件；后续里程碑只需把对应路由的 component 指向真实视图即可。
+
+### 2026-07-28 | 前端 | Model 管理页（M0-16，src/api/model.ts + src/views/ModelsView.vue）
+- 前端 Model API 契约（对齐 server/internal/api/model.go）：`listManagedModels(id)`→`GET /api/providers/:id/models/managed` 返回 `{provider_id, models:[ManagedModel]}`，`syncProviderModels(id)`→`POST /api/providers/:id/models/sync` 返回 `{provider_id, cached, synced, models}`，`updateModel(pid, mid, {enabled?, is_default?})`→`PUT /api/providers/:id/models/:mid`。ManagedModel = `{id, provider_id, model_id, name, owned_by, enabled, is_default, created_at, updated_at}`。
+- 「刷新模型」= 调 sync 端点（后端 FetchModels 上游发现 + UpsertModel 幂等落库，保留用户已设启用/默认），成功后直接用返回 models 替换本组列表；返回 `cached` 标「缓存命中」、`synced` 标本次新同步数量。
+- UI 约束：**后端 PatchModel 设默认时不会自动启用**，故前端「设为默认」开关一律带 `enabled:true` 同事务提交，且「启用」开关在 `is_default=true` 时锁定，避免出现「默认却禁用」的矛盾态；设默认后 `reload` 本组以同步「同 Provider 仅一个默认」的跨行变化。
+- 页面按 Provider 分组为卡片（NCard + NTag 协议着色 + 「刷新模型」按钮 + NDataTable），无 Provider 时引导去 Provider 管理页；与 ProvidersView 的「测试连接」复用同一模型发现端点形成一致体验。
+
+### 2026-07-28 | 前端 | 对话工作台（M0-17，src/api/session.ts + src/api/chat.ts + src/utils/markdown.ts + src/views/ChatView.vue）
+- 前端消费「认证 SSE」的坑：浏览器原生 `EventSource` **无法自定义请求头**，而 /api/chat/:session_id/stream 走 AuthMiddleware 需要 `Authorization: Bearer <token>`。故改用 `fetch` + `response.body.getReader()` 手动按 `\n\n` 切帧、解析 `data: {json}` 行，得到 AG-UI 事件（事件类型与 server/internal/api/sse.go 的 aguiConverter 对齐：RUN_STARTED / TEXT_MESSAGE_CONTENT / TOOL_CALL_* / RUN_FINISHED / RUN_ERROR）。streamChat(opts) 支持 AbortSignal 供「停止生成」。
+- 助手消息 Markdown 渲染用 `markdown-it`（配置 html:false 禁止内嵌原始 HTML）+ `DOMPurify.sanitize` 双重防 XSS；两包已加进 web/package.json（markdown-it@14.1.0、dompurify@3.2.4、@types/markdown-it@14.1.2）。代码块配深色 pre 样式（scoped + `:deep(.md-content ...)`），M0 不做语法高亮。
+- 交互数据流：用户点「新建对话」→ POST /api/sessions 拿 session_key → GET /api/sessions/:key 拉历史；发消息时本地先 append user 消息与 assistant 占位，再调 streamChat，onEvent 把 TEXT_MESSAGE_CONTENT 的 delta 累加到最后一条 assistant（流式逐字），RUN_FINISHED/RUN_ERROR 收尾；服务端在 SSE 内已落库 user/assistant 消息，故刷新页面后历史仍在（M0-19 验收）。
+- Model 选择器数据源 = GET /api/models（仅已启用模型），清空即「默认模型（后端自动选）」；无可用模型时发送会被拦截并提示去 Model 管理页启用。
+- 路由：router/index.ts 把 name:'chat' 的 component 由 PlaceholderView 换成 ChatView；对话页根节点用 `h-full -m-4 flex` 抵消父级 n-layout-content 的 p-4，做到左右分栏满高。
