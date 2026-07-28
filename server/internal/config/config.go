@@ -1,14 +1,16 @@
 package config
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 )
 
 // Config holds the application configuration.
 type Config struct {
-	DBPath string
-	Port   string
+	DBPath    string
+	Port      string
+	JWTSecret string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -16,6 +18,14 @@ func Load() *Config {
 	cfg := &Config{
 		Port: envOrDefault("PORT", "8080"),
 	}
+
+	// JWT signing secret (must be set via env in production).
+	const defaultJWTSecret = "dev-insecure-secret-change-me"
+	jwtSecret := envOrDefault("JWT_SECRET", defaultJWTSecret)
+	if jwtSecret == defaultJWTSecret {
+		log.Println("[WARN] JWT_SECRET not set; using insecure default secret. Set JWT_SECRET in production.")
+	}
+	cfg.JWTSecret = jwtSecret
 
 	// Default DB path: data/codeagent.db relative to project root
 	dbPath := envOrDefault("DB_PATH", "")

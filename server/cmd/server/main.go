@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/anmingwei/go-multi-agent-v2/internal/api"
 	"github.com/anmingwei/go-multi-agent-v2/internal/config"
 	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
 	"github.com/gin-gonic/gin"
@@ -33,6 +34,14 @@ func main() {
 			"service": "go-multi-agent-v2",
 		})
 	})
+
+	// Auth routes
+	authGroup := r.Group("/api/auth")
+	{
+		authGroup.POST("/register", api.RegisterHandler(cfg.JWTSecret, db.DB))
+		authGroup.POST("/login", api.LoginHandler(cfg.JWTSecret, db.DB))
+		authGroup.GET("/me", api.MeHandler(cfg.JWTSecret, db.DB))
+	}
 
 	// Graceful shutdown
 	go func() {
