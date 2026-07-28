@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NLayout,
   NLayoutHeader,
@@ -10,9 +11,10 @@ import {
   NButton,
 } from 'naive-ui'
 import type { MenuOption } from 'naive-ui'
-import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const auth = useAuthStore()
 const collapsed = ref(false)
 
 const menuOptions: MenuOption[] = [
@@ -22,6 +24,11 @@ const menuOptions: MenuOption[] = [
 
 function handleMenuClick(key: string) {
   router.push({ name: key })
+}
+
+function handleLogout() {
+  auth.logout()
+  router.push({ name: 'login' })
 }
 </script>
 
@@ -33,8 +40,11 @@ function handleMenuClick(key: string) {
     >
       <div class="text-lg font-bold tracking-wide">GoMultiAgent</div>
       <div class="ml-auto flex items-center gap-3">
-        <n-text depth="3">未登录</n-text>
-        <n-button quaternary size="small">退出</n-button>
+        <n-text v-if="auth.isAuthenticated" depth="3">
+          {{ auth.user?.display_name || auth.user?.username }}
+        </n-text>
+        <n-text v-else depth="3">未登录</n-text>
+        <n-button quaternary size="small" @click="handleLogout">退出</n-button>
       </div>
     </n-layout-header>
     <n-layout has-sider class="h-[calc(100vh-56px)]">

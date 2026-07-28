@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { NConfigProvider, NMessageProvider, NDialogProvider, NGlobalStyle } from 'naive-ui'
-import DefaultLayout from './layouts/DefaultLayout.vue'
 </script>
 
 <template>
@@ -8,7 +7,7 @@ import DefaultLayout from './layouts/DefaultLayout.vue'
     <n-global-style />
     <n-message-provider>
       <n-dialog-provider>
-        <default-layout />
+        <router-view />
       </n-dialog-provider>
     </n-message-provider>
   </n-config-provider>
