@@ -74,6 +74,12 @@ func main() {
 		protected.PUT("/providers/:id", api.UpdateProviderHandler(db.DB, cfg.EncryptionKey))
 		protected.DELETE("/providers/:id", api.DeleteProviderHandler(db.DB))
 		protected.GET("/providers/:id/models", api.ListProviderModelsHandler(db.DB, discoverer))
+		protected.POST("/providers/:id/models/sync", api.SyncProviderModelsHandler(db.DB, discoverer))
+		protected.GET("/providers/:id/models/managed", api.ListManagedModelsHandler(db.DB))
+		protected.PUT("/providers/:id/models/:mid", api.UpdateModelHandler(db.DB))
+
+		// Managed model catalog (Agent may only select enabled models)
+		protected.GET("/models", api.ListEnabledModelsHandler(db.DB))
 	}
 
 	// Graceful shutdown

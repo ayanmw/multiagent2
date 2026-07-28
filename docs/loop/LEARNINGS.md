@@ -105,3 +105,11 @@ server/
 - api_key 解密（AES-GCM）后用于上游调用；无 key 的本地 proxy（如 Ollama）也能拉取（`fetchBearerModels` 仅在有 key 时设鉴权头）。
 - 缓存不随 provider 更新主动失效（M0-09 前的可接受简化）；handler 返回 `cached` 布尔便于前端提示新鲜度。
 - 登录字段是 `account`（非 `username`）；注册返回体中已含 `token`，测试可直接复用。
+
+### 2026-07-28 | 架构 | Model 托管表（M0-09，internal/model/repo/api）
+- 新增 `model.Model` 表：每个 Provider 下托管一组模型行（非上游瞬时列表）；`(provider_id, model_id)` 唯一；`enabled`/`is_default` 布尔由用户手动维护。
+- **Sync 语义**：`POST /api/providers/:id/models/sync` 调 disc.FetchModels 拉上游→`UpsertModel` 幂等写入（同 provider+model 已存在则只刷新 Name/OwnedBy，保留用户已设的 enabled/is_default，避免反复刷新把启用状态清零）。
+- **单默认约束**：每 Provider 至多 1 个 `is_default`；`PatchModel` 在事务内把同一 provider 其他行的 is_default 置 false 后再置本行 true。
+- **Agent 选模型池**：`GET /api/models`（受保护）返回当前用户所有 `enabled=true` 的模型，并 JOIN provider 带上 `provider_name`/`protocol`，供 M0-10/11 构造引擎调用（只能选已启用模型）。
+- **归属校验顺序**：UpdateModelHandler 先走 `lookupOwnedProvider`（跨用户直接 403，与 M0-07 一致），再 `GetModelByID` 二次校验 model 行归属，再改标志。
+- api 包内复用 provider.go 的 `currentUserID`/`lookupOwnedProvider`；新文件 api/model.go 路径参数用 `strconv.ParseUint` 自解析（不依赖 middleware）。

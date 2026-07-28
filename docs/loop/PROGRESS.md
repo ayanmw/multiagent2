@@ -61,3 +61,14 @@
 - Commit: 06bc2cb
 - 验证: go build/vet ✓ | runtime curl ✓（创建→has_api_key:true 且明文不回显；列表/详情不含明文；u2 访问 u1 的 provider→403；更新 name 成功；非法 protocol→400；删除后列表空；DB 文件不含明文）
 
+### 2026-07-28 14:38 | M0-08 | ✅
+- 完成内容：Model 自动发现。新增 internal/provider 包（Discoverer：三协议 openai/anthropic/gemini 拉取模型列表、解密 AES-GCM 密钥、按 provider id 内存缓存 5 分钟）；api.ListProviderModelsHandler + GET /api/providers/:id/models（校验归属，返回 models + cached 标志）；main.go 注入 discoverer 并注册路由；4 个 httptest 单测覆盖 openai/anthropic/无 key/上游错误。
+- Commit: 6320779
+- 验证: go build/vet ✓ | go test ✓（provider 包全绿）| runtime curl ✓（register/login→201/200；创建 openai provider→api_key_enc 密文；GET models #1 cached:false 返回 2 模型；#2 cached:true 延迟 10ms→0.5ms；无 token→401）
+
+### 2026-07-28 15:50 | M0-09 | ✅
+- 完成内容：Model 管理（托管模型表）。新增 model.Model（provider_id+model_id 唯一、enabled/is_default 标志）；repo（UpsertModel 幂等同步且保留用户 enable/default、ListModelsByProvider、ListEnabledModels 供 Agent 选模型、GetModelByID 归属校验、PatchModel 事务内保证每 Provider 仅 1 个 default）；api（POST /api/providers/:id/models/sync 拉取上游→upsert→返回托管列表、GET /managed 列表、PUT /:mid 切换启用/默认、GET /api/models 返回当前用户已启用模型含 provider 名/协议）；db.go AutoMigrate 加 Model；main.go 注册 4 条路由。另加 repo/model_test.go（upsert 保留标志、单默认、按用户隔离）。
+- Commit: <pending>
+- 验证: go build/vet ✓ | go test ✓（repo+provider 包全绿）| runtime curl ✓（注册/登录→201/200；建 openai provider→has_api_key:true；sync→拉 2 模型全 disabled；PUT 启用+默认→200；GET /api/models 仅 1 启用且含 provider 信息；managed 仍 2 行仅 1 默认；改第 2 个默认→第 1 个自动取消默认；无 token→401；跨用户改→403）
+
+

@@ -17,7 +17,7 @@
 | M0-06 | **Auth: APIKey 管理**：POST /api/auth/apikeys（创建）、GET /api/auth/apikeys（列表）、DELETE /api/auth/apikeys/:id（吊销），SHA256 哈希存储 | ✅ | 创建 APIKey → 用 X-API-Key header 访问受保护端点 |
 | M0-07 | **Provider 管理 CRUD**：POST/GET/PUT/DELETE /api/providers，protocol 字段（openai/anthropic/gemini），AES-GCM 加密存储 APIKey | ✅ | 创建 Provider → 列表可见 → 可编辑/删除；APIKey 不以明文回显 |
 | M0-08 | **Model 自动发现**：GET /api/providers/:id/models 触发从 Provider 拉取模型列表（/v1/models 或对应协议端点），结果缓存 5 分钟 | ✅ | 配置 OpenAI 兼容 Provider → 调 models 接口 → 返回模型列表 |
-| M0-09 | **Model 管理**：Provider 下 Model 的启用/禁用/默认标记，Agent 配置时只能选已启用的 Model | ○ | 从 Provider 拉取的模型可手动启用/禁用 |
+| M0-09 | **Model 管理**：Provider 下 Model 的启用/禁用/默认标记，Agent 配置时只能选已启用的 Model | ✅ | 从 Provider 拉取的模型可手动启用/禁用 |
 | M0-10 | **Agent 对话引擎封装**：engine 层封装 trpc-agent-go Runner/LLMAgent，连接选定 Provider+Model，基础 Tool 集（echo/get_time），输出 Event 流 | ○ | 调 /api/chat 发消息 → 得到 LLM 回复 |
 | M0-11 | **AG-UI SSE 流式端点**：GET /api/chat/:session_id/stream，将 Agent Event 流转换为 AG-UI 协议 SSE 事件（RUN_STARTED/TEXT_MESSAGE_CONTENT/TOOL_CALL_START/TOOL_CALL_ARGS/TOOL_CALL_END/RUN_FINISHED），Session 持久化到 DB | ○ | curl SSE 端点 → 逐条收到标准 AG-UI 事件 |
 | M0-12 | **Session 管理 API**：POST /api/sessions（新建）、GET /api/sessions（列表）、GET /api/sessions/:id（含历史消息） | ○ | 创建 session → 对话 → 刷新页面后历史消息仍在 |

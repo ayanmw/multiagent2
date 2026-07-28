@@ -37,6 +37,7 @@ func NewDB(cfg *config.Config) (*DB, error) {
 		&model.User{},
 		&model.APIKey{},
 		&model.Provider{},
+		&model.Model{},
 		&model.Role{},
 		&model.RolePermission{},
 	); err != nil {
