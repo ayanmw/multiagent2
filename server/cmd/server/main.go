@@ -81,6 +81,11 @@ func main() {
 		// Managed model catalog (Agent may only select enabled models)
 		protected.GET("/models", api.ListEnabledModelsHandler(db.DB))
 
+		// Session 管理（M0-12）：新建 / 列表 / 详情（含历史消息）
+		protected.POST("/sessions", api.CreateSessionHandler(db.DB))
+		protected.GET("/sessions", api.ListSessionsHandler(db.DB))
+		protected.GET("/sessions/:id", api.GetSessionHandler(db.DB))
+
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
 		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey))
 

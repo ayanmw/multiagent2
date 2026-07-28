@@ -1,6 +1,8 @@
 package repo
 
 import (
+	"time"
+
 	"github.com/anmingwei/go-multi-agent-v2/internal/model"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -38,13 +40,36 @@ func GetSessionByKey(db *gorm.DB, uid uint, key string) (*model.Session, error) 
 	return &s, nil
 }
 
-// AppendMessage 写入一条会话消息（用户或助手内容）。
+// AppendMessage 写入一条会话消息（用户或助手内容），并轻量更新所属会话的
+// updated_at，使会话列表可按最近活动时间排序（更新失败不阻断主流程）。
 func AppendMessage(db *gorm.DB, sessionID uint, role, content string) error {
-	return db.Create(&model.Message{
+	if err := db.Create(&model.Message{
 		SessionID: sessionID,
 		Role:      role,
 		Content:   content,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+	_ = db.Model(&model.Session{}).Where("id = ?", sessionID).Update("updated_at", time.Now()).Error
+	return nil
+}
+
+// ListSessions 返回指定用户的所有会话，按最近更新时间倒序（最近活动在前）。
+func ListSessions(db *gorm.DB, uid uint) ([]model.Session, error) {
+	var list []model.Session
+	if err := db.Where("user_id = ?", uid).Order("updated_at DESC").Find(&list).Error; err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// ListSessionMessages 返回会话的全部消息，按创建时间正序（对话自然顺序）。
+func ListSessionMessages(db *gorm.DB, sessionID uint) ([]model.Message, error) {
+	var msgs []model.Message
+	if err := db.Where("session_id = ?", sessionID).Order("created_at ASC").Find(&msgs).Error; err != nil {
+		return nil, err
+	}
+	return msgs, nil
 }
 
 // NewSessionKey 生成一个全局唯一的会话标识（sess- + 8 位随机）。
