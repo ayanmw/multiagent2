@@ -4,16 +4,26 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/anmingwei/go-multi-agent-v2/internal/config"
+	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	// Load configuration
+	cfg := config.Load()
 
+	// Initialize database
+	db, err := repo.NewDB(cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	_ = db // will be injected into handlers in later tasks
+
+	// Setup Gin router
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 
@@ -24,8 +34,21 @@ func main() {
 		})
 	})
 
-	log.Printf("Server starting on :%s", port)
-	if err := r.Run(":" + port); err != nil {
+	// Graceful shutdown
+	go func() {
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+		<-quit
+		log.Println("Shutting down server...")
+		// Close DB connection
+		if sqlDB, err := db.DB.DB(); err == nil {
+			sqlDB.Close()
+		}
+		os.Exit(0)
+	}()
+
+	log.Printf("Server starting on :%s", cfg.Port)
+	if err := r.Run(":" + cfg.Port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }
