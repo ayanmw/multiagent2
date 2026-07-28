@@ -44,11 +44,16 @@ func main() {
 		authGroup.POST("/login", api.LoginHandler(cfg.JWTSecret, db.DB))
 	}
 
-	// Protected routes (require a valid JWT)
+	// Protected routes (accept either a Bearer JWT or an X-API-Key header)
 	protected := r.Group("/api")
-	protected.Use(middleware.AuthMiddleware(cfg.JWTSecret))
+	protected.Use(middleware.AuthMiddleware(cfg.JWTSecret, db.DB))
 	{
-		protected.GET("/me", api.MeHandler(cfg.JWTSecret, db.DB))
+		protected.GET("/me", api.MeHandler(db.DB))
+
+		// API key management (owner-scoped)
+		protected.POST("/auth/apikeys", api.CreateAPIKeyHandler(db.DB))
+		protected.GET("/auth/apikeys", api.ListAPIKeysHandler(db.DB))
+		protected.DELETE("/auth/apikeys/:id", api.RevokeAPIKeyHandler(db.DB))
 
 		// Admin-only sub-group
 		admin := protected.Group("/admin")

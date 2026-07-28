@@ -14,7 +14,7 @@
 | M0-03 | **Vue3 前端项目初始化**：Vite + Vue3 + TS + Pinia + Vue Router + Naive UI + UnoCSS，基础布局骨架（sidebar + header + router-view） | ✅ | `npm run build` 通过，首页可访问 |
 | M0-04 | **Auth: 注册/登录 API**：POST /api/auth/register、POST /api/auth/login，bcrypt 密码哈希，JWT 签发与验证 | ✅ | curl 注册→登录→拿 token→访问受保护端点 |
 | M0-05 | **Auth: JWT 中间件 + RBAC**：认证中间件提取 user_id + role，角色权限枚举（admin/developer/viewer），路由级权限检查 | ✅ | 未登录返回 401，viewer 访问 admin 路由返回 403 |
-| M0-06 | **Auth: APIKey 管理**：POST /api/auth/apikeys（创建）、GET /api/auth/apikeys（列表）、DELETE /api/auth/apikeys/:id（吊销），SHA256 哈希存储 | ○ | 创建 APIKey → 用 X-API-Key header 访问受保护端点 |
+| M0-06 | **Auth: APIKey 管理**：POST /api/auth/apikeys（创建）、GET /api/auth/apikeys（列表）、DELETE /api/auth/apikeys/:id（吊销），SHA256 哈希存储 | ✅ | 创建 APIKey → 用 X-API-Key header 访问受保护端点 |
 | M0-07 | **Provider 管理 CRUD**：POST/GET/PUT/DELETE /api/providers，protocol 字段（openai/anthropic/gemini），AES-GCM 加密存储 APIKey | ○ | 创建 Provider → 列表可见 → 可编辑/删除；APIKey 不以明文回显 |
 | M0-08 | **Model 自动发现**：GET /api/providers/:id/models 触发从 Provider 拉取模型列表（/v1/models 或对应协议端点），结果缓存 5 分钟 | ○ | 配置 OpenAI 兼容 Provider → 调 models 接口 → 返回模型列表 |
 | M0-09 | **Model 管理**：Provider 下 Model 的启用/禁用/默认标记，Agent 配置时只能选已启用的 Model | ○ | 从 Provider 拉取的模型可手动启用/禁用 |

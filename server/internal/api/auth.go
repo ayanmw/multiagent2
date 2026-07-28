@@ -2,9 +2,9 @@ package api
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/anmingwei/go-multi-agent-v2/internal/auth"
+	"github.com/anmingwei/go-multi-agent-v2/internal/middleware"
 	"github.com/anmingwei/go-multi-agent-v2/internal/model"
 	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
 	"github.com/gin-gonic/gin"
@@ -155,23 +155,18 @@ func LoginHandler(jwtSecret string, db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// MeHandler handles GET /api/auth/me (protected; verifies the issued JWT).
-func MeHandler(jwtSecret string, db *gorm.DB) gin.HandlerFunc {
+// MeHandler handles GET /api/me (protected). It reads the identity injected
+// by AuthMiddleware, so it works for both JWT and X-API-Key authentication.
+func MeHandler(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+		userIDVal, ok := c.Get(middleware.CtxUserID)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
 			return
 		}
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+		userID, _ := userIDVal.(uint)
 
-		claims, err := auth.ParseToken(jwtSecret, tokenStr)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
-			return
-		}
-
-		user, err := repo.GetUserByID(db, claims.UserID)
+		user, err := repo.GetUserByID(db, userID)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
 			return

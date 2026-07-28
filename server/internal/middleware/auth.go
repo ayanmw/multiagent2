@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/anmingwei/go-multi-agent-v2/internal/auth"
 	"github.com/anmingwei/go-multi-agent-v2/internal/model"
@@ -19,12 +20,24 @@ const (
 	CtxUsername = "auth_username"
 )
 
-// AuthMiddleware validates the bearer JWT and injects the authenticated
-// user's identity into the Gin context for downstream handlers.
+// AuthMiddleware authenticates a request using either a Bearer JWT or an
+// X-API-Key header, then injects the user identity (user_id, role) into the
+// Gin context for downstream handlers.
 //
 // On failure it aborts with 401 and does NOT call c.Next().
-func AuthMiddleware(jwtSecret string) gin.HandlerFunc {
+func AuthMiddleware(jwtSecret string, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 1) API key takes precedence when present.
+		if rawKey := c.GetHeader("X-API-Key"); rawKey != "" {
+			if authenticateByAPIKey(c, db, rawKey) {
+				c.Next()
+				return
+			}
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid API key"})
+			return
+		}
+
+		// 2) Otherwise require a Bearer JWT.
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing or invalid Authorization header"})
@@ -42,6 +55,29 @@ func AuthMiddleware(jwtSecret string) gin.HandlerFunc {
 		c.Set(CtxUserRole, claims.Role)
 		c.Next()
 	}
+}
+
+// authenticateByAPIKey validates an X-API-Key header, setting the context
+// identity on success.
+func authenticateByAPIKey(c *gin.Context, db *gorm.DB, rawKey string) bool {
+	hash := auth.HashAPIKey(rawKey)
+	ak, err := repo.GetAPIKeyByHash(db, hash)
+	if err != nil {
+		return false
+	}
+	if ak.Status != model.APIKeyStatusActive {
+		return false
+	}
+	if ak.ExpiresAt != nil && ak.ExpiresAt.Before(time.Now()) {
+		return false
+	}
+	user, err := repo.GetUserByID(db, ak.UserID)
+	if err != nil {
+		return false
+	}
+	c.Set(CtxUserID, user.ID)
+	c.Set(CtxUserRole, user.Role.Name)
+	return true
 }
 
 // RequireRole aborts with 403 unless the authenticated user's role is in the
