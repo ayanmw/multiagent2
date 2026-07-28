@@ -20,6 +20,13 @@
 
 ---
 
+### 2026-07-28 12:10 | M0-03 | ✅
+- 完成内容：Vue3 前端项目初始化，Vite + Vue3 + TS + Pinia + Vue Router + Naive UI + UnoCSS，基础布局骨架（sidebar + header + router-view）
+- Commit: f56d486
+- 验证: npm run build ✓（dist 生成，2766 modules transformed）
+
+---
+
 ### 2026-07-28 11:13 | M0-02 | ✅
 - 完成内容：GORM + SQLite3 数据库底座，User/Role/RolePermission 模型 + AutoMigrate + 角色种子数据
 - Commit: 0cdd747
