@@ -66,7 +66,12 @@
 - Commit: 6320779
 - 验证: go build/vet ✓ | go test ✓（provider 包全绿）| runtime curl ✓（register/login→201/200；创建 openai provider→api_key_enc 密文；GET models #1 cached:false 返回 2 模型；#2 cached:true 延迟 10ms→0.5ms；无 token→401）
 
-### 2026-07-28 15:50 | M0-09 | ✅
+### 2026-07-28 17:10 | M0-10 | ✅
+- 完成内容：Agent 对话引擎封装。新增 internal/engine 包（engine.go 封装 trpc-agent-go Runner/LLMAgent，连接选定 Provider+Model；tools.go 提供 echo/get_time 两个基础函数工具；engine_test.go 用 httptest mock OpenAI 服务验证引擎拿到回复）；引入并锁定框架 trpc.group/trpc-go/trpc-agent-go v1.10.0（go.mod/go.sum）；api/chat.go 新增 POST /api/chat（从 DB 选已启用 Model+Provider、AES-GCM 解密 key、构造引擎、返回回复，支持显式 model_id 或自动选默认模型）；main.go 注册路由。
+- Commit: <pending>
+- 验证: go build ✓ | go test ✓（engine 包全绿：mock OpenAI 返回回复 + 非 openai 协议报错）| runtime curl ✓（注册→建 openai Provider→sync→启用默认模型→POST /api/chat 自动选默认模型与显式 model_id 均返回 `[mock] ... 来自临时 mock 服务的回复`）
+
+
 - 完成内容：Model 管理（托管模型表）。新增 model.Model（provider_id+model_id 唯一、enabled/is_default 标志）；repo（UpsertModel 幂等同步且保留用户 enable/default、ListModelsByProvider、ListEnabledModels 供 Agent 选模型、GetModelByID 归属校验、PatchModel 事务内保证每 Provider 仅 1 个 default）；api（POST /api/providers/:id/models/sync 拉取上游→upsert→返回托管列表、GET /managed 列表、PUT /:mid 切换启用/默认、GET /api/models 返回当前用户已启用模型含 provider 名/协议）；db.go AutoMigrate 加 Model；main.go 注册 4 条路由。另加 repo/model_test.go（upsert 保留标志、单默认、按用户隔离）。
 - Commit: e5dd98f
 - 验证: go build/vet ✓ | go test ✓（repo+provider 包全绿）| runtime curl ✓（注册/登录→201/200；建 openai provider→has_api_key:true；sync→拉 2 模型全 disabled；PUT 启用+默认→200；GET /api/models 仅 1 启用且含 provider 信息；managed 仍 2 行仅 1 默认；改第 2 个默认→第 1 个自动取消默认；无 token→401；跨用户改→403）

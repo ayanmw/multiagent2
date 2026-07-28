@@ -113,3 +113,16 @@ server/
 - **Agent 选模型池**：`GET /api/models`（受保护）返回当前用户所有 `enabled=true` 的模型，并 JOIN provider 带上 `provider_name`/`protocol`，供 M0-10/11 构造引擎调用（只能选已启用模型）。
 - **归属校验顺序**：UpdateModelHandler 先走 `lookupOwnedProvider`（跨用户直接 403，与 M0-07 一致），再 `GetModelByID` 二次校验 model 行归属，再改标志。
 - api 包内复用 provider.go 的 `currentUserID`/`lookupOwnedProvider`；新文件 api/model.go 路径参数用 `strconv.ParseUint` 自解析（不依赖 middleware）。
+
+### 2026-07-28 | 架构 | Agent 对话引擎封装（M0-10，internal/engine + trpc-agent-go）
+- 框架模块真实路径是 `trpc.group/trpc-go/trpc-agent-go`（非 github.com/trpc-group/...），**已锁定 v1.10.0** 写入 go.mod；框架 API 变更只改 `internal/engine` 层，业务代码不直连框架。
+- **关键 API（v1.10.0 验证可用）**：
+  - 模型：`openai.New(modelID, openai.WithAPIKey(key), openai.WithBaseURL(baseURL))` —— `name` 即模型 id；`baseURL` 为 OpenAI 兼容端点（含 `/v1`，如 `http://host:port/v1`），框架在该 baseURL 后自动追加 `/chat/completions`。
+  - Agent：`llmagent.New("codeagent", llmagent.WithModel(m), llmagent.WithInstruction(...), llmagent.WithTools([]tool.Tool{...}))`。
+  - Runner：`runner.NewRunner(appName, agent)` —— 未显式提供 session service 时框架**自动创建内存版会话服务**，M0-10 无需注入。
+  - 运行：`runner.Run(ctx, userID, sessionID, model.NewUserMessage(text))` 返回 `<-chan *event.Event`；`sessionID` 为空时引擎默认填 `"default"`。
+  - 事件文本提取：遍历 `ev.Response.Choices`，累加 `c.Delta.Content`（流式分片）与 `c.Message.Content`（非流式整块）即可同时兼容两种方式。
+  - 工具：`tool/function.NewFunctionTool[I,O](fn, function.WithName(...), function.WithDescription(...))` 返回 `*FunctionTool[I,O]`，实现 `tool.Tool` 接口，可直接塞进 `llmagent.WithTools`。
+- **/api/chat 流程（api/chat.go）**：解析已启用 Model（指定 `model_id` 校验归属+启用，否则取默认启用模型，退化取首个启用）→ 关联 Provider（校验归属）→ `crypto.Decrypt` 还原 AES-GCM 的 api_key → `engine.New(ModelConfig{ModelID,BaseURL,APIKey,Protocol})` → `eng.Chat(ctx, sessionID, message)`。M0-10 仅支持 `protocol=openai` 兼容路径（anthropic/gemini 需后续里程碑加专属适配器，引擎返回明确错误）。
+- 引擎每请求新建 Runner（含独立内存会话），M0-10 不做跨请求持久化（M0-12 接 DB 会话）；`defer eng.Close()` 释放资源。
+- 运行时验证：用临时 mock OpenAI 服务（非流式 `/chat/completions` 返回标准 `chat.completion` JSON）跑通「注册→建 Provider→sync 模型→启用→/api/chat 拿到回复」全链路。注意本机 safe-delete shim 在回收站异常时「删除失败即中止」，临时大目录用 `mv` 移出仓库而非 `rm` 删除。

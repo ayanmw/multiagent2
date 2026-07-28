@@ -80,6 +80,9 @@ func main() {
 
 		// Managed model catalog (Agent may only select enabled models)
 		protected.GET("/models", api.ListEnabledModelsHandler(db.DB))
+
+		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
+		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey))
 	}
 
 	// Graceful shutdown
