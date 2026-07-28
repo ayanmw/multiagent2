@@ -56,3 +56,8 @@
 - Commit: eb7f8f6
 - 验证: go build ✓ | go test ✓ (无测试) | runtime curl ✓（注册→登录→/me，错误密码401、重复注册409、无token401、弱密码400）
 
+### 2026-07-28 13:32 | M0-07 | ✅
+- 完成内容：Provider 管理 CRUD（POST/GET/PUT/DELETE /api/providers，含 GET /api/providers/:id）；model/Provider（protocol openai/anthropic/gemini、UserID 归属、APIKeyEnc 只存密文）；internal/crypto（AES-256-GCM 加解密，nonce 前置 base64）；repo CRUD + 归属校验；config 新增 EncryptionKey（32字节，由 PROVIDER_ENC_KEY 或 JWT_SECRET 派生 sha256）；handler 双通道鉴权下读 context 身份，api_key 仅创建/更新时明文入参且从不回显，返回 has_api_key 标志；db.go AutoMigrate 加 Provider；main.go 注册 5 条路由。
+- Commit: 06bc2cb
+- 验证: go build/vet ✓ | runtime curl ✓（创建→has_api_key:true 且明文不回显；列表/详情不含明文；u2 访问 u1 的 provider→403；更新 name 成功；非法 protocol→400；删除后列表空；DB 文件不含明文）
+

@@ -86,3 +86,13 @@ server/
 - 受保护路由组统一挂 `AuthMiddleware`，RBAC（RequireRole/RequirePermission）在其后链式执行，两种鉴权方式下 RBAC 均生效。
 
 （以下由自动化循环追加）
+
+### 2026-07-28 | 安全 | Provider APIKey 加密存储（AES-256-GCM）
+- Provider 的 APIKey 用 AES-256-GCM 加密后存 `providers.api_key_enc`（base64(nonce||ct)，nonce 12字节前置，无需单列存储）；明文只在创建/更新请求体传入，响应从不回显，列表/详情只返回 `has_api_key` 布尔。
+- 加密主密钥 `config.EncryptionKey`：生产用独立环境变量 `PROVIDER_ENC_KEY`，缺省回退到 `JWT_SECRET`（dev 方便）；经 `sha256.Sum256` 得到 32 字节用于 AES-256。未来应改为 KMS/独立密钥管理。
+- 与 APIKey（SHA256 哈希、不可逆）不同：Provider Key 需还原后调用 LLM，故用可逆 AES-GCM，而非哈希。
+
+### 2026-07-28 | 架构 | Provider 采用用户归属（user-scoped / BYOK）
+- 决策：Provider 与 APIKey 一致，按 `user_id` 归属，每个用户管理自己的 LLM 配置（Bring-Your-Own-Key）；列表/详情/更新/删除均校验 `providers.user_id == 当前用户` 防越权。
+- 理由：M0 简化、与 APIKey 模式一致、使 M0-19 集成测试用普通 developer 账号即可创建 Provider，无需 admin 专属全局 Provider。
+- RBAC 矩阵中的 `providers:read` 资源为未来「全局共享 Provider」治理预留；M0 暂不对 Provider 写操作做 RBAC 拦截（任何已登录用户可管自己的）。
