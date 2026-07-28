@@ -82,3 +82,8 @@
 - 完成内容：AG-UI SSE 流式端点 + Session 持久化。新增 internal/api/sse.go（StreamChatHandler + aguiConverter：将 engine 事件流转 AG-UI SSE 事件 RUN_STARTED/TEXT_MESSAGE_CONTENT/TOOL_CALL_START/TOOL_CALL_ARGS/TOOL_CALL_END/RUN_FINISHED/RUN_ERROR）；engine.Stream 方法（返回 <\-chan *event.Event>，桥接 Runner 输出并在 ctx 取消/超时后收尾）；model.Session/model.Message + repo.GetOrCreateSession/AppendMessage/GetSessionByKey + db.go AutoMigrate；main.go 注册 GET /api/chat/:session_id/stream。sse_test.go 覆盖文本流/工具调用/错误三类转换。
 - Commit: f7791b5
 - 验证: go build ✓ | go vet ✓ | go test ✓（api/engine/provider/repo 全绿）| runtime curl SSE ✓（mock OpenAI 返回 RUN_STARTED→TEXT_MESSAGE_CONTENT→RUN_FINISHED；同 session 复用 threadId；同进程内校验 Session+Message 落库成功）
+
+### 2026-07-28 19:09 | M0-12 | ✅
+- 完成内容：Session 管理 API（POST /api/sessions 新建、GET /api/sessions 列表、GET /api/sessions/:id 详情含历史消息）。复用 M0-11 的 Session/Message 持久层；:id 路径参数即对外 session_key；用户隔离 + 跨用户 404；新增 repo/session_test.go 覆盖隔离/排序/消息正序/越权；新增 internal/api/session.go + main.go 三条路由注册。
+- Commit: b739055
+- 验证: go build ✓ | go vet ✓ | go test ✓（repo session 单测绿）| runtime curl ✓（注册→建会话带标题/默认标题均 201；列表按最近活动倒序；详情空历史；无 token→401；错误 key→404）

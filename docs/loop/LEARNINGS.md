@@ -137,3 +137,14 @@ server/
 - `go run ./cmd/server &` 后台起服务做 curl 验证时，服务进程对 DB 的写入在后续独立的 bash 命令（python/sqlite 或 find）中常看不到（文件显示 0 字节或 sqlite_master 为空），疑似 Bash 工具沙箱的跨命令文件系统视图隔离。
 - 对策：跨命令可见性不可靠时，用「同进程内 go run 一个小校验程序直接调 repo 包创建+读回」来证明持久化逻辑正确（已验证 Session/Message 落库 + 按 key 回读成功）。SSE handler 的 DB 调用是否成功以「无 RUN_ERROR 事件 + 服务日志有 INSERT」为准。
 - 残留 go run 进程会锁 build cache（go build 报 a.out.exe 被占用）：用 `netstat -ano | grep :PORT` 取 PID，再用 PowerShell 的 Stop-Process -Force 结束（cmd 的 for/taskkill 与 & 在本环境不可靠；不要在 bash 里内联调用 powershell 进程）。
+
+### 2026-07-28 | 架构 | Session 管理 API（M0-12，internal/api/session.go + repo）
+- 复用 M0-11 已落地的 Session/Message 持久层，不再新增表：`repo.GetSessionByKey(db, uid, key)`（跨用户返回 RecordNotFound→handler 转 404）、`ListSessions`（按 updated_at DESC，AppendMessage 写消息时会顺带刷新会话 updated_at，使最近活动排前）、`ListSessionMessages`（按 created_at ASC 保证对话自然顺序）。
+- **路由约定**：`GET /api/sessions/:id` 的 `:id` 即对外 `session_key`（如 `sess-xxxxxxxx`），与 SSE 端点 `:session_id` 完全一致；前端无需维护内部自增 id，统一用 session_key 标识会话。
+- 新建会话标题可选，空 body 时默认「新对话」（`ShouldBindJSON` 失败按默认处理，不报错）；返回结构含 `session_key / title / created_at / updated_at`，详情结构额外含 `messages[]`（role/content/created_at）。
+- `currentUserID(c)` 定义在 api/provider.go，被 provider/model/session 各 handler 复用（从 AuthMiddleware 注入的 context 读 `auth_user_id`），不要各自再解析 token。
+
+### 2026-07-28 | 约定 | 注册 vs 登录字段差异（修正 M0-08 笔记）
+- **注册** `POST /api/auth/register` 字段：`username`(required,min=3,max=64) / `email`(required,email) / `password`(required,min=6) / `display_name`(可选)；返回体含 `token`（注册即登录，可直接复用）。
+- **登录** `POST /api/auth/login` 字段：`account`(required，可为 username 或 email) / `password`。
+- M0-08 笔记写「登录字段是 account」仅针对 login；前端 M0-13 登录/注册页面须用各自正确的字段名，勿混用。
