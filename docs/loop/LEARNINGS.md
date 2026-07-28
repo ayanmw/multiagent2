@@ -178,3 +178,17 @@ server/
 - 交互数据流：用户点「新建对话」→ POST /api/sessions 拿 session_key → GET /api/sessions/:key 拉历史；发消息时本地先 append user 消息与 assistant 占位，再调 streamChat，onEvent 把 TEXT_MESSAGE_CONTENT 的 delta 累加到最后一条 assistant（流式逐字），RUN_FINISHED/RUN_ERROR 收尾；服务端在 SSE 内已落库 user/assistant 消息，故刷新页面后历史仍在（M0-19 验收）。
 - Model 选择器数据源 = GET /api/models（仅已启用模型），清空即「默认模型（后端自动选）」；无可用模型时发送会被拦截并提示去 Model 管理页启用。
 - 路由：router/index.ts 把 name:'chat' 的 component 由 PlaceholderView 换成 ChatView；对话页根节点用 `h-full -m-4 flex` 抵消父级 n-layout-content 的 p-4，做到左右分栏满高。
+
+### 2026-07-29 | 架构 | 引擎无跨请求会话记忆（M0-18 /clear 语义）
+- 关键事实：`internal/engine.New` 每次请求新建 `runner.NewRunner`（框架自动挂**内存版会话服务**），`sessionID` 仅作该单次请求内的内存 key，**不跨请求保留历史**。因此 LLM 视角下每条消息都是独立单轮，DB 里的 Session/Message 仅用于「前端历史回放」与「刷新后仍在」。
+- M0-18 的 `/clear` 与「清空上下文」按钮只需清空前端 `messages` 展示即可等价于「上下文重置」——后续消息不会携带历史、模型侧也无记忆；无需新增后端清历史端点（M0-19 集成验证时刷新页面旧历史会重现，属预期，因 DB 未清；若需彻底清，M1 再补 DELETE 会话/清消息端点）。
+- 前端模型切换机制：对话工具条用 `n-popselect`（点击 chip 弹下拉切换 `selectedModelId`），比 M0-17 的裸 `n-select` 更贴合「可点击切换」；`selectedModelId` 经 `streamChat({modelId})` 透传到 SSE 端 `model_id` 查询参数，后端 `resolveChatModel` 优先用显式模型、否则取默认启用模型。
+
+### 2026-07-29 | 架构 | Agent 引擎必须显式开启流式（agent.WithStream）
+- trpc-agent-go v1.10.0 的 `llmagent` 默认按**非流式**运行（GenerationConfig.Stream=false）；`runner.Run` 虽返回 channel，但底层仍走非流式 `/chat/completions`（返回整块 Message.Content）。此时 openai 客户端若收到 `text/event-stream` 会报 `expected destination type of 'string' or '[]byte' for responses with content-type 'text/event-stream' that is not 'application/json'`。
+- 要真正 token 级流式（M0 出口标准），引擎 `runner.Run` 必须传 `agent.WithStream(true)`（per-run override，包 `trpc.group/trpc-go/trpc-agent-go/agent`）。开启后上游走 SSE，engine.Stream/Chat 收到的是增量 Delta.Content 事件流；M0-10 engine_test.go 的桩同步改为 SSE（框架自带 TestModel_GenerateContentIter_Streaming 即用此格式：`data: {chunk}\n\n` 分隔、`data: [DONE]` 结尾）。
+- 副作用：开启流式后，框架在流式结束时会在**最终响应**把完整文本放进 Message.Content（增量之和）。消费方必须只累加增量、忽略该最终 Message.Content，否则文本重复一倍（见下条）。
+
+### 2026-07-29 | 架构 | AG-UI 文本去重（Delta vs Message）
+- aguiConverter.Convert（internal/api/sse.go）与 engine.Chat（internal/engine/engine.go）都**不能** `Delta.Content + Message.Content` 直接相加：流式场景下最终响应 Message.Content = 所有增量之和，相加会重复一倍（实测「你好，世界！你好，世界！」）。
+- 正确做法：优先累加 `choice.Delta.Content`（增量）；仅当整轮未出现过任何 Delta（纯非流式单响应）时，才回退用 `choice.Message.Content`。用 converter 的 `sawDelta` 标志区分。sse_test.go 已改 TextStream 用例（最终 Message=增量之和应跳过）并新增 TestAGUIConverter_TextNonStreaming。

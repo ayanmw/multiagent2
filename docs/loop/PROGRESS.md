@@ -112,3 +112,13 @@
 - 完成内容：前端对话工作台（核心）。新增 web/src/api/session.ts（createSession/listSessions/getSession 封装，契约对齐 server/internal/api/session.go）；web/src/api/chat.ts（listEnabledModels 取可用模型 + streamChat 用 fetch+ReadableStream 手动解析 AG-UI SSE 帧，原生 EventSource 无法带 JWT 头故改用 fetch）；web/src/utils/markdown.ts（markdown-it + DOMPurify 安全渲染，html:false 防注入）；web/src/views/ChatView.vue（左侧 Session 列表可新建/切换、右侧消息气泡 + Markdown 渲染 + 流式逐字输出、顶部 Model 选择器、底部输入框 Enter 发送/Shift+Enter 换行、生成中可「停止」）；router 把 /chat 由 PlaceholderView 切到 ChatView；web/package.json 加 markdown-it@14.1.0 / dompurify@3.2.4 / @types/markdown-it。
 - Commit: 528325c
 - 验证: npm install ✓ | npm run build ✓（ChatView chunk 120KB 含 markdown-it+dompurify）| vue-tsc typecheck ✓（exit 0）| server go build ✓（本轮未改后端）
+
+### 2026-07-29 00:46 | M0-18 | ✅
+- 完成内容：前端对话工具栏。在消息区上方新增工具条：用 NPopselect 包裹的模型 chip 显示「当前模型名 · Provider 名」，点击即弹出下拉切换模型（切换后后续回复走新模型）；右侧「清空上下文」按钮 + 输入框支持 `/clear` 命令，二者均清空本地消息展示实现上下文重置。原顶部 model NSelect 移到该工具条，会话标题保留在 header。
+- Commit: 0c25ede
+- 验证: npm install ✓ | npm run build ✓（vite 2862 modules）| vue-tsc --noEmit ✓（exit 0）| go build ./... ✓（本轮未改后端）
+
+### 2026-07-29 02:04 | M0-19 | ✅
+- 完成内容：端到端集成验证（进程内 E2E 测试 TestM0_Integration_E2E）。① 抽 buildRouter 便于测试；② 新增 server/cmd/server/integration_test.go，用 httptest 本地 OpenAI 桩（/v1/models + /v1/chat/completions SSE）跑通「注册→登录→建 openai Provider→sync 模型→启用+默认→建 Session→SSE 流式对话→GET 会话详情校验历史（刷新后仍在）」全链路。验证中发现并修复两个真问题：引擎未开启流式（llmagent 默认非流式），补 agent.WithStream(true)，否则上游被当非流式请求、无法 token 级增量且 SSE 端点报 text/event-stream 解析错；AG-UI converter 与 engine.Chat 同时累加 Delta.Content + 最终 Message.Content 导致流式回复文本重复一倍，改为优先用增量、仅非流式时回退 Message。sse_test.go 增非流式用例、engine_test.go 桩改 SSE。
+- Commit: <pending>
+- 验证: go build ✓ | go vet ✓ | go test ./... ✓（api/engine/cmd/server 全绿；E2E 流式回复「你好，世界！」无重复、历史持久化 2 条消息 user+assistant）| npm run build ✓（前端未改，M0 出口仍可用）

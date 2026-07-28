@@ -17,23 +17,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func main() {
-	// Load configuration
-	cfg := config.Load()
-
-	// Initialize database
-	db, err := repo.NewDB(cfg)
-	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
-	}
-	_ = db // will be injected into handlers in later tasks
-
-	// Setup Gin router
+// buildRouter 构造 Gin 路由（含全部 API 路由），抽出来便于在集成测试中进程内复用。
+func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
-
-	// Model auto-discovery (provider /v1/models, cached 5 minutes).
-	discoverer := provider.NewDiscoverer(cfg.EncryptionKey, 5*time.Minute)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -73,8 +60,8 @@ func main() {
 		protected.GET("/providers/:id", api.GetProviderHandler(db.DB))
 		protected.PUT("/providers/:id", api.UpdateProviderHandler(db.DB, cfg.EncryptionKey))
 		protected.DELETE("/providers/:id", api.DeleteProviderHandler(db.DB))
-		protected.GET("/providers/:id/models", api.ListProviderModelsHandler(db.DB, discoverer))
-		protected.POST("/providers/:id/models/sync", api.SyncProviderModelsHandler(db.DB, discoverer))
+		protected.GET("/providers/:id/models", api.ListProviderModelsHandler(db.DB, disc))
+		protected.POST("/providers/:id/models/sync", api.SyncProviderModelsHandler(db.DB, disc))
 		protected.GET("/providers/:id/models/managed", api.ListManagedModelsHandler(db.DB))
 		protected.PUT("/providers/:id/models/:mid", api.UpdateModelHandler(db.DB))
 
@@ -92,6 +79,24 @@ func main() {
 		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化
 		protected.GET("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey))
 	}
+
+	return r
+}
+
+func main() {
+	// Load configuration
+	cfg := config.Load()
+
+	// Initialize database
+	db, err := repo.NewDB(cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+
+	// Model auto-discovery (provider /v1/models, cached 5 minutes).
+	discoverer := provider.NewDiscoverer(cfg.EncryptionKey, 5*time.Minute)
+
+	r := buildRouter(db, cfg, discoverer)
 
 	// Graceful shutdown
 	go func() {

@@ -34,22 +34,27 @@ func runConverter(ch <-chan *event.Event) *capture {
 }
 
 func TestAGUIConverter_TextStream(t *testing.T) {
+	// 模拟真实框架流式行为：前两段为流式增量（Delta.Content），
+	// 最终响应把完整文本放进 Message.Content（即增量之和，重复）。
+	// converter 必须只累加增量，跳过最终重复的 Message.Content。
 	ch := make(chan *event.Event, 3)
 	ch <- &event.Event{Response: &framework.Response{Choices: []framework.Choice{
 		{Delta: framework.Message{Content: "你"}},
+	}}}
+	ch <- &event.Event{Response: &framework.Response{Choices: []framework.Choice{
 		{Delta: framework.Message{Content: "好"}},
 	}}}
 	ch <- &event.Event{Response: &framework.Response{Choices: []framework.Choice{
-		{Message: framework.Message{Content: "！"}},
+		{Message: framework.Message{Content: "你好"}}, // 最终整块 = 增量之和（重复，应跳过）
 	}}}
 	close(ch)
 
 	cap := runConverter(ch)
-	if cap.text.String() != "你好！" {
-		t.Fatalf("累积文本错误: %q", cap.text.String())
+	if cap.text.String() != "你好" {
+		t.Fatalf("累积文本错误（不应重复）: %q", cap.text.String())
 	}
-	// 必须包含 RUN_STARTED? 不——RUN_STARTED 由 handler 发送；converter 只发文本/工具/RUN_ERROR。
-	want := []string{"TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_CONTENT"}
+	// 仅两段增量产生 TEXT_MESSAGE_CONTENT；最终的 Message.Content 不应再发一次。
+	want := []string{"TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_CONTENT"}
 	if len(cap.types) != len(want) {
 		t.Fatalf("事件数量错误: got %v want %v", cap.types, want)
 	}
@@ -57,6 +62,23 @@ func TestAGUIConverter_TextStream(t *testing.T) {
 		if cap.types[i] != want[i] {
 			t.Fatalf("第 %d 个事件类型错误: got %q want %q", i, cap.types[i], want[i])
 		}
+	}
+}
+
+func TestAGUIConverter_TextNonStreaming(t *testing.T) {
+	// 非流式：单响应无增量，整块文本在 Message.Content，应正常输出。
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{Response: &framework.Response{Choices: []framework.Choice{
+		{Message: framework.Message{Content: "你好，世界"}},
+	}}}
+	close(ch)
+
+	cap := runConverter(ch)
+	if cap.text.String() != "你好，世界" {
+		t.Fatalf("非流式累积文本错误: %q", cap.text.String())
+	}
+	if len(cap.types) != 1 || cap.types[0] != "TEXT_MESSAGE_CONTENT" {
+		t.Fatalf("非流式事件类型错误: %v", cap.types)
 	}
 }
 

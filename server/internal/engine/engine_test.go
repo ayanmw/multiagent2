@@ -2,13 +2,15 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-// mockOpenAIServer 模拟 OpenAI 兼容的 /chat/completions 端点（非流式）。
+// mockOpenAIServer 模拟 OpenAI 兼容的 /chat/completions 流式端点（SSE）。
+// 引擎自 M0-19 起始终以流式模式运行（agent.WithStream(true)），故桩服务必须返回 SSE。
 func mockOpenAIServer(t *testing.T, reply string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -16,21 +18,22 @@ func mockOpenAIServer(t *testing.T, reply string) *httptest.Server {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id": "test-cmpl",
-			"object": "chat.completion",
-			"created": 1699200000,
-			"model": "mock-model",
-			"choices": [
-				{
-					"index": 0,
-					"message": {"role": "assistant", "content": "` + reply + `"},
-					"finish_reason": "stop"
-				}
-			],
-			"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-		}`))
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		// 把 reply 切成两片，模拟 token 级增量；结尾 finish_reason=stop + [DONE]。
+		chunks := []string{
+			`data: {"id":"test-cmpl","object":"chat.completion.chunk","created":1699200000,"model":"mock-model","choices":[{"index":0,"delta":{"role":"assistant","content":"你好"},"finish_reason":null}]}`,
+			`data: {"id":"test-cmpl","object":"chat.completion.chunk","created":1699200000,"model":"mock-model","choices":[{"index":0,"delta":{"content":"` + reply + `"},"finish_reason":null}]}`,
+			`data: {"id":"test-cmpl","object":"chat.completion.chunk","created":1699200000,"model":"mock-model","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+		for _, ch := range chunks {
+			fmt.Fprintf(w, "%s\n\n", ch)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
 	}))
 }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -70,7 +71,10 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string) (<-c
 		sessionID = "default"
 	}
 	runCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	ch, err := e.runner.Run(runCtx, "user", sessionID, model.NewUserMessage(userMessage))
+	// 显式开启流式：llmagent 默认是非流式（返回整块 Message.Content），
+	// 不开启则上游被当作非流式 JSON 请求，无法产生 token 级增量。
+	// M0 出口标准要求真正的流式对话，故始终以流式模式运行。
+	ch, err := e.runner.Run(runCtx, "user", sessionID, model.NewUserMessage(userMessage), agent.WithStream(true))
 	if err != nil {
 		cancel()
 		return nil, err
@@ -100,16 +104,24 @@ func (e *Engine) Chat(ctx context.Context, sessionID, userMessage string) (strin
 		return "", err
 	}
 
-	// 累加所有事件中的文本片段（同时兼容流式 Delta 与非流式 Message）。
+	// 累加所有事件中的文本片段。
+	// 优先用流式增量 Delta.Content；仅当整轮未出现任何增量时，才回退到非流式
+	// 整块 Message.Content。框架流式结束时会把完整文本放进最终响应的
+	// Message.Content，若已通过 Delta 累加过则跳过，避免文本重复一倍。
 	var sb strings.Builder
+	sawDelta := false
 	for ev := range ch {
 		if ev == nil || ev.Response == nil {
 			continue
 		}
 		for i := range ev.Response.Choices {
 			c := ev.Response.Choices[i]
-			sb.WriteString(c.Delta.Content)
-			sb.WriteString(c.Message.Content)
+			if c.Delta.Content != "" {
+				sb.WriteString(c.Delta.Content)
+				sawDelta = true
+			} else if c.Message.Content != "" && !sawDelta {
+				sb.WriteString(c.Message.Content)
+			}
 		}
 	}
 	return sb.String(), nil
