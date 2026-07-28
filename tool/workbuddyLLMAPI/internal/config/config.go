@@ -32,7 +32,21 @@ func getenv(key, def string) string {
 
 // Load 从环境变量读取配置，并对缺失项填充默认值。
 func Load() *Config {
-	models := getenv("WB_MODELS", "gpt-4o-mini,gpt-4o,claude-3.5-sonnet,codebuddy-default")
+	// 真实目录取自本机 CodeBuddy CLI 内置模型清单（国产优先，含少量国外旗舰）。
+	// 这些 id 直接透传给守护进程（copilot.tencent.com），由它按登录账号的实际可用模型路由。
+	models := getenv("WB_MODELS", strings.Join([]string{
+		"auto",
+		"hy3",
+		"glm-5.1", "glm-5", "glm-4.7", "glm-5v-turbo", "glm-4.5-air",
+		"kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking",
+		"deepseek-v4-pro", "deepseek-v4-flash", "deepseek-r1-distill-llama-70b",
+		"minimax-m3", "minimax-m2.7", "minimax-m2.5",
+		"qwen3.6-plus", "qwen3.5-plus", "qwen3.7-max",
+		"step",
+		"gpt-5.2", "gpt-5.1", "gpt-5",
+		"claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5",
+		"gemini-2.5-pro", "gemini-2.5-flash",
+	}, ","))
 	cfg := &Config{
 		ListenAddr:       getenv("WB_LISTEN", ":8080"),
 		Backend:          getenv("WB_BACKEND", "mock"),

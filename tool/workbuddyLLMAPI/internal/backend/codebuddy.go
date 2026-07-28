@@ -280,24 +280,18 @@ func (c *CodeBuddy) complete(ctx context.Context, model, prompt string, onDelta 
 	return sb.String(), nil
 }
 
-// resolveModel 将 OpenAI 风格 model 名尽量映射到守护进程已知 modelId。
-// 命中返回 modelId；否则回退到配置默认（空串表示使用默认）。
+// resolveModel 将请求里的 model 名透传给守护进程。
+// 守护进程（copilot.tencent.com）按登录账号的实际目录路由，所以这里不做硬编码映射，
+// 直接把调用方给的 model id 原样交给它；只有未指定或占位名时才回退到配置默认（WB_DAEMON_MODEL）。
+// 返回空串表示不显式设置模型（守护进程使用自身默认）。
 func resolveModel(reqModel, fallback string) string {
 	if reqModel != "" && reqModel != "codebuddy-default" {
-		lower := strings.ToLower(reqModel)
-		known := []string{"auto", "hy3", "glm-5.2", "glm-5.1", "glm-5v-turbo",
-			"minimax-m3", "kimi-k3-1", "kimi-k2.7", "kimi-k2.6",
-			"deepseek-v4-flash", "deepseek-v4-pro"}
-		for _, k := range known {
-			if strings.Contains(lower, k) {
-				return k
-			}
-		}
+		return reqModel
 	}
 	if fallback != "" {
 		return fallback
 	}
-	return ""
+	return "auto"
 }
 
 // ---------- Backend 接口：Chat ----------

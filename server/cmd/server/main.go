@@ -83,6 +83,9 @@ func main() {
 
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
 		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey))
+
+		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化
+		protected.GET("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey))
 	}
 
 	// Graceful shutdown

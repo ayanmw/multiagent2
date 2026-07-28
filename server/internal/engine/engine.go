@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -61,16 +62,40 @@ func New(cfg ModelConfig) (*Engine, error) {
 	return &Engine{cfg: cfg, runner: r}, nil
 }
 
-// Chat 发送一条用户消息并返回模型的最终文本回复。
-// sessionID 用于多轮隔离（M0-10 为内存态，不持久化，M0-12 再接 DB）。
-func (e *Engine) Chat(ctx context.Context, sessionID, userMessage string) (string, error) {
+// Stream 发送一条用户消息并返回 Agent 事件流（channel）。
+// 调用方负责消费 channel，并在结束后调用 Close 释放 Runner 资源；
+// 当 ctx 被取消（如客户端断开）或 90s 超时后，底层 channel 会自动关闭。
+func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string) (<-chan *event.Event, error) {
 	if sessionID == "" {
 		sessionID = "default"
 	}
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
+	runCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	ch, err := e.runner.Run(runCtx, "user", sessionID, model.NewUserMessage(userMessage))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 
-	ch, err := e.runner.Run(ctx, "user", sessionID, model.NewUserMessage(userMessage))
+	// 桥接到独立输出 channel：源 channel 关闭或 ctx 取消时收尾并释放资源。
+	out := make(chan *event.Event)
+	go func() {
+		defer close(out)
+		defer cancel()
+		for ev := range ch {
+			select {
+			case out <- ev:
+			case <-runCtx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+// Chat 发送一条用户消息并返回模型的最终文本回复（Stream 的累积版）。
+// sessionID 用于多轮隔离（M0-11 起可配合 DB 持久化的 Session）。
+func (e *Engine) Chat(ctx context.Context, sessionID, userMessage string) (string, error) {
+	ch, err := e.Stream(ctx, sessionID, userMessage)
 	if err != nil {
 		return "", err
 	}
