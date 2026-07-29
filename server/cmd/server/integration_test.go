@@ -233,6 +233,7 @@ func TestM0_Integration_E2E(t *testing.T) {
 		Port:          "0",
 		JWTSecret:     "m0-e2e-secret",
 		EncryptionKey: enc[:],
+		WorkspaceRoot: filepath.Join(t.TempDir(), "ws"),
 	}
 	db, err := repo.NewDB(cfg)
 	if err != nil {
@@ -424,6 +425,7 @@ func TestM0_5_Regression(t *testing.T) {
 		Port:          "0",
 		JWTSecret:     "m0_5_regression-secret",
 		EncryptionKey: enc[:],
+		WorkspaceRoot: filepath.Join(t.TempDir(), "ws"),
 	}
 	db, err := repo.NewDB(cfg)
 	if err != nil {

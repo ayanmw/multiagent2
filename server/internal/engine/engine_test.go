@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+
+	codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"
 )
 
 // mockOpenAIServer 模拟 OpenAI 兼容的 /chat/completions 流式端点（SSE）。
@@ -74,6 +76,43 @@ func TestEngine_NonOpenAIProtocolRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-openai protocol in M0-10")
 	}
+}
+
+// TestEngine_WithCodeActTools 验证 M1-06：把 CodeAct 工具集注册进引擎后，
+// 引擎仍可正常对话（mock LLM 不触发工具调用，仅证明工具装配不破坏对话链路）。
+func TestEngine_WithCodeActTools(t *testing.T) {
+	srv := mockOpenAIServer(t, "工具已就绪")
+	defer srv.Close()
+
+	workdir := t.TempDir()
+	tools, err := codectool.NewCodeAct(workdir)
+	if err != nil {
+		t.Fatalf("NewCodeAct failed: %v", err)
+	}
+	if len(tools) != 4 {
+		t.Fatalf("CodeAct 工具数量应为 4，实际 %d", len(tools))
+	}
+
+	eng, err := New(ModelConfig{
+		ModelID:  "mock-model",
+		BaseURL:  srv.URL,
+		APIKey:   "test-key",
+		Protocol: "openai",
+		Tools:    tools,
+	})
+	if err != nil {
+		t.Fatalf("New engine with tools failed: %v", err)
+	}
+	defer eng.Close()
+
+	reply, err := eng.Chat(context.Background(), "sess-tools", "你好", nil)
+	if err != nil {
+		t.Fatalf("Chat with tools failed: %v", err)
+	}
+	if !strings.Contains(reply, "工具已就绪") {
+		t.Fatalf("unexpected reply: %q", reply)
+	}
+	t.Logf("✅ CodeAct 工具注册进引擎后对话正常：reply=%q", reply)
 }
 
 // TestEngine_MultiTurnHistory 验证多轮记忆回灌：引擎把历史消息作为初始消息

@@ -20,6 +20,7 @@ type Config struct {
 	JWTSecret            string
 	EncryptionKey        []byte // 32-byte key for AES-256-GCM (provider API keys at rest)
 	EngineTimeoutSeconds int    // timeout (s) for a single LLM run (env ENGINE_TIMEOUT_SECONDS)
+	WorkspaceRoot        string // 用户工作区根目录（env WORKSPACE_ROOT，默认 data/workspaces），M1-06 CodeAct 工具的执行根
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -62,6 +63,19 @@ func Load() *Config {
 	}
 
 	cfg.DBPath = dbPath
+
+	// 用户工作区根目录（M1-06 CodeAct 工具的受限执行根）。
+	// 每个用户的工作区为该目录下的 <uid> 子目录，由 api 层在请求时自动创建。
+	workspaceRoot := envOrDefault("WORKSPACE_ROOT", "")
+	if workspaceRoot == "" {
+		execPath, _ := os.Getwd()
+		workspaceRoot = filepath.Join(execPath, "data", "workspaces")
+	}
+	if err := os.MkdirAll(workspaceRoot, 0755); err != nil {
+		panic("failed to create workspace root directory: " + err.Error())
+	}
+	cfg.WorkspaceRoot = workspaceRoot
+
 	return cfg
 }
 

@@ -35,7 +35,8 @@ type streamChatRequest struct {
 // 注意：message 走 POST body 而非 GET query，避免明文进入访问日志（M0.5-06）。
 //
 // engineTimeout 为单次对话流式超时（由配置 ENGINE_TIMEOUT_SECONDS 注入，M0.5-05）。
-func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration) gin.HandlerFunc {
+// workspaceRoot 为用户工作区根目录（M1-06 CodeAct 工具的执行根，按 <root>/<uid> 隔离）。
+func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -109,13 +110,21 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration) 
 			"runId":    runID,
 		})
 
-		// 构造引擎并启动流式对话。
+		// 构造引擎并启动流式对话。M1-06：为当前用户装配 CodeAct 工具（工作目录隔离在
+		// WorkspaceRoot/<uid> 内，命令经危险命令策略包装）。
+		tools, tErr := buildCodeActTools(workspaceRoot, uid)
+		if tErr != nil {
+			emit("RUN_ERROR", gin.H{"message": "构建代码执行工具失败: " + tErr.Error()})
+			emit("RUN_FINISHED", gin.H{"threadId": sess.SessionKey, "runId": runID})
+			return
+		}
 		eng, err := engine.New(engine.ModelConfig{
 			ModelID:  m.ModelID,
 			BaseURL:  p.BaseURL,
 			APIKey:   apiKey,
 			Protocol: string(p.Protocol),
 			Timeout:  engineTimeout,
+			Tools:    tools,
 		})
 		if err != nil {
 			emit("RUN_ERROR", gin.H{"message": err.Error()})

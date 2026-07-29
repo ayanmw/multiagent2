@@ -29,6 +29,9 @@ type ModelConfig struct {
 	APIKey   string // 上游 API Key（本地无鉴权代理可留空）
 	Protocol string // openai / anthropic / gemini（M0-10 仅实现 openai 兼容）
 	Timeout  time.Duration // 单次对话（流式）超时；<=0 时取默认 90s（由配置注入，M0.5-05）
+	// Tools 是可选的额外工具集（如 M1-06 CodeAct 工具），会被追加到基础工具之后。
+	// 不传则仅使用 echo/get_time 基础工具。
+	Tools []tool.Tool
 }
 
 // Engine 封装 trpc-agent-go 的 Runner/LLMAgent，负责连接 Provider+Model 并产出事件流。
@@ -52,11 +55,15 @@ func New(cfg ModelConfig) (*Engine, error) {
 	// 框架模型抽象：OpenAI 兼容客户端。上游如需鉴权，api_key 透传。
 	m := openai.New(cfg.ModelID, openai.WithAPIKey(cfg.APIKey), openai.WithBaseURL(cfg.BaseURL))
 
-	// LLM Agent：注入系统提示词、模型与基础工具集（echo/get_time）。
+	// LLM Agent：注入系统提示词、模型与基础工具集（echo/get_time）+ 可选额外工具（如 M1-06 CodeAct）。
+	allTools := []tool.Tool{echoTool(), getTimeTool()}
+	if len(cfg.Tools) > 0 {
+		allTools = append(allTools, cfg.Tools...)
+	}
 	ag := llmagent.New("codeagent",
 		llmagent.WithModel(m),
 		llmagent.WithInstruction(defaultInstruction),
-		llmagent.WithTools([]tool.Tool{echoTool(), getTimeTool()}),
+		llmagent.WithTools(allTools),
 	)
 
 	// Runner：未显式提供 session service 时框架会自动创建内存版会话服务。
