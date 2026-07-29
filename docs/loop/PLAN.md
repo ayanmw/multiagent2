@@ -1,43 +1,53 @@
-# GoMultiAgentV2 — M0 细粒度任务清单
+# GoMultiAgentV2 — 自主推进任务清单
 
-> 每个任务设计为 1 小时内可完成的独立单元，含验证标准。
 > 状态：○ 待做 | ⏳ 进行中 | ✅ 已完成 | ❌ 阻塞
+> 自动化每轮读取本文件，选第一个 ○ 任务实现 → 验证 → commit → 标记 ✅ → STOP。
 
 ---
 
-## M0 骨架：项目脚手架 → Auth → Provider/Model → 流式对话
+## M0 骨架（已完成 ✅，保留供审计）
 
-| # | 任务 | 状态 | 验证标准 | 备注 |
+M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session 持久化 / 前端登录·管理·对话工作台 / 集成验证）。详见 `docs/loop/PROGRESS.md` 与 `docs/03-M1规划与M0评审.md`。
+
+### M0 评审发现的真实缺陷（已在 M1 修复）
+- **P0 多轮记忆**：DB 历史从未回灌模型，模型第二句起失忆 → 由 **M1-01** 修复。
+- **P1 RBAC 空转**：`RequirePermission` 未接路由 → 由 **M1-02** 修复。
+- **P1 SessionKey 跨用户碰撞** → 由 **M1-03** 修复。
+
+---
+
+## M1 CodeAgent 核心（当前阶段）
+
+| # | 任务 | 状态 | 验证标准 | 依赖 |
 |---|------|------|----------|------|
-| M0-01 | **Go 项目初始化**：server/go.mod（模块路径 `github.com/anmingwei/go-multi-agent-v2`）、目录骨架（cmd/internal/pkg）、main.go 启动 Gin HTTP 服务器 + 健康检查 /health | ✅ | `go build ./...` 通过 + `curl /health` 返回 200 |
-| M0-02 | **GORM + SQLite3 底座**：DB 连接管理、AutoMigrate 框架、User/Role/RolePermission 基础数据模型 | ✅ | `go test ./...` 通过，表自动创建成功 |
-| M0-03 | **Vue3 前端项目初始化**：Vite + Vue3 + TS + Pinia + Vue Router + Naive UI + UnoCSS，基础布局骨架（sidebar + header + router-view） | ✅ | `npm run build` 通过，首页可访问 |
-| M0-04 | **Auth: 注册/登录 API**：POST /api/auth/register、POST /api/auth/login，bcrypt 密码哈希，JWT 签发与验证 | ✅ | curl 注册→登录→拿 token→访问受保护端点 |
-| M0-05 | **Auth: JWT 中间件 + RBAC**：认证中间件提取 user_id + role，角色权限枚举（admin/developer/viewer），路由级权限检查 | ✅ | 未登录返回 401，viewer 访问 admin 路由返回 403 |
-| M0-06 | **Auth: APIKey 管理**：POST /api/auth/apikeys（创建）、GET /api/auth/apikeys（列表）、DELETE /api/auth/apikeys/:id（吊销），SHA256 哈希存储 | ✅ | 创建 APIKey → 用 X-API-Key header 访问受保护端点 |
-| M0-07 | **Provider 管理 CRUD**：POST/GET/PUT/DELETE /api/providers，protocol 字段（openai/anthropic/gemini），AES-GCM 加密存储 APIKey | ✅ | 创建 Provider → 列表可见 → 可编辑/删除；APIKey 不以明文回显 |
-| M0-08 | **Model 自动发现**：GET /api/providers/:id/models 触发从 Provider 拉取模型列表（/v1/models 或对应协议端点），结果缓存 5 分钟 | ✅ | 配置 OpenAI 兼容 Provider → 调 models 接口 → 返回模型列表 |
-| M0-09 | **Model 管理**：Provider 下 Model 的启用/禁用/默认标记，Agent 配置时只能选已启用的 Model | ✅ | 从 Provider 拉取的模型可手动启用/禁用 |
-| M0-10 | **Agent 对话引擎封装**：engine 层封装 trpc-agent-go Runner/LLMAgent，连接选定 Provider+Model，基础 Tool 集（echo/get_time），输出 Event 流 | ✅ | 调 /api/chat 发消息 → 得到 LLM 回复 |
-| M0-11 | **AG-UI SSE 流式端点**：GET /api/chat/:session_id/stream，将 Agent Event 流转换为 AG-UI 协议 SSE 事件（RUN_STARTED/TEXT_MESSAGE_CONTENT/TOOL_CALL_START/TOOL_CALL_ARGS/TOOL_CALL_END/RUN_FINISHED），Session 持久化到 DB | ✅ | curl SSE 端点 → 逐条收到标准 AG-UI 事件 |
-| M0-12 | **Session 管理 API**：POST /api/sessions（新建）、GET /api/sessions（列表）、GET /api/sessions/:id（含历史消息） | ✅ | 创建 session → 对话 → 刷新页面后历史消息仍在 |
-| M0-13 | **前端: 登录/注册页面**：Naive UI 表单，登录成功存储 JWT 到 localStorage，router 守卫实现未登录跳转 | ✅ | 注册→登录→跳转到主页 |
-| M0-14 | **前端: 主布局**：左侧 sidebar（对话/Sessions/Provider/Model/设置导航），顶部 header（用户信息/退出），dark theme 适配 | ✅ | 各导航项切换正常，dark 主题一致 |
-| M0-15 | **前端: Provider 管理页面**：表格列表 + 新建/编辑对话框（含 protocol 选择）+ 测试连接按钮 + 删除确认 | ✅ | 创建 Provider → 测试连接 → 模型列表自动加载 |
-| M0-16 | **前端: Model 管理页面**：按 Provider 分组展示，每个 Provider 下手动刷新模型列表，每个 Model 可启用/禁用 | ✅ | 点击刷新 → 从 Provider 拉取 → 列表更新 |
-| M0-17 | **前端: 对话工作台（核心）**：左侧 Session 列表（可新建/切换），右侧对话区（消息气泡 + Markdown 渲染 + 流式逐字输出），底部输入框 + 发送按钮 | ✅ | 新建 Session → 选 Model → 发消息 → 看到流式回复 |
-| M0-18 | **前端: 对话工具栏**：消息区上方显示当前 Model/Provider，可点击切换；消息区支持 /clear 清空上下文 | ✅ | 切换 Model → 后续回复用新 Model；/clear 后上下文重置 |
-| M0-19 | **集成验证**：端到端测试——注册→登录→创建 OpenAI Provider（可配 Ollama 本地或真实 API）→拉取模型列表→启用模型→新建 Session→发消息→收到流式回复→刷新后历史仍在 | ✅ | 全链路走通 |
+| M1-01 | **多轮记忆修复**：接入框架持久化 SessionService（或后端从 DB `ListSessionMessages` 回灌 engine 多轮消息），使同一 session 多轮对话模型可见历史 | ○ | 连续两轮对话，第二轮能正确引用第一轮实体 | M0 |
+| M1-02 | **RBAC 落地**：Provider 写/Session 删除/模型启用等敏感路由加 `RequirePermission` 中间件链 | ○ | viewer 调 DELETE /api/providers/:id → 403；developer 正常 | M0 |
+| M1-03 | **SessionKey 唯一**：`UNIQUE(user_id, session_key)` 约束 + `GetOrCreateSession` 冲突处理 | ○ | 跨用户复用 key 不新建重复行 | M0 |
+| M1-04 | **Executor 抽象接口**：定义 `Executor.Run(ctx, cmd) → (stdout, stderr, exitCode)`；`HostExecutor`（cwd 约束）实现 | ○ | 单测覆盖正常/超时/cwd 越界 | M0 |
+| M1-05 | **危险命令策略**：前缀黑名单（rm -rf /、git push --force 等）+ 策略枚举 allow/ask/deny，无人值守默认 deny 并写审计 | ○ | 命中黑名单命令被拒并写审计 | M1-04 |
+| M1-06 | **CodeAct 工具集**：基于 Executor 实现 `shell_exec` + `file_read/file_write/file_edit`，注册进 engine | ○ | Agent 执行 `ls` 返回结果；读写文件成功 | M1-04 |
+| M1-07 | **Workspace 模型**：User 下 Workspace（本地目录 + 可选 git remote），对话绑定 workspace，Executor 在其目录执行；DB 模型 + CRUD API | ○ | 建 workspace→对话绑定→shell 在正确目录执行 | M1-04 |
+| M1-08 | **子代理委托 agenttool**：Coder 子代理（带代码工具集）可由 Orchestrator 委托；定义 agent 工厂 | ○ | Orchestrator 委托 Coder 写文件成功 | M1-06/07 |
+| M1-09 | **CodeTeam 编排**：Orchestrator→Coder(写)→Reviewer(只读，独立挑错)→回环；team 配置化 | ○ | 一轮内产出代码并被 review 指出问题 | M1-08 |
+| M1-10 | **Reviewer 只读工具集**：reviewer 仅 read/grep，无 write/exec | ○ | reviewer 调 write 被拒 | M1-08 |
+| M1-11 | **Goal 契约**：goal 扩展注入 get_goal/create_goal/update_goal，Orchestrator 必须推进到 complete/blocked 才结束 | ○ | Agent 不能过早给 final；未达成时继续 | M1-09 |
+| M1-12 | **CycleAgent / Plan-Execute**：planner 产出计划外置 PLAN/PROGRESS，逐项执行更新 | ○ | 中型任务能拆计划并逐步完成 | M1-11 |
+| M1-13 | **护栏熔断**：`WithMaxLLMCalls/WithMaxToolIterations/WithMaxRetries` 配置 + 运行级兜底；暴露到 Agent 配置表 | ○ | 超限后优雅终止并产出 partial 结果 | M1-11 |
+| M1-14 | **斜杠命令注册表（后端）**：Command 元数据（name/desc/args/handler 或 prompt 模板），`GET /api/commands` 下发；内置 /clear /model /workspace /run /review /plan | ○ | 前端/CLI 共用，新增命令只改后端 | M0 |
+| M1-15 | **前端斜杠命令 UI**：输入框 `/` 触发命令浮层，选择+填参，发送 | ○ | 输入 `/run ls` 正确触发后端 | M1-14 |
+| M1-16 | **工作状态外置**：长任务维护 PLAN.md/PROGRESS.md/LEARNINGS.md（artifact 存储），Agent 先读再续跑 | ○ | 中断后续跑能接上 | M1-12 |
+| M1-17 | **集成验证 E2E**：登录→建 workspace→选模型→多轮有记忆→/run 执行→Coder/Reviewer 协同改文件→Goal 循环到 complete→刷新历史仍在 | ○ | 全链路走通，新增 E2E 测试 | M1-01..16 |
 
 ---
 
 ## 阻塞与依赖
 
-- **M0-01 → M0-02 → M0-04**（Go 基础 → DB → Auth）
-- **M0-04 → M0-05 → M0-06**（登录 → RBAC → APIKey）
-- **M0-02 → M0-12**（DB → Session 持久化）
-- **M0-07 → M0-08 → M0-09**（Provider → 模型发现 → 模型管理）
-- **M0-07 → M0-10 → M0-11**（Provider → Agent 引擎 → SSE）
-- **M0-03 → M0-13 → M0-14 → M0-15/16/17**（前端基础 → 页面）
-- **M0-11 + M0-12 → M0-17**（SSE + Session API → 对话工作台）
-- **M0-15/16/17/18 → M0-19**（全部 → 集成验证��
+- M1-01/02/03 为 M0 缺陷修复，无前置，可最先做
+- M1-04 → M1-05/06/07（Executor 是基础）
+- M1-06/07 → M1-08（工具 + 工作区才能支撑子代理）
+- M1-08 → M1-09/10（CodeTeam）
+- M1-09 → M1-11（Goal 装在 Orchestrator 上）
+- M1-11 → M1-12/13（循环 + 护栏）
+- M1-14 → M1-15（命令注册表 → 前端 UI）
+- M1-12 → M1-16（状态外置）
+- M1-01..16 → M1-17（集成验证）
