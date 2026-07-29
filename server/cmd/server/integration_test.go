@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,9 +53,20 @@ func (c *e2eClient) do(method, path string, body any) (int, map[string]any) {
 	return rec.Code, out
 }
 
-// sse 发送一个 GET 请求并取回完整的 SSE 响应体（httptest 会累积所有写入）。
-func (c *e2eClient) sse(path string) string {
-	req := httptest.NewRequest("GET", path, nil)
+// sse 发送一个 POST 请求（M0.5-06：message 改由 body 传递）并取回完整的 SSE 响应体。
+func (c *e2eClient) sse(path string, body any) string {
+	var reader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			c.t.Fatalf("marshal sse body: %v", err)
+		}
+		reader = bytes.NewReader(b)
+	}
+	req := httptest.NewRequest("POST", path, reader)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if c.tok != "" {
 		req.Header.Set("Authorization", "Bearer "+c.tok)
 	}
@@ -301,9 +311,11 @@ func TestM0_Integration_E2E(t *testing.T) {
 		t.Fatal("Session 缺少 session_key")
 	}
 
-	// 8) SSE 流式对话（M0-11 出口标准：收到流式回复）
-	body := c.sse(fmt.Sprintf("/api/chat/%s/stream?message=%s&model_id=%d",
-		sk, url.QueryEscape("你好，介绍一下 Go Multi-Agent"), mid))
+	// 8) SSE 流式对话（M0-11 出口标准：收到流式回复；M0.5-06 改 POST body）
+	body := c.sse(fmt.Sprintf("/api/chat/%s/stream", sk), map[string]any{
+		"message":  "你好，介绍一下 Go Multi-Agent",
+		"model_id": mid,
+	})
 	events := parseAGUI(body)
 	if !events.has("RUN_STARTED") {
 		t.Fatalf("SSE 缺少 RUN_STARTED; body=%s", body)
@@ -319,6 +331,18 @@ func TestM0_Integration_E2E(t *testing.T) {
 		t.Fatalf("SSE 缺少 RUN_FINISHED; body=%s", body)
 	}
 	t.Logf("✅ SSE 流式回复: %q", reply)
+
+	// 8.1) 回归校验（M0.5-06）：SSE 端点仅接受 POST，GET 必须被拒（405），
+	//      message 不再出现在 query 中（避免明文进入访问日志）。
+	getReq := httptest.NewRequest("GET", fmt.Sprintf("/api/chat/%s/stream?message=x", sk), nil)
+	getReq.Header.Set("Authorization", "Bearer "+c.tok)
+	getRec := httptest.NewRecorder()
+	r.ServeHTTP(getRec, getReq)
+	if getRec.Code == http.StatusOK {
+		t.Fatalf("SSE 端点不应接受 GET 请求（M0.5-06 要求 message 改 POST body）; code=%d body=%s",
+			getRec.Code, getRec.Body.String())
+	}
+	t.Logf("✅ SSE 端点 GET 已被拒（code=%d），message 不再走 query", getRec.Code)
 
 	// 9) 历史持久化：模拟「刷新页面后再拉详情」（M0 出口标准：刷新后历史仍在）
 	code, detail := c.do("GET", "/api/sessions/"+sk, nil)
@@ -340,8 +364,10 @@ func TestM0_Integration_E2E(t *testing.T) {
 
 	// 10) 多轮记忆验证（M0.5-01）：同一会话内追问，模型应引用第一轮提到的实体。
 	//     第一轮 user 消息含「Go Multi-Agent」；若历史被回灌，第二轮回声首句会包含它。
-	body2 := c.sse(fmt.Sprintf("/api/chat/%s/stream?message=%s&model_id=%d",
-		sk, url.QueryEscape("那它基于什么框架实现的？"), mid))
+	body2 := c.sse(fmt.Sprintf("/api/chat/%s/stream", sk), map[string]any{
+		"message":  "那它基于什么框架实现的？",
+		"model_id": mid,
+	})
 	events2 := parseAGUI(body2)
 	if events2.has("RUN_ERROR") {
 		t.Fatalf("SSE 第二轮出现 RUN_ERROR: %v; body=%s", events2.errors, body2)

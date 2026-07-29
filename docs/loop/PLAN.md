@@ -24,7 +24,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | M0.5-03 | **P1** | **SessionKey 唯一约束**：加 `UNIQUE(user_id, session_key)`（GORM 复合唯一索引 + 迁移），`repo/session.go GetOrCreateSession` 用 upsert/冲突处理消除竞态 | ✅ | 不同用户可用相同 key；同一用户重复 key 不新建重复行；并发调用不产生脏数据 | 无 |
 | M0.5-04 | P2 | **delta 累加逻辑去重**：`engine.Chat`（engine.go:99）与 `aguiConverter.Convert`（sse.go:164）重复实现的增量累加规则抽成公共函数（如 `internal/engine/delta.go`），两处复用 | ✅ | 单测覆盖「有 delta / 无 delta 终帧 / 混合」三种流；行为与原先一致 | 无 |
 | M0.5-05 | P2 | **消除魔法值**：`engine.go:73` 90s 超时提为配置项（env/config，默认 90s）；`auth.go:92` 硬编码 `RoleID=3` 改为按名称查询 `RoleDeveloper`；顺手扫全仓库其余魔法数字 | ✅ | 配置可改超时生效；空库初始化注册用户角色正确；go vet/test 绿 | 无 |
-| M0.5-06 | P2 | **SSE 消息改 POST**：`sse.go:40` message 从 GET query 移到 POST body（避免明文进访问日志）；前端 `web/src/api/chat.ts`/`ChatView.vue` 同步改为 fetch-POST 流式读取 | ○ | 对话功能不回归（流式逐字正常）；GET query 不再含 message；npm build 绿 | 无 |
+| M0.5-06 | P2 | **SSE 消息改 POST**：`sse.go:40` message 从 GET query 移到 POST body（避免明文进访问日志）；前端 `web/src/api/chat.ts`/`ChatView.vue` 同步改为 fetch-POST 流式读取 | ✅ | 对话功能不回归（流式逐字正常）；GET query 不再含 message；npm build 绿 | 无 |
 | M0.5-07 | — | **M0.5 回归验证与结项**：`go build/vet/test ./...` + `cd web && npm run build` 全绿；扩展 E2E 覆盖多轮记忆/RBAC 403/SessionKey 唯一；在 PROGRESS.md 写「M0.5 结项报告」（逐条缺陷 → 修复 commit 对照表） | ○ | 全部验证绿；结项报告落盘；此后方可进入 M1 | M0.5-01..06 |
 
 ---

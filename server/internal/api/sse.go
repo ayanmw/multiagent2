@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"strconv"
 	"time"
 
 	"github.com/anmingwei/go-multi-agent-v2/internal/crypto"
@@ -19,13 +18,21 @@ import (
 	"gorm.io/gorm"
 )
 
-// StreamChatHandler handles GET /api/chat/:session_id/stream.
+// streamChatRequest 是 SSE 流式对话的请求体（M0.5-06：message 由 GET query 改为 POST body）。
+type streamChatRequest struct {
+	Message string `json:"message"`
+	ModelID uint   `json:"model_id"`
+}
+
+// StreamChatHandler handles POST /api/chat/:session_id/stream.
 // 将 Agent 事件流转换为 AG-UI 协议的 SSE 事件并逐条推送，会话与消息持久化到 DB。
 //
 // 请求参数：
-//   - 路径 :session_id 会话标识（为空时服务端新建）
-//   - 查询 message   用户消息（必填）
-//   - 查询 model_id  指定托管模型 id（可选，缺省用默认启用模型）
+//   - 路径 :session_id  会话标识（为空时服务端新建）
+//   - 请求体 message    用户消息（必填）
+//   - 请求体 model_id   指定托管模型 id（可选，缺省用默认启用模型）
+//
+// 注意：message 走 POST body 而非 GET query，避免明文进入访问日志（M0.5-06）。
 //
 // engineTimeout 为单次对话流式超时（由配置 ENGINE_TIMEOUT_SECONDS 注入，M0.5-05）。
 func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration) gin.HandlerFunc {
@@ -40,17 +47,18 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration) 
 		if sessionKey == "" {
 			sessionKey = repo.NewSessionKey()
 		}
-		message := c.Query("message")
+
+		var req streamChatRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请求体解析失败"})
+			return
+		}
+		message := req.Message
 		if strings.TrimSpace(message) == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "message 不能为空"})
 			return
 		}
-		var modelID uint
-		if v := c.Query("model_id"); v != "" {
-			if id, perr := strconv.ParseUint(v, 10, 64); perr == nil {
-				modelID = uint(id)
-			}
-		}
+		modelID := req.ModelID
 
 		// 解析本次对话要使用的模型与 Provider。
 		m, p, err := resolveChatModel(db, uid, modelID)

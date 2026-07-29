@@ -81,7 +81,8 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer) *gi
 		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout()))
 
 		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化
-		protected.GET("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout()))
+		// M0.5-06：message 改由 POST body 传递（避免明文进访问日志），故注册为 POST。
+		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout()))
 	}
 
 	return r

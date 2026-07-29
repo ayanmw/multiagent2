@@ -56,18 +56,22 @@ export interface StreamOptions {
   onEvent: (ev: AGUIEvent) => void
 }
 
-// 消费一次流式对话：以 fetch 拉取 SSE，逐帧解析并回调 onEvent。
-// 异常时抛出 Error（含后端返回的错误信息）。
+// 消费一次流式对话：以 fetch（POST body 携带 message，M0.5-06 起不再走 GET query）
+// 拉取 SSE，逐帧解析并回调 onEvent。异常时抛出 Error（含后端返回的错误信息）。
 export async function streamChat(opts: StreamOptions): Promise<void> {
-  const params = new URLSearchParams({ message: opts.message })
-  if (opts.modelId) {
-    params.set('model_id', String(opts.modelId))
-  }
-  const url = `/api/chat/${encodeURIComponent(opts.sessionKey)}/stream?${params.toString()}`
+  const url = `/api/chat/${encodeURIComponent(opts.sessionKey)}/stream`
   const token = getToken()
+  const body: Record<string, unknown> = { message: opts.message }
+  if (opts.modelId != null) {
+    body.model_id = opts.modelId
+  }
   const res = await fetch(url, {
-    method: 'GET',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
     signal: opts.signal,
   })
 
