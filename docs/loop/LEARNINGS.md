@@ -210,3 +210,10 @@ server/
 - `HostExecutor`（M1-04 默认实现，非沙箱）：`NewHostExecutor(workdir)` / `NewHostExecutorWithTimeout(workdir, timeout)`；核心约束是 `exec.CommandContext` 固定 `cmd.Dir = workdir`（把命令锁在该目录内），默认超时 60s；shell 按平台探测（Windows `cmd.exe /c`、类 Unix 优先 `bash -c` 否则 `sh -c`）。`workdir` 为空时回退 `os.Getwd`，非目录/不存在则构造即报错。
 - **cwD 约束的本质**：HostExecutor 仅靠 `cmd.Dir` 约束「相对路径起点」，无法阻止命令内 `cd`/`../../` 逃逸（真·文件系统沙箱留 M3 Docker 后端）；M1 阶段把「cwd 越界」理解为「验证相对写入落在 workdir 内」，后续如有强隔离需求再上容器。
 - **M1-05 危险命令策略应在 Executor 之上叠加**：不要改 `Executor` 接口，而是新增一个 `policy` 包装器（或 `SafeExecutor`）在调用 `HostExecutor.Run` 前做前缀黑名单 + `allow/ask/deny` 枚举校验，无人值守默认 deny 并写审计；接口稳定有利于后续替换执行后端。
+
+### 2026-07-29 | 架构 | 危险命令策略 SafeExecutor（M1-05，internal/executor）
+- 新增 `server/internal/executor/blacklist.go` + `policy.go`，在 `Executor` 之上叠加策略包装层 `SafeExecutor`（实现 `Executor` 接口，业务层/工具层可无缝替换底层执行器），**不改 `Executor` 接口本身**。
+- 策略三件套：`Policy` 接口（`Evaluate(command) (Decision, reason)`）+ `Decision` 枚举（`allow`/`ask`/`deny`）+ `Mode`（`Unattended`/`Interactive`）。`DangerousCommandPolicy` 为默认可用实现：片段黑名单分两级——`deny` 致命级（`rm -rf /`、`rm -rf ~`、fork 炸弹 `:(){`、mkfs/shutdown/reboot/halt、`> /dev/sda`/`dd if=/dev/zero` 等）始终拒绝；`ask` 高风险级（`rm -rf` 广义、`git push --force/-f`、`git reset --hard`、`git clean -f`、`git checkout --`、`chmod -r 000`）在 `Unattended` 模式下降级为 deny、在 `Interactive` 模式下交 `AskHandler` 回调裁决。`Evaluate` 两遍扫描（先 deny 再 ask）保证最严重判定优先。
+- **归一化匹配**：命令先经 `normalizeCommand`（转小写 + `strings.Fields` 折叠连续空白 + 去首尾空白）再 `strings.Contains` 匹配，使 `sudo   RM   -rf    /` 也能命中 `rm -rf /`，避免空格/大小写绕过。这是防绕过的关键细节。
+- 审计：`Auditor` 接口 + `MemoryAuditor`（测试/内省）+ `LogAuditor`（日志落盘）；每次 `Run` 无论 allow/deny/ask 都写一条 `AuditEntry`（含 command/workdir/decision/reason/allowed）。`ErrCommandDenied` 为哨兵错误供上层 `errors.Is` 判定。
+- **M1-06/07/08 复用约定**：CodeAct 工具集/子代理创建执行器时，**必须**用 `NewSafeExecutor(HostExecutor, policy, auditor, ask)` 包一层策略，禁止裸用 `HostExecutor.Run`，否则绕过危险命令防护。生产默认 `ModeUnattended` + `LogAuditor`（或 DB 审计表，M3 引入）。

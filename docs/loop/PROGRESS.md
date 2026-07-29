@@ -174,6 +174,14 @@
 
 ---
 
+### 2026-07-29 15:27 | M1-05 | ✅
+- 完成内容：**危险命令策略（在 Executor 之上叠加，不改接口）**。新增 `server/internal/executor/` 两个文件 + 测试：① `blacklist.go` 的 `DangerousCommandPolicy`（片段黑名单，分 `deny` 致命级 `rm -rf /`、`rm -rf ~`、fork 炸弹 `:(){`、mkfs/shutdown/reboot/halt、`> /dev/sda`/`dd if=/dev/zero` 等 与 `ask` 高风险级 `rm -rf`(广义)、`git push --force/-f`、`git reset --hard`、`git clean -f`、`git checkout --`、`chmod -r 000`；`Evaluate` 两遍扫描先 deny 再 ask，保证最严重判定优先；命令先 `normalizeCommand` 转小写+折叠空白，使 `sudo   RM   -rf    /` 也能命中）；`Mode`（Unattended/Interactive）控制 ask 在无人值守下降级 deny。② `policy.go` 的 `SafeExecutor`（实现 `Executor` 接口，无缝替换底层执行器）：`Run` 先 `policy.Evaluate` → allow 直接执行、deny 拒绝并审计、ask 在交互模式交 `AskHandler` 回调裁决、无人值守（无回调）直接拒绝并审计；`ErrCommandDenied` 哨兵错误；`Auditor` 接口 + `MemoryAuditor`（测试/内省）+ `LogAuditor`（日志落盘）；`Policy` 接口可注入自定义实现。③ `policy_test.go` 7 用例：致命拒绝+审计、`sudo rm -rf /` 归一化命中、无人值守 `git push --force` ask→deny、交互确认放行/拒绝、正常 `echo`、广义 `rm -rf ./build` ask→deny、normalize 单测。
+- Commit: 817cb84
+- 验证: `go build ./...` ✓ | `go vet ./...` ✓ | `go test ./... -count=1` ✓（executor 包 7 新用例全绿、其余包无回归）；任务仅后端改动，未跑 `npm run build`。
+- 下一步：PLAN 中 M1-06（CodeAct 工具集：基于 Executor 实现 `shell_exec`+`file_read`/`file_write`/`file_edit`，注册进 engine）成为下一个 ○；M1-06 应直接复用本任务产出的 `SafeExecutor` 作为执行后端（把 HostExecutor 包一层策略），而非裸用 HostExecutor。
+
+---
+
 ## M0.5 结项报告（缺陷 → 修复 commit 对照表）
 
 > 生成时间：2026-07-29 | 阶段：M0.5 缺陷修复全部完成，进入 M1 前的收口
