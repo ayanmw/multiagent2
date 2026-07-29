@@ -95,7 +95,7 @@ server/
 ### 2026-07-28 | 架构 | Provider 采用用户归属（user-scoped / BYOK）
 - 决策：Provider 与 APIKey 一致，按 `user_id` 归属，每个用户管理自己的 LLM 配置（Bring-Your-Own-Key）；列表/详情/更新/删除均校验 `providers.user_id == 当前用户` 防越权。
 - 理由：M0 简化、与 APIKey 模式一致、使 M0-19 集成测试用普通 developer 账号即可创建 Provider，无需 admin 专属全局 Provider。
-- RBAC 矩阵中的 `providers:read` 资源为未来「全局共享 Provider」治理预留；M0 暂不对 Provider 写操作做 RBAC 拦截（任何已登录用户可管自己的）。
+- RBAC 落地（M0.5-02）：Provider 写操作（POST/PUT/DELETE /api/providers）现已接 `middleware.RequirePermission(db, "providers", "write")`；Model 同步/启用接 `models:write`；APIKey 管理接 `apikeys:write`；会话删除（新增 `DELETE /api/sessions/:id` + `DeleteSessionHandler`）接 `sessions:write`。`developer` 角色已扩 `providers:write`/`models:write`/`apikeys:write`，`viewer` 仅 `providers:read`/`models:read`/`chat:read` → 调写路由返回 403。`model.SeedRoles` 的播种改为**幂等**（角色已存在时仅补齐缺失权限，不删不重写），已初始化的 `data/codeagent.db` 重启即自动获得新权限，无需手工迁移。
 
 ### 2026-07-28 | 架构 | Model 自动发现（M0-08，internal/provider）
 - 新增 `internal/provider` 包：`Discoverer.FetchModels(p)` 按 protocol 拉取模型列表并缓存（默认 5 分钟，按 provider id 内存缓存，单实例）。

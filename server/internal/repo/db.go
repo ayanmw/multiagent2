@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"errors"
 	"fmt"
 	"log"
 
@@ -55,21 +56,43 @@ func NewDB(cfg *config.Config) (*DB, error) {
 	return &DB{DB: db}, nil
 }
 
-// seedRoles inserts default roles if the roles table is empty.
+// seedRoles ensures the default roles and their permissions exist. It is
+// idempotent: existing roles keep their current permissions and any permission
+// declared in model.SeedRoles but missing from the DB is added (without
+// removing anything). This lets role changes (e.g. granting developer new
+// write permissions) take effect on already-initialized databases.
 func seedRoles(db *gorm.DB) error {
-	var count int64
-	if err := db.Model(&model.Role{}).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-
-	for _, role := range model.SeedRoles() {
-		if err := db.Create(&role).Error; err != nil {
-			return fmt.Errorf("failed to seed role %q: %w", role.Name, err)
+	for _, seeded := range model.SeedRoles() {
+		var existing model.Role
+		err := db.Where("name = ?", seeded.Name).First(&existing).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if err := db.Create(&seeded).Error; err != nil {
+					return fmt.Errorf("failed to seed role %q: %w", seeded.Name, err)
+				}
+				continue
+			}
+			return err
+		}
+		// Role already exists: add any declared permission not yet present.
+		for _, p := range seeded.Permissions {
+			var cnt int64
+			if err := db.Model(&model.RolePermission{}).
+				Where("role_id = ? AND resource = ? AND action = ?", existing.ID, p.Resource, p.Action).
+				Count(&cnt).Error; err != nil {
+				return err
+			}
+			if cnt == 0 {
+				if err := db.Create(&model.RolePermission{
+					RoleID:   existing.ID,
+					Resource: p.Resource,
+					Action:   p.Action,
+				}).Error; err != nil {
+					return fmt.Errorf("failed to add permission %s:%s for role %q: %w", p.Resource, p.Action, seeded.Name, err)
+				}
+			}
 		}
 	}
-	log.Println("[DB] Seeded default roles: admin, developer, viewer")
+	log.Println("[DB] Ensured default roles: admin, developer, viewer")
 	return nil
 }

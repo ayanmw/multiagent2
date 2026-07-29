@@ -42,11 +42,6 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer) *gi
 	{
 		protected.GET("/me", api.MeHandler(db.DB))
 
-		// API key management (owner-scoped)
-		protected.POST("/auth/apikeys", api.CreateAPIKeyHandler(db.DB))
-		protected.GET("/auth/apikeys", api.ListAPIKeysHandler(db.DB))
-		protected.DELETE("/auth/apikeys/:id", api.RevokeAPIKeyHandler(db.DB))
-
 		// Admin-only sub-group
 		admin := protected.Group("/admin")
 		admin.Use(middleware.RequireRole(model.RoleAdmin))
@@ -54,24 +49,33 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer) *gi
 			admin.GET("/roles", api.ListRolesHandler(db.DB))
 		}
 
-		// Provider management (user-scoped CRUD; API key encrypted at rest)
+		// Provider management (user-scoped CRUD; API key encrypted at rest).
+		// Write operations require the "providers:write" permission (RBAC, M0.5-02).
 		protected.GET("/providers", api.ListProvidersHandler(db.DB))
-		protected.POST("/providers", api.CreateProviderHandler(db.DB, cfg.EncryptionKey))
+		protected.POST("/providers", middleware.RequirePermission(db.DB, "providers", "write"), api.CreateProviderHandler(db.DB, cfg.EncryptionKey))
 		protected.GET("/providers/:id", api.GetProviderHandler(db.DB))
-		protected.PUT("/providers/:id", api.UpdateProviderHandler(db.DB, cfg.EncryptionKey))
-		protected.DELETE("/providers/:id", api.DeleteProviderHandler(db.DB))
+		protected.PUT("/providers/:id", middleware.RequirePermission(db.DB, "providers", "write"), api.UpdateProviderHandler(db.DB, cfg.EncryptionKey))
+		protected.DELETE("/providers/:id", middleware.RequirePermission(db.DB, "providers", "write"), api.DeleteProviderHandler(db.DB))
 		protected.GET("/providers/:id/models", api.ListProviderModelsHandler(db.DB, disc))
-		protected.POST("/providers/:id/models/sync", api.SyncProviderModelsHandler(db.DB, disc))
+		// Model catalog writes (sync + enable/disable) require "models:write".
+		protected.POST("/providers/:id/models/sync", middleware.RequirePermission(db.DB, "models", "write"), api.SyncProviderModelsHandler(db.DB, disc))
 		protected.GET("/providers/:id/models/managed", api.ListManagedModelsHandler(db.DB))
-		protected.PUT("/providers/:id/models/:mid", api.UpdateModelHandler(db.DB))
+		protected.PUT("/providers/:id/models/:mid", middleware.RequirePermission(db.DB, "models", "write"), api.UpdateModelHandler(db.DB))
 
 		// Managed model catalog (Agent may only select enabled models)
 		protected.GET("/models", api.ListEnabledModelsHandler(db.DB))
 
-		// Session 管理（M0-12）：新建 / 列表 / 详情（含历史消息）
+		// API key management (owner-scoped). All operations require "apikeys:write".
+		protected.POST("/auth/apikeys", middleware.RequirePermission(db.DB, "apikeys", "write"), api.CreateAPIKeyHandler(db.DB))
+		protected.GET("/auth/apikeys", middleware.RequirePermission(db.DB, "apikeys", "write"), api.ListAPIKeysHandler(db.DB))
+		protected.DELETE("/auth/apikeys/:id", middleware.RequirePermission(db.DB, "apikeys", "write"), api.RevokeAPIKeyHandler(db.DB))
+
+		// Session 管理（M0-12）：新建 / 列表 / 详情（含历史消息）。
+		// Deletion requires "sessions:write" (owner-scoped, M0.5-02).
 		protected.POST("/sessions", api.CreateSessionHandler(db.DB))
 		protected.GET("/sessions", api.ListSessionsHandler(db.DB))
 		protected.GET("/sessions/:id", api.GetSessionHandler(db.DB))
+		protected.DELETE("/sessions/:id", middleware.RequirePermission(db.DB, "sessions", "write"), api.DeleteSessionHandler(db.DB))
 
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
 		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey))

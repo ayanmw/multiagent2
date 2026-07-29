@@ -50,9 +50,12 @@ func SeedRoles() []Role {
 			Description: "Developer with workspace and agent access",
 			Permissions: []RolePermission{
 				{Resource: "providers", Action: "read"},
+				{Resource: "providers", Action: "write"},
 				{Resource: "models", Action: "read"},
+				{Resource: "models", Action: "write"},
 				{Resource: "sessions", Action: "*"},
 				{Resource: "chat", Action: "*"},
+				{Resource: "apikeys", Action: "write"},
 				{Resource: "tools", Action: "read"},
 				{Resource: "skills", Action: "read"},
 				{Resource: "mcp", Action: "read"},

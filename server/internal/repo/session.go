@@ -72,6 +72,20 @@ func ListSessionMessages(db *gorm.DB, sessionID uint) ([]model.Message, error) {
 	return msgs, nil
 }
 
+// DeleteSession 删除用户归属的会话及其全部消息（级联清理），跨用户返回
+// ErrRecordNotFound 防止越权删除。供 DELETE /api/sessions/:id 调用（M0.5-02 RBAC）。
+func DeleteSession(db *gorm.DB, uid uint, key string) error {
+	var s model.Session
+	if err := db.Where("user_id = ? AND session_key = ?", uid, key).First(&s).Error; err != nil {
+		return err
+	}
+	// SQLite 默认关闭外键，显式先删消息再删会话，避免孤儿行。
+	if err := db.Where("session_id = ?", s.ID).Delete(&model.Message{}).Error; err != nil {
+		return err
+	}
+	return db.Delete(&s).Error
+}
+
 // NewSessionKey 生成一个全局唯一的会话标识（sess- + 8 位随机）。
 func NewSessionKey() string {
 	return "sess-" + uuid.NewString()[:8]

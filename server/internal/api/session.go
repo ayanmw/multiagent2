@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -152,5 +153,32 @@ func GetSessionHandler(db *gorm.DB) gin.HandlerFunc {
 			})
 		}
 		c.JSON(http.StatusOK, detail)
+	}
+}
+
+// DeleteSessionHandler handles DELETE /api/sessions/:id (owner-scoped). It
+// requires the "sessions:write" permission (enforced by RequirePermission in
+// the router) and removes the session plus its messages.
+func DeleteSessionHandler(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid, ok := currentUserID(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+			return
+		}
+		key := c.Param("id")
+		if key == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			return
+		}
+		if err := repo.DeleteSession(db, uid, key); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete session"})
+			return
+		}
+		c.Status(http.StatusNoContent)
 	}
 }
