@@ -19,7 +19,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 
 | # | 严重度 | 任务 | 状态 | 验证标准 | 依赖 |
 |---|--------|------|------|----------|------|
-| M0.5-01 | **P0** | **多轮记忆修复**：接入 trpc-agent-go 持久化 SessionService（框架 `session` 包 SQLite 后端注入 Runner）；若 v1.10.0 签名不友好，退化为「后端从 DB `ListSessionMessages` 加载历史 → 构造 `[]model.Message` 多轮传入 Runner」。修复点：`engine.go:60-63` 每请求新建内存 Runner、`sse.go:115`/`chat.go:83` 只传单条消息 | ○ | 连续两轮对话，第二轮能正确引用第一轮提到的实体（新增自动化测试覆盖） | 无 |
+| M0.5-01 | **P0** | **多轮记忆修复**：接入 trpc-agent-go 持久化 SessionService（框架 `session` 包 SQLite 后端注入 Runner）；若 v1.10.0 签名不友好，退化为「后端从 DB `ListSessionMessages` 加载历史 → 构造 `[]model.Message` 多轮传入 Runner」。修复点：`engine.go:60-63` 每请求新建内存 Runner、`sse.go:115`/`chat.go:83` 只传单条消息 | ✅ | 连续两轮对话，第二轮能正确引用第一轮提到的实体（新增自动化测试覆盖） | 无 |
 | M0.5-02 | **P1** | **RBAC 落地**：`middleware.RequirePermission(resource, action)` 接入所有敏感路由——Provider 创建/更新/删除、Model 启用/禁用、Session 删除、APIKey 管理；`main.go` 路由注册处成链 | ○ | viewer 角色调 `DELETE /api/providers/:id` → 403；developer 正常；新增权限测试 | 无 |
 | M0.5-03 | **P1** | **SessionKey 唯一约束**：加 `UNIQUE(user_id, session_key)`（GORM 复合唯一索引 + 迁移），`repo/session.go GetOrCreateSession` 用 upsert/冲突处理消除竞态 | ○ | 不同用户可用相同 key；同一用户重复 key 不新建重复行；并发调用不产生脏数据 | 无 |
 | M0.5-04 | P2 | **delta 累加逻辑去重**：`engine.Chat`（engine.go:99）与 `aguiConverter.Convert`（sse.go:164）重复实现的增量累加规则抽成公共函数（如 `internal/engine/delta.go`），两处复用 | ○ | 单测覆盖「有 delta / 无 delta 终帧 / 混合」三种流；行为与原先一致 | 无 |

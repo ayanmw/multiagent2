@@ -66,7 +66,11 @@ func New(cfg ModelConfig) (*Engine, error) {
 // Stream 发送一条用户消息并返回 Agent 事件流（channel）。
 // 调用方负责消费 channel，并在结束后调用 Close 释放 Runner 资源；
 // 当 ctx 被取消（如客户端断开）或 90s 超时后，底层 channel 会自动关闭。
-func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string) (<-chan *event.Event, error) {
+//
+// history 为可选的对话历史（按时间正序），用于多轮记忆回灌：框架无 SQLite
+// 会话后端（v1.10.0 仅 inmemory/noop），这里把 DB 加载的历史作为初始消息
+// seed 进本次 Run 的会话，使模型能看到前文（见 M0.5-01）。为空则单轮。
+func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, history []model.Message) (<-chan *event.Event, error) {
 	if sessionID == "" {
 		sessionID = "default"
 	}
@@ -74,7 +78,13 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string) (<-c
 	// 显式开启流式：llmagent 默认是非流式（返回整块 Message.Content），
 	// 不开启则上游被当作非流式 JSON 请求，无法产生 token 级增量。
 	// M0 出口标准要求真正的流式对话，故始终以流式模式运行。
-	ch, err := e.runner.Run(runCtx, "user", sessionID, model.NewUserMessage(userMessage), agent.WithStream(true))
+	runOpts := []agent.RunOption{agent.WithStream(true)}
+	if len(history) > 0 {
+		// 把 DB 历史作为初始消息 seed 进本次会话（fresh inmemory service），
+		// runner 会先落库历史事件再追加本轮 user 消息，模型即拥有多轮上下文。
+		runOpts = append(runOpts, agent.WithMessages(history))
+	}
+	ch, err := e.runner.Run(runCtx, "user", sessionID, model.NewUserMessage(userMessage), runOpts...)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -97,9 +107,10 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string) (<-c
 }
 
 // Chat 发送一条用户消息并返回模型的最终文本回复（Stream 的累积版）。
-// sessionID 用于多轮隔离（M0-11 起可配合 DB 持久化的 Session）。
-func (e *Engine) Chat(ctx context.Context, sessionID, userMessage string) (string, error) {
-	ch, err := e.Stream(ctx, sessionID, userMessage)
+// sessionID 用于多轮隔离（M0-11 起可配合 DB 持久化的 Session）；
+// history 为可选的对话历史，用于多轮记忆回灌（见 M0.5-01）。
+func (e *Engine) Chat(ctx context.Context, sessionID, userMessage string, history []model.Message) (string, error) {
+	ch, err := e.Stream(ctx, sessionID, userMessage, history)
 	if err != nil {
 		return "", err
 	}

@@ -67,8 +67,14 @@ func (c *e2eClient) sse(path string) string {
 
 // newMockLLM 是一个 OpenAI 兼容的本地桩服务：
 //   - GET /v1/models 返回两个模型（供 M0-08 模型发现）
-//   - POST /v1/chat/completions 返回标准 OpenAI 流式 SSE（供 M0-10/11 引擎）
+//   - POST /v1/chat/completions 把「请求中第一条 user 消息内容」回声进回复，
+//     用于验证多轮记忆（M0.5-01）：若历史被回灌，第二轮回复会引用第一轮实体。
 func newMockLLM() *httptest.Server {
+	// jsonString 把字符串安全地序列化为 JSON 字符串字面量（含转义）。
+	jsonString := func(s string) string {
+		b, _ := json.Marshal(s)
+		return string(b)
+	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/models"):
@@ -80,9 +86,25 @@ func newMockLLM() *httptest.Server {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("Connection", "keep-alive")
+			// 解析请求体，取第一条 user 消息内容作为回声前缀。
+			firstUser := ""
+			var body map[string]any
+			if raw, rerr := io.ReadAll(r.Body); rerr == nil && len(raw) > 0 {
+				_ = json.Unmarshal(raw, &body)
+			}
+			if msgs, ok := body["messages"].([]any); ok {
+				for _, m := range msgs {
+					if mm, ok := m.(map[string]any); ok && mm["role"] == "user" {
+						if c, ok := mm["content"].(string); ok {
+							firstUser = c
+							break
+						}
+					}
+				}
+			}
 			chunks := []string{
-				`data: {"id":"mock","object":"chat.completion.chunk","created":1699200000,"model":"mock-gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"你好"},"finish_reason":null}]}`,
-				`data: {"id":"mock","object":"chat.completion.chunk","created":1699200000,"model":"mock-gpt-4o","choices":[{"index":0,"delta":{"content":"，世界！"},"finish_reason":null}]}`,
+				`data: {"id":"mock","object":"chat.completion.chunk","created":1699200000,"model":"mock-gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"回声首句："},"finish_reason":null}]}`,
+				`data: {"id":"mock","object":"chat.completion.chunk","created":1699200000,"model":"mock-gpt-4o","choices":[{"index":0,"delta":{"content":` + jsonString(firstUser) + `},"finish_reason":null}]}`,
 				`data: {"id":"mock","object":"chat.completion.chunk","created":1699200000,"model":"mock-gpt-4o","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}`,
 				`data: [DONE]`,
 			}
@@ -315,4 +337,21 @@ func TestM0_Integration_E2E(t *testing.T) {
 	}
 	t.Logf("✅ 历史持久化校验通过：user=%q, assistant=%q",
 		msgs[0].(map[string]any)["content"], msgs[1].(map[string]any)["content"])
+
+	// 10) 多轮记忆验证（M0.5-01）：同一会话内追问，模型应引用第一轮提到的实体。
+	//     第一轮 user 消息含「Go Multi-Agent」；若历史被回灌，第二轮回声首句会包含它。
+	body2 := c.sse(fmt.Sprintf("/api/chat/%s/stream?message=%s&model_id=%d",
+		sk, url.QueryEscape("那它基于什么框架实现的？"), mid))
+	events2 := parseAGUI(body2)
+	if events2.has("RUN_ERROR") {
+		t.Fatalf("SSE 第二轮出现 RUN_ERROR: %v; body=%s", events2.errors, body2)
+	}
+	if !events2.has("RUN_FINISHED") {
+		t.Fatalf("SSE 第二轮缺少 RUN_FINISHED; body=%s", body2)
+	}
+	reply2 := events2.text()
+	if !strings.Contains(reply2, "Go Multi-Agent") {
+		t.Fatalf("多轮记忆失败：第二轮回复未引用第一轮实体『Go Multi-Agent』; body=%s", body2)
+	}
+	t.Logf("✅ 多轮记忆校验通过：第二轮回复引用了第一轮实体: %q", reply2)
 }

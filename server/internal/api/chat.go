@@ -2,9 +2,7 @@ package api
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/anmingwei/go-multi-agent-v2/internal/crypto"
 	"github.com/anmingwei/go-multi-agent-v2/internal/engine"
@@ -62,6 +60,21 @@ func ChatHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
 			apiKey = dec
 		}
 
+		// 解析/创建会话并持久化用户消息，用于多轮记忆（M0.5-01）。
+		sessionKey := req.SessionID
+		if sessionKey == "" {
+			sessionKey = repo.NewSessionKey()
+		}
+		sess, serr := repo.GetOrCreateSession(db, uid, sessionKey)
+		if serr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
+			return
+		}
+		if aerr := repo.AppendMessage(db, sess.ID, "user", req.Message); aerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入用户消息失败"})
+			return
+		}
+
 		// 构造引擎并对话。
 		eng, err := engine.New(engine.ModelConfig{
 			ModelID:  m.ModelID,
@@ -75,20 +88,24 @@ func ChatHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
 		}
 		defer eng.Close()
 
-		sessionID := req.SessionID
-		if sessionID == "" {
-			sessionID = fmt.Sprintf("sess-%d", time.Now().UnixNano())
-		}
+		// 多轮记忆（M0.5-01）：从 DB 加载历史（排除刚写入的当前 user 消息）回灌引擎。
+		history := loadChatHistory(db, sess.ID, 1)
 
-		reply, err := eng.Chat(c.Request.Context(), sessionID, req.Message)
+		reply, err := eng.Chat(c.Request.Context(), sessionKey, req.Message, history)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "调用模型失败", "detail": err.Error()})
 			return
 		}
 
+		// 仅在正常结束时落库助手消息（客户端中途断开不写脏数据）。
+		if perr := repo.AppendMessage(db, sess.ID, "assistant", reply); perr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入助手消息失败: " + perr.Error()})
+			return
+		}
+
 		c.JSON(http.StatusOK, chatResponse{
 			Reply:     reply,
-			SessionID: sessionID,
+			SessionID: sessionKey,
 			ModelID:   m.ID,
 			ModelName: m.Name,
 		})
