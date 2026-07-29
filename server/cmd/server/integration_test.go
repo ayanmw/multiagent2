@@ -13,11 +13,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anmingwei/go-multi-agent-v2/internal/auth"
 	"github.com/anmingwei/go-multi-agent-v2/internal/config"
+	"github.com/anmingwei/go-multi-agent-v2/internal/model"
 	"github.com/anmingwei/go-multi-agent-v2/internal/provider"
 	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
 	"github.com/gin-gonic/gin"
 )
+
+// createUserDirect 直接在 DB 落库一个指定角色的用户，返回其自增 ID（用于 SessionKey 复合唯一场景）。
+func createUserDirect(t *testing.T, db *repo.DB, username string, role string) uint {
+	t.Helper()
+	r, err := repo.GetRoleByName(db.DB, role)
+	if err != nil {
+		t.Fatalf("GetRoleByName(%s): %v", role, err)
+	}
+	hash, err := auth.HashPassword("secret123")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	u := &model.User{
+		Username:     username,
+		Email:        username + "@example.com",
+		PasswordHash: hash,
+		DisplayName:  username,
+		RoleID:       r.ID,
+		Status:       model.UserStatusActive,
+	}
+	if err := repo.CreateUser(db.DB, u); err != nil {
+		t.Fatalf("CreateUser(%s): %v", username, err)
+	}
+	return u.ID
+}
 
 // e2eClient 是一个极简的进程内 HTTP 客户端，直接把请求喂给 Gin 引擎，
 // 避免「跨命令文件系统隔离」导致 DB 写入不可见的问题（见 LEARNINGS）。
@@ -380,4 +407,150 @@ func TestM0_Integration_E2E(t *testing.T) {
 		t.Fatalf("多轮记忆失败：第二轮回复未引用第一轮实体『Go Multi-Agent』; body=%s", body2)
 	}
 	t.Logf("✅ 多轮记忆校验通过：第二轮回复引用了第一轮实体: %q", reply2)
+}
+
+// TestM0_5_Regression 是 M0.5 阶段的整合回归用例：在单一测试里同时验证三个已修复缺陷
+// 在最新代码下仍生效，作为 M0.5 结项证据（多轮记忆 M0.5-01 / RBAC 403 M0.5-02 / SessionKey 复合唯一 M0.5-03）。
+// 场景 A、B 走 HTTP 全链路；场景 C 走 repo 层直接验证复合唯一索引（CreateSessionHandler 自动生成 key，HTTP 无法指定）。
+func TestM0_5_Regression(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mockLLM := newMockLLM()
+	defer mockLLM.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "m0_5_regression.db")
+	enc := sha256.Sum256([]byte("m0_5_regression-enc-key"))
+	cfg := &config.Config{
+		DBPath:        dbPath,
+		Port:          "0",
+		JWTSecret:     "m0_5_regression-secret",
+		EncryptionKey: enc[:],
+	}
+	db, err := repo.NewDB(cfg)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer func() {
+		if sqlDB, e := db.DB.DB(); e == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+	disc := provider.NewDiscoverer(cfg.EncryptionKey, time.Minute)
+	r := buildRouter(db, cfg, disc)
+
+	// ===== 场景 A：多轮记忆（M0.5-01）=====
+	// developer 注册并跑通「建 Provider → 启用模型 → 两轮对话引用同一实体」全链路。
+	dev := &e2eClient{t: t, r: r}
+	code, reg := dev.do("POST", "/api/auth/register", map[string]any{
+		"username": "m05dev", "email": "m05dev@example.com", "password": "secret123",
+	})
+	if code != 201 {
+		t.Fatalf("A 注册失败: %d %v", code, reg)
+	}
+	dev.tok = reg["token"].(string)
+
+	code, prov := dev.do("POST", "/api/providers", map[string]any{
+		"name": "m05-openai", "protocol": "openai", "base_url": mockLLM.URL + "/v1", "api_key": "k",
+	})
+	if code != 201 {
+		t.Fatalf("A 建 Provider 失败: %d %v", code, prov)
+	}
+	pid := uint(prov["id"].(float64))
+
+	code, sync := dev.do("POST", fmt.Sprintf("/api/providers/%d/models/sync", pid), nil)
+	if code != 200 {
+		t.Fatalf("A sync 失败: %d %v", code, sync)
+	}
+	models := sync["models"].([]any)
+	mid := uint(models[0].(map[string]any)["id"].(float64))
+	dev.do("PUT", fmt.Sprintf("/api/providers/%d/models/%d", pid, mid),
+		map[string]any{"enabled": true, "is_default": true})
+
+	code, sess := dev.do("POST", "/api/sessions", map[string]any{"title": "M0.5 记忆回归"})
+	if code != 201 {
+		t.Fatalf("A 建 Session 失败: %d %v", code, sess)
+	}
+	sk := sess["session_key"].(string)
+
+	// 第一轮：user 消息含实体「Go Multi-Agent」
+	body1 := dev.sse(fmt.Sprintf("/api/chat/%s/stream", sk), map[string]any{
+		"message":  "用一句话介绍 Go Multi-Agent",
+		"model_id": mid,
+	})
+	e1 := parseAGUI(body1)
+	if e1.has("RUN_ERROR") || !e1.has("RUN_FINISHED") {
+		t.Fatalf("A 第一轮对话异常: body=%s", body1)
+	}
+	// 第二轮：若历史被回灌给模型，mock 回声首句会包含第一轮实体
+	body2 := dev.sse(fmt.Sprintf("/api/chat/%s/stream", sk), map[string]any{
+		"message":  "它基于什么框架实现？",
+		"model_id": mid,
+	})
+	e2 := parseAGUI(body2)
+	if e2.has("RUN_ERROR") || !e2.has("RUN_FINISHED") {
+		t.Fatalf("A 第二轮对话异常: body=%s", body2)
+	}
+	if !strings.Contains(e2.text(), "Go Multi-Agent") {
+		t.Fatalf("A 多轮记忆回归失败：第二轮未引用第一轮实体; body=%s", body2)
+	}
+	t.Logf("✅ 场景A 多轮记忆：第二轮回复=%q", e2.text())
+
+	// ===== 场景 B：RBAC 403（M0.5-02）=====
+	// 造一个 viewer 角色用户（默认 developer 不含受限场景），其写路由应一律 403。
+	viewerTok := createViewerToken(t, db, cfg.JWTSecret)
+	v := &e2eClient{t: t, r: r, tok: viewerTok}
+	writeRoutes := []struct {
+		method, path string
+	}{
+		{"POST", "/api/providers"},
+		{"PUT", "/api/providers/999"},
+		{"DELETE", "/api/providers/999"},
+		{"POST", "/api/providers/999/models/sync"},
+		{"PUT", "/api/providers/999/models/999"},
+		{"POST", "/api/auth/apikeys"},
+		{"GET", "/api/auth/apikeys"},
+		{"DELETE", "/api/auth/apikeys/999"},
+		{"DELETE", "/api/sessions/whatever"},
+	}
+	for _, rt := range writeRoutes {
+		code, _ := v.do(rt.method, rt.path, map[string]any{"name": "x"})
+		if code != http.StatusForbidden {
+			t.Errorf("B viewer %s %s 应 403, 实际 %d", rt.method, rt.path, code)
+		}
+	}
+	// viewer 读路由应放行（证明不是「全拒」，而是按权限矩阵区分）。
+	if code, _ := v.do("GET", "/api/providers", nil); code != http.StatusOK {
+		t.Errorf("B viewer GET /api/providers 应 200, 实际 %d", code)
+	}
+	t.Logf("✅ 场景B RBAC：viewer 9 条写路由均 403，读路由放行")
+
+	// ===== 场景 C：SessionKey 复合唯一（M0.5-03）=====
+	// 两个真实用户用同一 session_key，应通过复合唯一索引各自落一行（不冲突、不越权）；
+	// 同一用户重复 key 复用同一行。
+	u1 := createUserDirect(t, db, "m05u1", model.RoleDeveloper)
+	u2 := createUserDirect(t, db, "m05u2", model.RoleDeveloper)
+	const dupKey = "dup-key-m05"
+	s1, err := repo.GetOrCreateSession(db.DB, u1, dupKey)
+	if err != nil {
+		t.Fatalf("C GetOrCreateSession(u1) 失败: %v", err)
+	}
+	s2, err := repo.GetOrCreateSession(db.DB, u2, dupKey)
+	if err != nil {
+		t.Fatalf("C GetOrCreateSession(u2) 失败: %v", err)
+	}
+	if s1.ID == s2.ID {
+		t.Fatalf("C 跨用户复用同一 session_key 竟落同一行（复合唯一索引失效）")
+	}
+	if s1.SessionKey != dupKey || s2.SessionKey != dupKey {
+		t.Fatalf("C session_key 未被保留: s1=%q s2=%q", s1.SessionKey, s2.SessionKey)
+	}
+	// 同用户同 key → 复用同一行（不产生脏数据）。
+	s1b, err := repo.GetOrCreateSession(db.DB, u1, dupKey)
+	if err != nil {
+		t.Fatalf("C GetOrCreateSession(u1) 再次失败: %v", err)
+	}
+	if s1b.ID != s1.ID {
+		t.Fatalf("C 同用户同 key 应复用同一行: 首次 id=%d 复用 id=%d", s1.ID, s1b.ID)
+	}
+	t.Logf("✅ 场景C SessionKey 复合唯一：跨用户同 key 落 2 行(id=%d/%d)，同用户复用同行(id=%d)",
+		s1.ID, s2.ID, s1b.ID)
 }

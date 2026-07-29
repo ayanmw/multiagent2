@@ -151,3 +151,37 @@
 - Commit: fix(M0.5): M0.5-05 消除魔法值（超时配置化 + 角色按名查询）
 - 验证: go build ✓ | go vet ✓ | go test ./... ✓（cmd/server + api + config + engine + provider + repo 全绿）。新增单测：config `TestEngineTimeoutDefault/FromEnv/InvalidEnvFallsBack`、engine `TestEngineTimeoutDefaultAndOverride`（断言默认 90s 与显式 30s 均生效）、repo `TestGetRoleIDByName`（按名查 id + 缺失报错）；E2E 全链路（注册开发者角色 / 流式对话 / 多轮记忆）仍 PASS。任务不涉及 web/，未跑 `npm run build`。
 - 下一步：PLAN 中 M0.5-06（SSE message 由 GET query 改 POST body，前端同步改造）成为下一个 ○，下轮继续。
+
+### 2026-07-29 12:28 | M0.5-06 | ✅
+- 完成内容：**P2 SSE 消息改 POST（避免明文进访问日志）**。① 后端 `server/internal/api/sse.go` 的 `StreamChatHandler` 由读 GET query（`c.Query("message")`）改为 `c.ShouldBindJSON` 解析 POST body（`streamChatRequest{Message, ModelID}`），`strconv` 依赖移除；② `server/cmd/server/main.go` 路由 `protected.GET("/chat/:session_id/stream")` 改为 `protected.POST(...)`；③ 前端 `web/src/api/chat.ts` 的 `streamChat` 由 `fetch` GET + `URLSearchParams` query 改为 POST + `Content-Type: application/json` body（含 `message` 与可选 `model_id`），`ChatView.vue` 调用签名未变无需改动；④ 集成测试 `c.sse` 助手同步为 POST+JSON body，两处调用改传 `{message, model_id}`，并新增 GET 被拒回归校验（code≠200，证明 GET query 不再承载 message）。
+- Commit: be7946d
+- 验证: go build ✓ | go vet ✓ | go test ./... ✓（cmd/server 集成测试 POST 全链路 + GET 拒绝仍绿；api/engine/repo/config/provider 全绿）；前端 `npm run build` ✓（vite 2862 modules）+ `vue-tsc --noEmit` ✓（typecheck 0 错，ChatView 等未改动签名）。
+- 下一步：PLAN 中 M0.5-07（M0.5 回归验证与结项，依赖 M0.5-01..06 现已全 ✅）成为下一个 ○，下轮继续。
+
+### 2026-07-29 13:30 | M0.5-07 | ✅
+- 完成内容：**M0.5 回归验证与结项**（M0.5-01..06 全部 ✅ 后的收口任务）。① 后端 `go build/vet/test -count=1 ./...` 全绿（cmd/server 2.2s、api、config、engine、provider、repo 均 ok）；前端 `cd web && npm run build` 绿（vite 2862 modules，13.4s），`vue-tsc --noEmit` 0 错。② 扩展 E2E：新增整合回归测试 `TestM0_5_Regression`（server/cmd/server/integration_test.go），在单一用例里串联三场景——**场景A 多轮记忆**（注册→建 Provider→启用模型→两轮对话，第二轮回声必须引用第一轮实体「Go Multi-Agent」）、**场景B RBAC 403**（viewer 调 9 条写路由全 403、读路由放行）、**场景C SessionKey 复合唯一**（两真实用户同 key 经 `repo.GetOrCreateSession` 各落一行 id=2/3、同用户复用同行 id=2）。③ 与既有单测形成交叉覆盖：多轮记忆另由 `TestM0_Integration_E2E`+`TestEngine_MultiTurnHistory` 覆盖；RBAC 由 `TestRBAC_SensitiveRoutes` 覆盖；SessionKey 由 `TestCrossUserSameSessionKeyAllowed`/`TestSameUserDuplicateKeyIdempotent`/`TestConcurrentGetOrCreateSession` 覆盖；delta 去重由 `engine/delta_test.go`+`sse_test.go` 覆盖；魔法值由 `config_test.go`/`timeout_test.go`/`repo.TestGetRoleIDByName` 覆盖；SSE POST 由 `integration_test.go` GET 被拒回归覆盖。④ 本文件末附「M0.5 结项报告」。
+- Commit: <pending>
+- 验证: 后端 `go test -count=1 ./...` 全绿（含 `TestM0_5_Regression` PASS：场景A/B/C 日志均打印 ✅）；前端 `npm run build` ✓。无新增业务代码逻辑，仅新增整合回归测试与文档。
+- 下一步：**M0.5 全部 ✅，阶段门槛解除**，下一轮循环可进入 M1（M1-04 Executor 抽象接口成为首个 ○）。
+
+---
+
+## M0.5 结项报告（缺陷 → 修复 commit 对照表）
+
+> 生成时间：2026-07-29 | 阶段：M0.5 缺陷修复全部完成，进入 M1 前的收口
+> 结论：**M0 评审发现的 1 个 P0 + 2 个 P1 + 3 个 P2 全部修复并验证**，M0.5 阶段门槛已满足，可启动 M1 CodeAgent 核心。
+
+| 缺陷（来源：docs/03 第一节） | 严重度 | 修复任务 | 修复 Commit | 核心改动 | 验证测试（绿） |
+|---|---|---|---|---|---|
+| 多轮对话历史未回灌模型（engine 每请求新建 Runner、handler 只传单条消息） | **P0** | M0.5-01 | `6012fcb` | 退化方案：DB `ListSessionMessages` → `[]model.Message` → `agent.WithMessages(history)` 回灌；新增 `api/history.go`；`engine.Stream/Chat` 加 history 形参；`chat.go` 补齐会话持久化 | `TestEngine_MultiTurnHistory`、`TestM0_Integration_E2E`(step10)、`TestM0_5_Regression` 场景A |
+| RBAC 权限矩阵形同虚设（`RequirePermission` 死代码未接入路由） | **P1** | M0.5-02 | `0b8fc5d` | `RequirePermission` 接入 Provider/Model/APIKey/Session 删除写路由；`seedRoles` 改幂等；developer 扩 write 权限，viewer 仅 read | `TestRBAC_SensitiveRoutes`、`TestM0_5_Regression` 场景B |
+| SessionKey 跨用户可碰撞（全局唯一索引错误禁止复用） | **P1** | M0.5-03 | `b7cc989` | `UNIQUE(user_id, session_key)` 复合唯一索引；`GetOrCreateSession` 先查→miss 建→冲突重试循环（≤3 次）；`migrateCompositeSessionKey` 动态 DROP 遗留单列索引 | `TestCrossUserSameSessionKeyAllowed`、`TestSameUserDuplicateKeyIdempotent`、`TestConcurrentGetOrCreateSession`、`TestM0_5_Regression` 场景C |
+| delta 累加规则重复（engine.Chat 与 aguiConverter 各实现一遍） | P2 | M0.5-04 | `1d88ca6` | 抽 `internal/engine/delta.go`（`DeltaState.Text`），两处复用、行为一致 | `engine/delta_test.go`(流式/非流式/混合/空)、`sse_test.go` TextStream/TextNonStreaming |
+| 魔法值（90s 超时硬编码、`RoleID=3` 硬编码） | P2 | M0.5-05 | `0205939` | 超时提 `config.EngineTimeout()`（env `ENGINE_TIMEOUT_SECONDS`，默认 90s）；注册角色改 `repo.GetRoleIDByName(db, RoleDeveloper)`；provider HTTP 超时提常量 | `config_test.go`(3)、`timeout_test.go`、`repo.TestGetRoleIDByName` |
+| SSE message 走 GET query（明文进访问日志） | P2 | M0.5-06 | `be7946d` | `StreamChatHandler` 改读 POST JSON body；路由 GET→POST；前端 `chat.ts` 改 fetch-POST；集成测试回归 GET 被拒 | `integration_test.go` GET 拒收回归、`npm run build` |
+
+### 结项验证总览
+- **后端**：`go build ./...` ✓、`go vet ./...` ✓、`go test -count=1 ./...` ✓（cmd/server / api / config / engine / provider / repo 全 ok）
+- **前端**：`npm run build` ✓（vite 2862 modules）、`vue-tsc --noEmit` ✓（0 错）
+- **E2E 三场景整合**：`TestM0_5_Regression` 串联多轮记忆 / RBAC 403 / SessionKey 复合唯一，一次运行全绿
+- **门禁**：M0.5-01..07 全部 ✅ → M1 阶段门槛解除，下一轮从 M1-04 续推
