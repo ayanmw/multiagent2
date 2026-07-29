@@ -116,22 +116,18 @@ func (e *Engine) Chat(ctx context.Context, sessionID, userMessage string, histor
 	}
 
 	// 累加所有事件中的文本片段。
-	// 优先用流式增量 Delta.Content；仅当整轮未出现任何增量时，才回退到非流式
-	// 整块 Message.Content。框架流式结束时会把完整文本放进最终响应的
-	// Message.Content，若已通过 Delta 累加过则跳过，避免文本重复一倍。
+	// 通过 DeltaState 实现「优先 Delta 增量，未出现增量才回退 Message」的去重规则，
+	// 与 AG-UI converter 共用同一逻辑（见 internal/engine/delta.go / M0.5-04）。
 	var sb strings.Builder
-	sawDelta := false
+	ds := NewDeltaState()
 	for ev := range ch {
 		if ev == nil || ev.Response == nil {
 			continue
 		}
 		for i := range ev.Response.Choices {
 			c := ev.Response.Choices[i]
-			if c.Delta.Content != "" {
-				sb.WriteString(c.Delta.Content)
-				sawDelta = true
-			} else if c.Message.Content != "" && !sawDelta {
-				sb.WriteString(c.Message.Content)
+			if t := ds.Text(c.Delta.Content, c.Message.Content); t != "" {
+				sb.WriteString(t)
 			}
 		}
 	}

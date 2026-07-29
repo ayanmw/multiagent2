@@ -147,7 +147,7 @@ type aguiConverter struct {
 	openCalls map[string]*aguiToolCall
 	autoInc   int
 	msgID     string
-	sawDelta  bool // 是否已见过流式增量（用于避免最终 Message.Content 重复累加）
+	ds        *engine.DeltaState // 文本去重状态（优先 Delta，未出现增量才回退 Message，见 M0.5-04）
 }
 
 type aguiToolCall struct {
@@ -158,6 +158,7 @@ func newAGUIConverter() *aguiConverter {
 	return &aguiConverter{
 		openCalls: map[string]*aguiToolCall{},
 		msgID:     "msg-" + uuid.NewString()[:8],
+		ds:        engine.NewDeltaState(),
 	}
 }
 
@@ -180,23 +181,15 @@ func (cv *aguiConverter) Convert(ch <-chan *event.Event, emit func(string, gin.H
 		}
 		for i := range ev.Response.Choices {
 			choice := ev.Response.Choices[i]
-			// 文本：优先累加流式增量 Delta.Content；当整轮未出现任何增量时，
-			// 才回退到非流式整块 Message.Content。
-			// 注意：框架流式结束时会在最终响应里把完整文本放进 Message.Content，
-			// 若 Delta 已覆盖过则必须跳过，否则文本会重复一倍。
-			if choice.Delta.Content != "" {
+			// 文本去重复用 engine.DeltaState 的同一规则：优先流式增量 Delta.Content，
+			// 仅当整轮未出现任何增量时才回退到非流式整块 Message.Content（终帧
+			// 重复文本会被跳过，避免重复一倍）。两处行为由 M0.5-04 统一保证。
+			if t := cv.ds.Text(choice.Delta.Content, choice.Message.Content); t != "" {
 				emit("TEXT_MESSAGE_CONTENT", gin.H{
 					"messageId": cv.msgID,
-					"delta":     choice.Delta.Content,
+					"delta":     t,
 				})
-				sb.WriteString(choice.Delta.Content)
-				cv.sawDelta = true
-			} else if choice.Message.Content != "" && !cv.sawDelta {
-				emit("TEXT_MESSAGE_CONTENT", gin.H{
-					"messageId": cv.msgID,
-					"delta":     choice.Message.Content,
-				})
-				sb.WriteString(choice.Message.Content)
+				sb.WriteString(t)
 			}
 			// 工具调用：流式走 Delta.ToolCalls，非流式走 Message.ToolCalls。
 			tcs := choice.Delta.ToolCalls

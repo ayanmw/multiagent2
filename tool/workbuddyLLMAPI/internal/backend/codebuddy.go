@@ -143,7 +143,7 @@ func extractSessionID(raw []byte) string {
 
 // ---------- 核心：一次性完成补全（流式增量通过 onDelta 回调给出） ----------
 
-func (c *CodeBuddy) complete(ctx context.Context, model, prompt string, onDelta func(string)) (string, error) {
+func (c *CodeBuddy) completeOnce(ctx context.Context, model, prompt string, onDelta func(string)) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -211,24 +211,26 @@ func (c *CodeBuddy) complete(ctx context.Context, model, prompt string, onDelta 
 		return "", fmt.Errorf("acp session/new: 无法获取 sessionId")
 	}
 
-	// 3.5) 可选：设置模型
-	if m := resolveModel(model, c.cfg.CodeBuddyModel); m != "" {
+	// 3.5) 设置模型（model 在此处已是具体 id：默认 hy3 或回退 deepseek-v4-pro）
+	if model != "" {
 		_, _ = c.post(ctx, "/api/v1/acp", map[string]any{
 			"jsonrpc": "2.0", "id": 5, "method": "session/set_config_option",
-			"params": map[string]any{"sessionId": sid, "configId": "model", "value": m},
+			"params": map[string]any{"sessionId": sid, "configId": "model", "value": model},
 		}, c.acpH, nil)
 	}
 
 	// 4) session/prompt（fire-and-forget，文本经 SSE 返回）
 	promptHdr := c.acpH.Clone()
+	promptErr := make(chan error, 1)
 	go func() {
-		_, _ = c.post(context.Background(), "/api/v1/acp", map[string]any{
+		_, e := c.post(context.Background(), "/api/v1/acp", map[string]any{
 			"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
 			"params": map[string]any{
 				"sessionId": sid,
 				"prompt": []any{map[string]any{"type": "text", "text": prompt}},
 			},
 		}, promptHdr, nil)
+		promptErr <- e
 	}()
 
 	// 5) 读 SSE 收集增量，直到 session_end
@@ -271,6 +273,17 @@ func (c *CodeBuddy) complete(ctx context.Context, model, prompt string, onDelta 
 		}
 	}
 
+	// 5.5) 若没有任何文本产出，尝试回收 prompt 异步错误（模型不可用常表现于此）
+	if sb.Len() == 0 {
+		select {
+		case e := <-promptErr:
+			if e != nil {
+				return "", fmt.Errorf("acp session/prompt 失败: %w", e)
+			}
+		default:
+		}
+	}
+
 	// 6) session/close（best-effort）
 	_, _ = c.post(context.Background(), "/api/v1/acp", map[string]any{
 		"jsonrpc": "2.0", "id": 4, "method": "session/close",
@@ -280,18 +293,63 @@ func (c *CodeBuddy) complete(ctx context.Context, model, prompt string, onDelta 
 	return sb.String(), nil
 }
 
-// resolveModel 将请求里的 model 名透传给守护进程。
-// 守护进程（copilot.tencent.com）按登录账号的实际目录路由，所以这里不做硬编码映射，
-// 直接把调用方给的 model id 原样交给它；只有未指定或占位名时才回退到配置默认（WB_DAEMON_MODEL）。
-// 返回空串表示不显式设置模型（守护进程使用自身默认）。
-func resolveModel(reqModel, fallback string) string {
+// modelPlan 决定本次请求使用的模型顺序。
+//   - 调用方显式指定了模型（且非占位名 codebuddy-default）→ 只用该模型，不做回退；
+//   - 未指定 → 主模型用配置默认（WB_DAEMON_MODEL，默认 hy3），回退模型用
+//     WB_DAEMON_FALLBACK_MODEL（默认 deepseek-v4-pro）。
+func (c *CodeBuddy) modelPlan(reqModel string) (primary, fallback string) {
 	if reqModel != "" && reqModel != "codebuddy-default" {
-		return reqModel
+		return reqModel, ""
 	}
-	if fallback != "" {
-		return fallback
+	primary = c.cfg.CodeBuddyModel
+	if primary == "" {
+		primary = "auto"
 	}
-	return "auto"
+	return primary, c.cfg.CodeBuddyFallbackModel
+}
+
+// modelList 把 modelPlan 展开成有序候选列表。
+func (c *CodeBuddy) modelList(reqModel string) []string {
+	p, f := c.modelPlan(reqModel)
+	if f != "" && f != p {
+		return []string{p, f}
+	}
+	return []string{p}
+}
+
+// generate 按顺序尝试模型列表：主模型失败（网络/HTTP 错误/返回空）时自动回退到下一个。
+// 回退仅在所有候选都失败时返回错误；若某模型已开始产出增量则不再切换（避免串流）。
+// 返回最终文本、实际使用的模型名、以及错误（若有）。
+func (c *CodeBuddy) generate(ctx context.Context, models []string, prompt string, onDelta func(string)) (string, string, error) {
+	var lastErr error
+	for i, m := range models {
+		var emitted int
+		text, err := c.completeOnce(ctx, m, prompt, func(d string) {
+			emitted++
+			if onDelta != nil {
+				onDelta(d)
+			}
+		})
+		if err == nil && text != "" {
+			return text, m, nil
+		}
+		lastErr = err
+		if emitted > 0 {
+			// 已经开始输出，不再切换，直接返回当前结果（可能不完整）
+			if err == nil {
+				err = fmt.Errorf("model %s 中途失败", m)
+			}
+			return text, m, err
+		}
+		if i < len(models)-1 {
+			// 还有回退模型可用，且本模型未产出任何增量
+			continue
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("所有候选模型均返回空结果")
+	}
+	return "", "", lastErr
 }
 
 // ---------- Backend 接口：Chat ----------
@@ -303,6 +361,12 @@ func (c *CodeBuddy) Chat(w http.ResponseWriter, r *http.Request, req *openai.Cha
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 
+	models := c.modelList(req.Model)
+	modelOut := req.Model
+	if len(models) > 0 {
+		modelOut = models[0]
+	}
+
 	if req.Stream {
 		flusher, _ := w.(http.Flusher)
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -310,25 +374,28 @@ func (c *CodeBuddy) Chat(w http.ResponseWriter, r *http.Request, req *openai.Cha
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 		writeSSE(w, openai.ChatCompletionStreamResponse{
-			ID: "wb-" + req.Model, Object: "chat.completion.chunk", Created: timeNow(), Model: req.Model,
+			ID: "wb-" + modelOut, Object: "chat.completion.chunk", Created: timeNow(), Model: modelOut,
 			Choices: []openai.StreamChoice{{Index: 0, Delta: openai.ChatMessage{Role: "assistant"}}},
 		})
 		if flusher != nil {
 			flusher.Flush()
 		}
 
-		_, err := c.complete(ctx, req.Model, prompt, func(delta string) {
+		_, usedModel, err := c.generate(ctx, models, prompt, func(delta string) {
 			writeSSE(w, openai.ChatCompletionStreamResponse{
-				ID: "wb-" + req.Model, Object: "chat.completion.chunk", Created: timeNow(), Model: req.Model,
+				ID: "wb-" + modelOut, Object: "chat.completion.chunk", Created: timeNow(), Model: modelOut,
 				Choices: []openai.StreamChoice{{Index: 0, Delta: openai.ChatMessage{Content: delta}}},
 			})
 			if flusher != nil {
 				flusher.Flush()
 			}
 		})
+		if usedModel != "" {
+			modelOut = usedModel
+		}
 		if err != nil {
 			writeSSE(w, openai.ChatCompletionStreamResponse{
-				ID: "wb-" + req.Model, Object: "chat.completion.chunk", Created: timeNow(), Model: req.Model,
+				ID: "wb-" + modelOut, Object: "chat.completion.chunk", Created: timeNow(), Model: modelOut,
 				Choices: []openai.StreamChoice{{Index: 0, Delta: openai.ChatMessage{Content: "[codebuddy daemon error] " + err.Error()}}},
 			})
 			if flusher != nil {
@@ -336,7 +403,7 @@ func (c *CodeBuddy) Chat(w http.ResponseWriter, r *http.Request, req *openai.Cha
 			}
 		}
 		writeSSE(w, openai.ChatCompletionStreamResponse{
-			ID: "wb-" + req.Model, Object: "chat.completion.chunk", Created: timeNow(), Model: req.Model,
+			ID: "wb-" + modelOut, Object: "chat.completion.chunk", Created: timeNow(), Model: modelOut,
 			Choices: []openai.StreamChoice{{Index: 0, FinishReason: ptr("stop")}},
 		})
 		fmt.Fprint(w, "data: [DONE]\n\n")
@@ -346,12 +413,15 @@ func (c *CodeBuddy) Chat(w http.ResponseWriter, r *http.Request, req *openai.Cha
 		return
 	}
 
-	text, err := c.complete(ctx, req.Model, prompt, nil)
+	text, usedModel, err := c.generate(ctx, models, prompt, nil)
+	if usedModel != "" {
+		modelOut = usedModel
+	}
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeChatCompletion(w, req.Model, text)
+	writeChatCompletion(w, modelOut, text)
 }
 
 // buildPrompt 将 system + 多轮对话拼成单段提示词。

@@ -90,7 +90,8 @@ WB_BACKEND=codebuddy \
 WB_LISTEN=:8088 \
 WB_DAEMON_URL=http://127.0.0.1:18765 \
 WB_DAEMON_CWD="C:/Users/anmingwei/WorkBuddy/goMultiAgentV2" \
-WB_DAEMON_MODEL=auto \
+WB_DAEMON_MODEL=hy3 \
+WB_DAEMON_FALLBACK_MODEL=deepseek-v4-pro \
 ./bin/workbuddy-llm-api.exe -backend codebuddy -addr :8088
 ```
 
@@ -101,43 +102,80 @@ WB_BACKEND=mock        WB_LISTEN=:8080 go run .          # 本地回显，无需
 WB_BACKEND=passthrough WB_BASE_URL=https://api.openai.com/v1 WB_API_KEY=sk-xxx WB_LISTEN=:8080 go run .
 ```
 
-## 三、测试（OpenAI 兼容）
+## 三、模型默认与自动回退（codebuddy 后端）
 
-> 假设网关在 `:8088`，守护进程在 `:18765`。
+- **默认模型**：`WB_DAEMON_MODEL`（默认 `hy3`）。请求体不指定 `model`（或写占位名 `codebuddy-default`）时使用它。
+- **自动回退**：`WB_DAEMON_FALLBACK_MODEL`（默认 `deepseek-v4-pro`）。
+  - 规则：**未显式指定模型**的请求按 `主模型 → 回退模型` 顺序尝试；主模型失败（网络/HTTP 错误/返回空）时自动切换。
+  - **显式指定**了模型的请求（如 `model:"glm-5.1"`）**不做回退**，直接透传该模型。
+- 验证默认=hy3：见测试 4（不传 model，返回 `"model":"hy3"`）。
+- 验证回退：把 `WB_DAEMON_MODEL` 设成不存在的 id、`WB_DAEMON_FALLBACK_MODEL=hy3`，再不指定模型调用，
+  会先失败一次再回退到 hy3（已实测）。
+
+## 四、测试（全接口）
+
+> 假设网关在 `:8088`，守护进程在 `:18765`。所有调用都会真实消耗 WorkBuddy/CodeBuddy 积分。
+
+### 一键脚本（推荐）
 
 ```bash
-# 1) 健康检查
-curl http://127.0.0.1:8088/healthz
-# -> ok
+cd tool/workbuddyLLMAPI
+python tests/test_api.py                 # 默认打 http://127.0.0.1:8088
+python tests/test_api.py http://x:8080   # 指定地址
+```
 
-# 2) 列出模型
-curl http://127.0.0.1:8088/v1/models
+覆盖 11 个用例：`GET /`、`GET /healthz`、`GET /v1/models`、非流式/流式 `chat/completions`（默认 hy3）、
+显式模型 `glm-5.1`/`deepseek-v4-pro`/`kimi-k2.6`、多轮对话、system 提示词、错误用例（非法 JSON→400）。
+输出每个用例 `PASS/FAIL` 与汇总（已验证 11/11 通过）。
 
-# 3) 非流式对话（验证点：返回干净的 assistant 文本，即已消耗积分）
-curl http://127.0.0.1:8088/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"codebuddy-default","messages":[{"role":"user","content":"Reply with exactly the single word: PONG"}],"stream":false}'
-# -> {"choices":[{"message":{"role":"assistant","content":"PONG"},"finish_reason":"stop"}]}
+### 手动 curl 逐接口
 
-# 4) 流式对话（SSE，验证点：以 data: 分片返回，结尾 data: [DONE]）
-curl -N http://127.0.0.1:8088/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"codebuddy-default","messages":[{"role":"user","content":"用一句话介绍上海"}],"stream":true}'
+```bash
+B=http://127.0.0.1:8088
 
-# 5) 多轮对话（网关把 system + 历史拼成单段提示词，并指令 agent 直接回答、不使用工具）
-curl http://127.0.0.1:8088/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"codebuddy-default","messages":[
+# 1) 服务信息 GET /
+curl $B/ ; echo
+
+# 2) 健康检查 GET /healthz  -> ok
+curl $B/healthz ; echo
+
+# 3) 模型目录 GET /v1/models（含 hy3，共 28 个）
+curl $B/v1/models ; echo
+
+# 4) 非流式（默认模型 = hy3，不传 model 即走 hy3）
+curl $B/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"你是什么模型？只答模型名。"}],"stream":false}'
+# -> "model":"hy3"
+
+# 5) 流式 SSE（默认模型），结尾 data: [DONE]
+curl -N $B/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"用一句话介绍北京"}],"stream":true}'
+
+# 6) 显式国产模型（直连，模型名原样透传，不做回退）
+curl $B/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"model":"glm-5.1","messages":[{"role":"user","content":"只回答：OK"}],"stream":false}'
+curl $B/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"只回答：OK"}],"stream":false}'
+curl $B/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"model":"kimi-k2.6","messages":[{"role":"user","content":"1+1=? 只答数字"}],"stream":false}'
+
+# 7) 多轮对话（含 system + 历史）
+curl $B/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"messages":[
         {"role":"system","content":"你是一名简洁的助手"},
-        {"role":"user","content":"1+1等于几？"},
-        {"role":"assistant","content":"2"},
-        {"role":"user","content":"那再加 3 呢？"}],"stream":false}'
+        {"role":"user","content":"记住：我的幸运数字是 7"},
+        {"role":"assistant","content":"好的，记住了。"},
+        {"role":"user","content":"我的幸运数字是几？只答数字。"}],"stream":false}'
+# -> 应含 "7"
+
+# 8) 错误用例：非法 JSON 体 -> 400
+curl -i $B/v1/chat/completions -H "Content-Type: application/json" -d '{bad json}' ; echo
 ```
 
 调试工具（可选）：`python bridge/acp_probe.py http://127.0.0.1:18765` 会复现 ACP 流程并打印
 `session/update` 文本增量，用于确认守护进程本身可用。
 
-## 四、接入 trpc-agent-go（本项目模型三协议适配层）
+## 五、接入 trpc-agent-go（本项目模型三协议适配层）
 
 将网关当作一个标准的 OpenAI 协议 Provider 接入即可：
 
@@ -158,6 +196,7 @@ curl http://127.0.0.1:8088/v1/chat/completions \
 | `WB_API_KEY` | 空 | passthrough 上游 API Key |
 | `WB_DAEMON_URL` | `http://127.0.0.1:18765` | 本机 CodeBuddy 守护进程地址（codebuddy 后端） |
 | `WB_DAEMON_CWD` | `.` | ACP `session/new` 的 agent 工作目录 |
-| `WB_DAEMON_MODEL` | `auto` | 透传给守护进程的模型 id（`auto`/`hy3`/`glm-5.2`/`deepseek-v4-flash` 等） |
-| `WB_DEFAULT_MODEL` | `codebuddy-default` | 缺省模型名 |
+| `WB_DAEMON_MODEL` | `hy3` | **默认模型**：请求未指定 `model` 时使用的模型 id（hy3/glm-5.1/deepseek-v4-pro/kimi-*/...） |
+| `WB_DAEMON_FALLBACK_MODEL` | `deepseek-v4-pro` | **回退模型**：仅当未显式指定 `model` 且主模型失败（网络/HTTP 错误/返回空）时自动切换 |
+| `WB_DEFAULT_MODEL` | `codebuddy-default` | 缺省模型占位名（实际被 `WB_DAEMON_MODEL` 取代） |
 | `WB_MODELS` | 逗号分隔列表（**默认即 CodeBuddy 真实模型目录**：auto/hy3/glm-*/kimi-*/deepseek-*/minimax-*/qwen-*/step + 少量国外旗舰） | `/v1/models` 返回内容；请求里的 model 名会**原样透传**给守护进程，按账号实际可用模型路由 |

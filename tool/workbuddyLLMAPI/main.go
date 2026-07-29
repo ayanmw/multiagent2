@@ -18,7 +18,7 @@ func main() {
 	flag.StringVar(&cfg.APIKey, "api-key", cfg.APIKey, "passthrough upstream API key")
 	flag.Parse()
 
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
 	log.Printf("[workbuddyLLMAPI] backend=%s listen=%s", cfg.Backend, cfg.ListenAddr)
 
 	b, err := backend.New(cfg)
