@@ -198,3 +198,8 @@ server/
 - 实现要点：`runner.NewRunner` 每请求新建（自动挂 fresh inmemory service，无跨请求记忆），但 `runner.Run(ctx, userID, sessionID, message, agent.WithMessages(history))` 会在 session 为空（GetEventCount==0）时把 `ro.Messages` 落库为历史事件，再追加本轮 user 消息，模型即看到完整多轮上下文。注意 `UserMessageRewriter` 为 nil（默认）时才会走 `seedSessionHistory` 分支，不要误加 rewriter 否则历史被忽略。
 - 排除当前消息：handler 在调用引擎前已 `AppendMessage(user)` 写入当前轮，故 `loadChatHistory(db, sess.ID, excludeLast=1)` 跳过末尾 1 条（当前 user），避免历史与 `runner.Run` 自行追加的当前消息重复。框架请求体首个 role 是 system（指令），历史 user 消息排在其后，测试断言需按 role 过滤而非下标 0。
 - 角色映射：DB 角色字符串 user/assistant/system/tool → 框架 `model.RoleUser/RoleAssistant/RoleSystem/RoleTool`；`/api/chat` 此前不持久化，本轮一并补齐（GetOrCreateSession + 写 user/assistant），否则它永远没有历史可回灌。
+
+### 2026-07-29 | 架构 | SessionKey 复合唯一索引（M0.5-03）
+- `model.Session.SessionKey` 早期设为全局 `gorm:"uniqueIndex"`，会**错误地禁止不同用户复用同一 key**（P1 缺陷：跨用户碰撞时破坏唯一性/混淆审计）。M0.5-03 改为复合唯一 `UNIQUE(user_id, session_key)`：`UserID gorm:"not null;uniqueIndex:idx_user_session,priority:1"` + `SessionKey gorm:"size:64;not null;uniqueIndex:idx_user_session,priority:2"`（priority 控制列序 user_id 在前，利于按用户过滤命中索引）。
+- **迁移旧库**：GORM AutoMigrate 不会删除已不存在的旧索引，故在 `repo/db.go` 的 `migrateCompositeSessionKey` 中按 `sqlite_master` 的 `sql LIKE '%session_key%' AND sql NOT LIKE '%user_id%'` 动态识别遗留单列唯一索引并 `DROP INDEX IF EXISTS`（幂等安全）；复合索引由 AutoMigrate 自动补齐。任何把单列唯一改复合唯一的地方都用此「动态识别+DROP INDEX IF EXISTS」套路，别硬编码索引名（GORM 无名索引名随版本变）。
+- **并发安全**：`GetOrCreateSession` 用「先查 → miss 则建 → 唯一约束冲突重试查已有行」循环（≤3 次，自动生成的 key 冲突时重新随机），消除并发插入竞态，保证同一 (user_id, key) 最终仅一行、各并发调用拿到同一行 id。唯一约束冲突判定用 `errors.Is(err, gorm.ErrDuplicatedKey)` 兜底 SQLite 原生 `unique constraint failed` 文本匹配（db.go 的 gorm.Config 未开 TranslateError）。
