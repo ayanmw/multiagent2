@@ -1,6 +1,9 @@
 package repo
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/anmingwei/go-multi-agent-v2/internal/model"
@@ -8,26 +11,56 @@ import (
 	"gorm.io/gorm"
 )
 
-// GetOrCreateSession 按 SessionKey 取会话；key 为空或不存在则新建一个（自动生成 SessionKey）。
-// 保证路由参数总可映射到一行会话（M0-11 的 SSE 端点依赖此行为）。
+// GetOrCreateSession 按 (user_id, session_key) 取会话；key 不存在则新建一个。
+// 复合唯一索引 (user_id, session_key) 保证：不同用户可复用同一 session_key，
+// 同一用户重复 key 不会新建重复行。并发调用下若两条请求同时 miss 并尝试插入，
+// 唯一约束冲突的那条会通过重试查到另一条已建的行，从而消除竞态、不产生脏数据。
 func GetOrCreateSession(db *gorm.DB, uid uint, key string) (*model.Session, error) {
-	if key != "" {
+	auto := key == ""
+	for attempt := 0; attempt < 3; attempt++ {
+		if key == "" {
+			key = NewSessionKey()
+		}
 		var s model.Session
-		if err := db.Where("user_id = ? AND session_key = ?", uid, key).First(&s).Error; err == nil {
+		err := db.Where("user_id = ? AND session_key = ?", uid, key).First(&s).Error
+		if err == nil {
 			return &s, nil
-		} else if err != gorm.ErrRecordNotFound {
+		}
+		if err != gorm.ErrRecordNotFound {
 			return nil, err
 		}
+		// 未命中 -> 尝试新建；唯一约束冲突（并发插入）则重试查询已有行。
+		created := &model.Session{
+			UserID:     uid,
+			SessionKey: key, // 客户端传入的 session_id 即对外标识，服务端不再重新生成
+			Title:      "新对话",
+		}
+		if cerr := db.Create(created).Error; cerr == nil {
+			return created, nil
+		} else if isUniqueViolation(cerr) {
+			if auto {
+				key = "" // 自动生成的 key 重新随机，避免（极罕见）碰撞时死循环
+			}
+			continue
+		} else {
+			return nil, cerr
+		}
 	}
-	s := &model.Session{
-		UserID:     uid,
-		SessionKey: key, // 客户端传入的 session_id 即对外标识，服务端不再重新生成
-		Title:      "新对话",
+	return nil, fmt.Errorf("get_or_create_session: 超过重试次数 key=%q", key)
+}
+
+// isUniqueViolation 判断是否为唯一约束冲突（兼容 GORM 转译错误与 SQLite 原生错误）。
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
 	}
-	if err := db.Create(s).Error; err != nil {
-		return nil, err
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
 	}
-	return s, nil
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique constraint failed") ||
+		strings.Contains(msg, "duplicate") ||
+		strings.Contains(msg, "errduplicatedkey")
 }
 
 // GetSessionByKey 查询用户归属的会话（跨用户查询返回 ErrRecordNotFound，防越权）。

@@ -52,8 +52,35 @@ func NewDB(cfg *config.Config) (*DB, error) {
 		return nil, fmt.Errorf("failed to seed roles: %w", err)
 	}
 
+	// 迁移：旧模型曾把 session_key 设为全局单列 uniqueIndex，禁止跨用户复用同
+	// key（M0.5-03 已改为复合唯一 (user_id, session_key)）。对已有库删除遗留的
+	// 单列唯一索引，避免它继续阻断跨用户复用；复合索引由 AutoMigrate 自动补齐。
+	if err := migrateCompositeSessionKey(db); err != nil {
+		return nil, fmt.Errorf("failed to migrate session key index: %w", err)
+	}
+
 	log.Printf("[DB] Connected to SQLite3: %s", cfg.DBPath)
 	return &DB{DB: db}, nil
+}
+
+// migrateCompositeSessionKey 删除 sessions 表上遗留的「单列 session_key 唯一索引」
+// （由早期模型 gorm:"uniqueIndex" 产生），保留复合唯一索引 (user_id, session_key)。
+// 通过 sql 文本特征判断：含 session_key 但不含 user_id 的唯一索引即为遗留单列索引。
+// 幂等安全（DROP INDEX IF EXISTS），无遗留索引时为 no-op。
+func migrateCompositeSessionKey(db *gorm.DB) error {
+	var names []string
+	if err := db.Raw(`SELECT name FROM sqlite_master
+		WHERE type = 'index' AND tbl_name = 'sessions'
+		AND sql LIKE '%session_key%' AND sql NOT LIKE '%user_id%'`).Scan(&names).Error; err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err := db.Exec(fmt.Sprintf("DROP INDEX IF EXISTS `%s`", name)).Error; err != nil {
+			return err
+		}
+		log.Printf("[DB] Dropped legacy single-column unique index on sessions.session_key: %s", name)
+	}
+	return nil
 }
 
 // seedRoles ensures the default roles and their permissions exist. It is

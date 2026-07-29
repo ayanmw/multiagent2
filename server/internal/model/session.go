@@ -7,8 +7,12 @@ import "gorm.io/gorm"
 // 与数据库自增主键 ID 解耦，避免暴露内部行号，也方便前端自行生成会话 id。
 type Session struct {
 	gorm.Model
-	UserID     uint   `gorm:"not null;index" json:"user_id"`
-	SessionKey string `gorm:"size:64;not null;uniqueIndex" json:"session_key"` // 全局唯一，随机生成
+	// 复合唯一约束 (user_id, session_key)：允许不同用户复用同一 session_key，
+	// 但同一用户不能重复建相同的 key。取代原先的全局 uniqueIndex（该约束会
+	// 错误地禁止跨用户复用 key）。priority 控制复合索引列顺序（user_id 在前，
+	// 利于按用户过滤的查询命中索引）。迁移旧库的单列唯一索引见 repo/db.go。
+	UserID     uint   `gorm:"not null;uniqueIndex:idx_user_session,priority:1" json:"user_id"`
+	SessionKey string `gorm:"size:64;not null;uniqueIndex:idx_user_session,priority:2" json:"session_key"`
 	Title      string `gorm:"size:256" json:"title"`
 }
 

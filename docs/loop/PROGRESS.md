@@ -127,3 +127,15 @@
 - 完成内容：**P0 多轮记忆修复**。框架 v1.10.0 的 `session` 包仅有 `inmemory`/`noop` 后端，**无 SQLite 持久化后端**（docs/03 称「文档称有 SQLite 后端」在 v1.10.0 不成立），故采用退化方案：后端从 DB `ListSessionMessages` 加载历史 → 构造 `[]model.Message` 多轮传入 Runner。具体：① `engine.Stream/Chat` 新增 `history []model.Message` 形参，通过 `agent.WithMessages(history)` 把历史 seed 进每次 `runner.Run`（fresh inmemory service 会先落库历史事件再追加本轮 user 消息，模型即拥有前序上下文）；② 新增 `internal/api/history.go`（`toFrameworkMessage` 角色映射 + `loadChatHistory(db, sessionID, excludeLast)` 排除当前刚写入的 user 消息避免重复）；③ `sse.go` 与 `chat.go` 在调用引擎前 `loadChatHistory(db, sess.ID, 1)` 回灌；④ `chat.go` 补齐会话持久化（此前仅 SSE 端点持久化，`/api/chat` 无记忆——本轮一并修复使两者一致）。
 - Commit: 6012fcb
 - 验证: go build ✓ | go vet ✓ | go test ./... ✓（cmd/server + api + engine 全绿）。新增 `TestEngine_MultiTurnHistory`（断言 LLM 请求体 messages = [system, user:我叫小明, assistant:收到, user:我刚说了什么名字？]，证明历史回灌）；`TestM0_Integration_E2E` 改造 mock 回声首句并新增第二轮记忆断言（第二轮回复引用第一轮实体「Go Multi-Agent」）；前端未改动，不影响 `npm run build`。
+
+### 2026-07-29 10:14 | M0.5-02 | ✅
+- 完成内容：**P1 RBAC 权限矩阵落地（此前 RequirePermission 是死代码）**。`middleware.RequirePermission(db, resource, action)` 接入所有敏感写路由：① Provider 创建/更新/删除接 `providers:write`；② Model 同步/启用接 `models:write`；③ APIKey 管理（创建/列表/吊销）接 `apikeys:write`；④ 新增 `DELETE /api/sessions/:id`（此前无任何删除会话端点）+ `DeleteSessionHandler`/`repo.DeleteSession`（owner-scoped 级联删消息）接 `sessions:write`。`model.SeedRoles` 的 developer 角色新增 `providers:write`/`models:write`/`apikeys:write`，viewer 仅保留 `*_read` → 调写路由被 403。`repo/db.go` 的 `seedRoles` 改为**幂等**（角色已存在时只补齐缺失权限），使已初始化的 `data/codeagent.db` 重启即获得新权限，无需手工迁移。
+- Commit: 0b8fc5d
+- 验证: go build ✓ | go vet ✓ | go test ./... ✓（全包绿）。新增 `server/cmd/server/rbac_test.go` 的 `TestRBAC_SensitiveRoutes`：viewer 调 9 条写路由全部 403、viewer 读 /api/providers 200、developer 同批路由非 403、developer 合法 POST /api/providers 返回 201（验证 RBAC 不误伤正常写）。M0-19 集成测试（developer 账号）仍全绿，证明新权限未破坏既有链路。前端未改动。
+- 下一步：PLAN 中 M0.5-03（SessionKey 复合唯一索引 + GetOrCreateSession 冲突处理）成为下一个 ○，下轮继续。
+
+### 2026-07-29 10:24 | M0.5-03 | ✅
+- 完成内容：**P1 SessionKey 唯一约束（复合唯一索引 + 并发冲突处理）**。`model.Session` 的 `SessionKey` 由全局 `uniqueIndex` 改为复合唯一索引 `UNIQUE(user_id, session_key)`（`idx_user_session`，user_id priority:1 / session_key priority:2），允许不同用户复用同一 key、禁止同用户重复建行；`repo/session.go` 的 `GetOrCreateSession` 改为「先查→miss 则建→唯一约束冲突则重试查询已有行」的循环（最多 3 次，自动生成的 key 冲突时重新随机），消除并发竞态、不产生脏数据；新增 `repo/db.go` 的 `migrateCompositeSessionKey` 在 AutoMigrate 后按 sql 文本特征删除遗留的单列 `session_key` 唯一索引（`DROP INDEX IF EXISTS`，幂等安全），避免旧库仍被全局唯一索引阻断跨用户复用。
+- Commit: <pending>
+- 验证: go build ✓ | go vet ✓ | go test ./... ✓（repo 包新增 3 用例全绿：TestCrossUserSameSessionKeyAllowed 跨用户同 key 落 2 行、TestSameUserDuplicateKeyIdempotent 同用户同 key 仅 1 行、TestConcurrentGetOrCreateSession 20 并发最终仅 1 行且各 goroutine 拿到同一 id）；顺手修复 `TestListSessionsScopedAndOrdered` 的时序 flake（AppendMessage 前 sleep 10ms 确保 updated_at 严格更晚，消排序不稳定）。前端未改动。
+- 下一步：PLAN 中 M0.5-04（delta 累加公共函数）成为下一个 ○，下轮继续。

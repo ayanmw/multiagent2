@@ -1,7 +1,9 @@
 package repo
 
 import (
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/anmingwei/go-multi-agent-v2/internal/model"
 	"gorm.io/driver/sqlite"
@@ -41,6 +43,9 @@ func TestListSessionsScopedAndOrdered(t *testing.T) {
 	}
 
 	// 先给 s2 追加消息（会刷新其 updated_at），期望列表里 s2 排在 s1 前面。
+	// 休眠一小段时间，确保 s2 的 updated_at 严格晚于创建时刻，
+	// 避免低时钟分辨率下与 s1/s3 的 updated_at 相同导致排序不稳定（时序 flake）。
+	time.Sleep(10 * time.Millisecond)
 	if err := AppendMessage(db, s2.ID, "user", "hi"); err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -98,5 +103,101 @@ func TestListSessionMessagesInOrder(t *testing.T) {
 	// GetSessionByKey 跨用户应返回 RecordNotFound。
 	if _, err := GetSessionByKey(db, 99, "sess-x"); err == nil {
 		t.Fatalf("expected cross-user lookup to fail")
+	}
+}
+
+// TestCrossUserSameSessionKeyAllowed 验证复合唯一索引允许不同用户复用同一 key。
+func TestCrossUserSameSessionKeyAllowed(t *testing.T) {
+	db := newSessionTestDB(t)
+
+	a, err := GetOrCreateSession(db, 1, "shared-key")
+	if err != nil {
+		t.Fatalf("user1 create: %v", err)
+	}
+	b, err := GetOrCreateSession(db, 2, "shared-key")
+	if err != nil {
+		t.Fatalf("user2 create: %v", err)
+	}
+	if a.SessionKey != b.SessionKey {
+		t.Fatalf("keys differ: %q vs %q", a.SessionKey, b.SessionKey)
+	}
+	if a.ID == b.ID {
+		t.Fatalf("expected distinct rows for different users, got same id %d", a.ID)
+	}
+	var cnt int64
+	if err := db.Model(&model.Session{}).Where("session_key = ?", "shared-key").Count(&cnt).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if cnt != 2 {
+		t.Fatalf("expected 2 rows for same key across users (composite unique allows reuse), got %d", cnt)
+	}
+}
+
+// TestSameUserDuplicateKeyIdempotent 验证同一用户重复 key 不会新建重复行。
+func TestSameUserDuplicateKeyIdempotent(t *testing.T) {
+	db := newSessionTestDB(t)
+
+	first, err := GetOrCreateSession(db, 5, "dup-key")
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	second, err := GetOrCreateSession(db, 5, "dup-key")
+	if err != nil {
+		t.Fatalf("second create: %v", err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("expected same row for same user+key, got %d and %d", first.ID, second.ID)
+	}
+	var cnt int64
+	if err := db.Model(&model.Session{}).Where("user_id = ? AND session_key = ?", 5, "dup-key").Count(&cnt).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if cnt != 1 {
+		t.Fatalf("expected exactly 1 row for same user+key, got %d", cnt)
+	}
+}
+
+// TestConcurrentGetOrCreateSession 验证并发调用不产生脏数据（最终仅一行）。
+func TestConcurrentGetOrCreateSession(t *testing.T) {
+	db := newSessionTestDB(t)
+
+	const n = 20
+	var wg sync.WaitGroup
+	wg.Add(n)
+	errCh := make(chan error, n)
+	ids := make([]uint, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			s, err := GetOrCreateSession(db, 100, "concurrent-key")
+			if err != nil {
+				errCh <- err
+				return
+			}
+			ids[i] = s.ID
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent create error: %v", err)
+		}
+	}
+
+	var cnt int64
+	if err := db.Model(&model.Session{}).Where("user_id = ? AND session_key = ?", 100, "concurrent-key").Count(&cnt).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if cnt != 1 {
+		t.Fatalf("expected exactly 1 row after %d concurrent creates, got %d", n, cnt)
+	}
+	for i, id := range ids {
+		if id == 0 {
+			t.Fatalf("goroutine %d got zero id", i)
+		}
+		if id != ids[0] {
+			t.Fatalf("goroutine %d got different id %d vs %d", i, id, ids[0])
+		}
 	}
 }
