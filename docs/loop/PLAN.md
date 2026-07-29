@@ -36,7 +36,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | # | 任务 | 状态 | 验证标准 | 依赖 |
 |---|------|------|----------|------|
 | M1-04 | **Executor 抽象接口**：定义 `Executor.Run(ctx, cmd) → (stdout, stderr, exitCode)`；`HostExecutor`（cwd 约束）实现 | ✅ | 单测覆盖正常/超时/cwd 越界 | M0.5 |
-| M1-05 | **危险命令策略**：前缀黑名单（rm -rf /、git push --force 等）+ 策略枚举 allow/ask/deny，无人值守默认 deny 并写审计 | ○ | 命中黑名单命令被拒并写审计 | M1-04 |
+| M1-05 | **危险命令策略**：前缀黑名单（rm -rf /、git push --force 等）+ 策略枚举 allow/ask/deny，无人值守默认 deny 并写审计 | ✅ | 命中黑名单命令被拒并写审计 | M1-04 |
 | M1-06 | **CodeAct 工具集**：基于 Executor 实现 `shell_exec` + `file_read/file_write/file_edit`，注册进 engine | ○ | Agent 执行 `ls` 返回结果；读写文件成功 | M1-04 |
 | M1-07 | **Workspace 模型**：User 下 Workspace（本地目录 + 可选 git remote），对话绑定 workspace，Executor 在其目录执行；DB 模型 + CRUD API | ○ | 建 workspace→对话绑定→shell 在正确目录执行 | M1-04 |
 | M1-08 | **子代理委托 agenttool**：Coder 子代理（带代码工具集）可由 Orchestrator 委托；定义 agent 工厂 | ○ | Orchestrator 委托 Coder 写文件成功 | M1-06/07 |
