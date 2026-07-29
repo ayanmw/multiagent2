@@ -87,12 +87,19 @@ func RegisterHandler(jwtSecret string, db *gorm.DB) gin.HandlerFunc {
 			Status:       model.UserStatusActive,
 		}
 
-		// Default new users to the "developer" role; fall back to viewer (id 3)
-		// as the least-privilege default if the role is missing for any reason.
-		user.RoleID = 3
-		if role, err := repo.GetRoleByName(db, model.RoleDeveloper); err == nil {
-			user.RoleID = role.ID
+		// 新用户默认 developer 角色；若 developer 缺失则降级 viewer（最小权限），
+		// 不再硬编码角色 id（修复前 user.RoleID = 3 的魔法值，M0.5-05）。
+		roleID, rerr := repo.GetRoleIDByName(db, model.RoleDeveloper)
+		if rerr != nil {
+			if vr, verr := repo.GetRoleIDByName(db, model.RoleViewer); verr == nil {
+				roleID = vr
+			}
 		}
+		if roleID == 0 {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "角色表未初始化，无法注册用户"})
+			return
+		}
+		user.RoleID = roleID
 		if user.DisplayName == "" {
 			user.DisplayName = req.Username
 		}

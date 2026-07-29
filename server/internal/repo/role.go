@@ -22,6 +22,17 @@ func GetRoleByName(db *gorm.DB, name string) (*model.Role, error) {
 	return &r, nil
 }
 
+// GetRoleIDByName returns the ID of the role with the given name. It is a
+// convenience wrapper for callers (e.g. assigning a default role at registration)
+// that only need the numeric ID, avoiding hardcoded role IDs (M0.5-05).
+func GetRoleIDByName(db *gorm.DB, name string) (uint, error) {
+	r, err := GetRoleByName(db, name)
+	if err != nil {
+		return 0, err
+	}
+	return r.ID, nil
+}
+
 // GetPermissionsByRoleID returns all permissions assigned to a role.
 func GetPermissionsByRoleID(db *gorm.DB, roleID uint) ([]model.RolePermission, error) {
 	var perms []model.RolePermission

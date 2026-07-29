@@ -28,6 +28,7 @@ type ModelConfig struct {
 	BaseURL  string // OpenAI 兼容 base URL（含 /v1）
 	APIKey   string // 上游 API Key（本地无鉴权代理可留空）
 	Protocol string // openai / anthropic / gemini（M0-10 仅实现 openai 兼容）
+	Timeout  time.Duration // 单次对话（流式）超时；<=0 时取默认 90s（由配置注入，M0.5-05）
 }
 
 // Engine 封装 trpc-agent-go 的 Runner/LLMAgent，负责连接 Provider+Model 并产出事件流。
@@ -60,6 +61,11 @@ func New(cfg ModelConfig) (*Engine, error) {
 
 	// Runner：未显式提供 session service 时框架会自动创建内存版会话服务。
 	r := runner.NewRunner("go-multi-agent-v2", ag)
+
+	// 单次对话超时：<=0 时回退默认 90s（由配置 ENGINE_TIMEOUT_SECONDS 注入，M0.5-05）。
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = 90 * time.Second
+	}
 	return &Engine{cfg: cfg, runner: r}, nil
 }
 
@@ -74,7 +80,7 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 	if sessionID == "" {
 		sessionID = "default"
 	}
-	runCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	runCtx, cancel := context.WithTimeout(ctx, e.cfg.Timeout)
 	// 显式开启流式：llmagent 默认是非流式（返回整块 Message.Content），
 	// 不开启则上游被当作非流式 JSON 请求，无法产生 token 级增量。
 	// M0 出口标准要求真正的流式对话，故始终以流式模式运行。

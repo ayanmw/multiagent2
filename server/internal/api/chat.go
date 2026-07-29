@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/anmingwei/go-multi-agent-v2/internal/crypto"
 	"github.com/anmingwei/go-multi-agent-v2/internal/engine"
@@ -29,7 +30,8 @@ type chatResponse struct {
 
 // ChatHandler handles POST /api/chat.
 // 它从 DB 解析出已启用的 Model + Provider，解密 APIKey，构造 engine.Engine 并调用 LLM 得到回复。
-func ChatHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
+// engineTimeout 为单次对话流式超时（由配置 ENGINE_TIMEOUT_SECONDS 注入，M0.5-05）。
+func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -81,6 +83,7 @@ func ChatHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
 			BaseURL:  p.BaseURL,
 			APIKey:   apiKey,
 			Protocol: string(p.Protocol),
+			Timeout:  engineTimeout,
 		})
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

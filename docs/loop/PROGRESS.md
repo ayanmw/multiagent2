@@ -139,3 +139,15 @@
 - Commit: b7cc989
 - 验证: go build ✓ | go vet ✓ | go test ./... ✓（repo 包新增 3 用例全绿：TestCrossUserSameSessionKeyAllowed 跨用户同 key 落 2 行、TestSameUserDuplicateKeyIdempotent 同用户同 key 仅 1 行、TestConcurrentGetOrCreateSession 20 并发最终仅 1 行且各 goroutine 拿到同一 id）；顺手修复 `TestListSessionsScopedAndOrdered` 的时序 flake（AppendMessage 前 sleep 10ms 确保 updated_at 严格更晚，消排序不稳定）。前端未改动。
 - 下一步：PLAN 中 M0.5-04（delta 累加公共函数）成为下一个 ○，下轮继续。
+
+### 2026-07-29 11:24 | M0.5-04 | ✅
+- 完成内容：**P2 delta 累加逻辑去重**。`engine.Chat`（engine.go）与 `aguiConverter.Convert`（internal/api/sse.go）各实现一遍的「优先 Delta.Content 增量、未出现任何增量才回退 Message.Content」文本去重规则，抽成公共函数 `internal/engine/delta.go` 的 `DeltaState.Text(deltaContent, messageContent string)`，两处复用、行为一致。① 新增 `server/internal/engine/delta.go`：`DeltaState` 跨多个事件/choice 保持 `sawDelta` 状态；`NewDeltaState()` 构造；`Text` 仅当 deltaContent 非空时返回它（并置位 sawDelta），否则仅在从未出现增量且 messageContent 非空时返回 messageContent，否则返回空串。② `engine.Chat` 改用 `NewDeltaState()` + `ds.Text`，删掉本地 `sawDelta`/`sb` 内联累加。③ `aguiConverter` 的 `sawDelta bool` 字段替换为 `ds *engine.DeltaState`（`newAGUIConverter` 初始化为 `engine.NewDeltaState()`），`Convert` 文本分支统一调 `cv.ds.Text`。`api` 包已 import `engine`，无新增依赖、无循环依赖。④ 新增 `server/internal/engine/delta_test.go`：覆盖「流式（增量+终帧重复 Message 被跳过）/非流式（整块回退）/混合（增量后中段 Message 被跳过）/空」四场景，证明行为与原先一致且无重复一倍。
+- Commit: 1d88ca6
+- 验证: go build ✓ | go vet ✓ | go test ./... ✓（cmd/server + api + engine 全绿；sse_test 的 TextStream/TextNonStreaming 仍绿，证明 converter 复用未改行为）。任务不涉及 web/，未跑 `npm run build`。
+- 下一步：PLAN 中 M0.5-05（消除魔法值：90s 超时提配置 + RoleID=3 改查 RoleDeveloper）成为下一个 ○，下轮继续。
+
+### 2026-07-29 11:51 | M0.5-05 | ✅
+- 完成内容：**P2 消除魔法值（超时配置化 + 角色按名查询）**。① 新增 `config.Config.EngineTimeoutSeconds`（env `ENGINE_TIMEOUT_SECONDS`，默认 90）+ `Config.EngineTimeout() time.Duration` 与方法及 `envOrDefaultInt` 辅助；「单次对话流式超时」由硬编码 `90*time.Second`（engine.go:77）改为读 `e.cfg.Timeout`，值由 `ModelConfig.Timeout` 注入、未传时 `New` 内回退默认 90s。② `ChatHandler`/`StreamChatHandler` 签名各加 `engineTimeout time.Duration` 参数并由 `main.go` 注入 `cfg.EngineTimeout()`；集成测试同链路仍绿。③ 注册默认角色不再硬编码 `user.RoleID = 3`：改为 `repo.GetRoleIDByName(db, model.RoleDeveloper)`，缺失再降级 `model.RoleViewer`，二者皆缺则返回 500（避免新建用户落入未初始化角色）；新增 `repo.GetRoleIDByName` 辅助。④ 顺手扫魔法值：`provider/discover.go` 的 `http.Client{Timeout: 15 * time.Second}` 提为包级常量 `providerHTTPTimeout`。
+- Commit: fix(M0.5): M0.5-05 消除魔法值（超时配置化 + 角色按名查询）
+- 验证: go build ✓ | go vet ✓ | go test ./... ✓（cmd/server + api + config + engine + provider + repo 全绿）。新增单测：config `TestEngineTimeoutDefault/FromEnv/InvalidEnvFallsBack`、engine `TestEngineTimeoutDefaultAndOverride`（断言默认 90s 与显式 30s 均生效）、repo `TestGetRoleIDByName`（按名查 id + 缺失报错）；E2E 全链路（注册开发者角色 / 流式对话 / 多轮记忆）仍 PASS。任务不涉及 web/，未跑 `npm run build`。
+- 下一步：PLAN 中 M0.5-06（SSE message 由 GET query 改 POST body，前端同步改造）成为下一个 ○，下轮继续。

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"strconv"
+	"time"
 
 	"github.com/anmingwei/go-multi-agent-v2/internal/crypto"
 	"github.com/anmingwei/go-multi-agent-v2/internal/engine"
@@ -25,7 +26,9 @@ import (
 //   - 路径 :session_id 会话标识（为空时服务端新建）
 //   - 查询 message   用户消息（必填）
 //   - 查询 model_id  指定托管模型 id（可选，缺省用默认启用模型）
-func StreamChatHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
+//
+// engineTimeout 为单次对话流式超时（由配置 ENGINE_TIMEOUT_SECONDS 注入，M0.5-05）。
+func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -104,6 +107,7 @@ func StreamChatHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
 			BaseURL:  p.BaseURL,
 			APIKey:   apiKey,
 			Protocol: string(p.Protocol),
+			Timeout:  engineTimeout,
 		})
 		if err != nil {
 			emit("RUN_ERROR", gin.H{"message": err.Error()})

@@ -5,14 +5,21 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"time"
 )
+
+// DefaultEngineTimeout is the fallback streaming timeout when ENGINE_TIMEOUT_SECONDS
+// is unset or invalid. A single LLM run is aborted after this duration.
+const DefaultEngineTimeout = 90 * time.Second
 
 // Config holds the application configuration.
 type Config struct {
-	DBPath        string
-	Port          string
-	JWTSecret     string
-	EncryptionKey []byte // 32-byte key for AES-256-GCM (provider API keys at rest)
+	DBPath               string
+	Port                 string
+	JWTSecret            string
+	EncryptionKey        []byte // 32-byte key for AES-256-GCM (provider API keys at rest)
+	EngineTimeoutSeconds int    // timeout (s) for a single LLM run (env ENGINE_TIMEOUT_SECONDS)
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -20,6 +27,10 @@ func Load() *Config {
 	cfg := &Config{
 		Port: envOrDefault("PORT", "8080"),
 	}
+
+	// Streaming timeout for a single LLM run (env ENGINE_TIMEOUT_SECONDS).
+	// Defaults to DefaultEngineTimeout when unset or non-positive.
+	cfg.EngineTimeoutSeconds = envOrDefaultInt("ENGINE_TIMEOUT_SECONDS", int(DefaultEngineTimeout/time.Second))
 
 	// JWT signing secret (must be set via env in production).
 	const defaultJWTSecret = "dev-insecure-secret-change-me"
@@ -54,9 +65,28 @@ func Load() *Config {
 	return cfg
 }
 
+// EngineTimeout returns the duration used to bound a single LLM streaming run.
+// It falls back to DefaultEngineTimeout when the configured value is invalid.
+func (c *Config) EngineTimeout() time.Duration {
+	if c == nil || c.EngineTimeoutSeconds <= 0 {
+		return DefaultEngineTimeout
+	}
+	return time.Duration(c.EngineTimeoutSeconds) * time.Second
+}
+
 func envOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envOrDefaultInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+		log.Printf("[WARN] %s is not a valid integer; using default %d", key, fallback)
 	}
 	return fallback
 }

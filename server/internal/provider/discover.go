@@ -25,6 +25,9 @@ type ModelInfo struct {
 	OwnedBy string `json:"owned_by,omitempty"`
 }
 
+// providerHTTPTimeout bounds a single upstream model-list request.
+const providerHTTPTimeout = 15 * time.Second
+
 type cacheEntry struct {
 	models    []ModelInfo
 	fetchedAt time.Time
@@ -49,7 +52,7 @@ func NewDiscoverer(encKey []byte, ttl time.Duration) *Discoverer {
 	}
 	return &Discoverer{
 		encKey: encKey,
-		client: &http.Client{Timeout: 15 * time.Second},
+		client: &http.Client{Timeout: providerHTTPTimeout},
 		ttl:    ttl,
 		cache:  make(map[uint]cacheEntry),
 	}
