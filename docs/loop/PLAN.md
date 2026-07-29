@@ -29,6 +29,28 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 
 ---
 
+## 循环执行补充约定（M1 起生效，每轮必读）
+
+> M1 阶段的执行补充指引，循环每轮读取本文件时应一并遵守。
+
+### 1. M1 任务出处
+- M0.5 任务读 `docs/03` 第一节（缺陷 file:line）；**M1 任务读 `docs/03` 第二节（2.2 任务拆分 / 2.4 技术要点与框架风险）+ `docs/02`（框架能力全景与自主化映射）+ `LEARNINGS.md`**。M1 详细设计以 §2 为权威，PLAN.md M1 行是其精简派生。
+
+### 2. M1 包与框架 API 约定
+- 分层新增：`internal/executor`（✅ M1-04 已建）、`internal/tool`（CodeAct：shell_exec/file_read/file_write/file_edit）、`internal/agent`（Orchestrator/Coder/Reviewer 工厂）。
+- 工具统一用 `tool/function.NewFunctionTool[I,O]`（见 LEARNINGS 引擎封装），注册进 `llmagent.WithTools`。
+- **M1-11 Goal**：先验框架是否有 `goal` 包；v1.10.0 若无则降级为自定义工具集 `get_goal/create_goal/update_goal`，只挂 Orchestrator，不开 EnableParallelTools。
+- **M1-12 CycleAgent/Plan-Execute**：优先框架 `graph`（loop 边）或自写 planner→executor for-loop，不依赖 M2 taskrun。
+- 所有代码执行必须经由 `executor.SafeExecutor`（危险命令策略包装），禁止裸用 `HostExecutor.Run`（见 LEARNINGS 2026-07-29）。
+
+### 3. M1 集成测试指引（Agent 协作 / Goal / 循环类任务）
+- M1-08/09/10/11/12 验收无法纯单测，须复用 `cmd/server` 现有 mock LLM 桩（`buildRouter`/`newRBACRouter`/`e2eClient`，参考 `TestM0_Integration_E2E`、`rbac_test.go`）构造**脚本化工具调用序列**：Coder 写文件、Reviewer 调 write 被拒、Goal 未达成继续。不调真实 LLM。
+
+### 4. M1-16 命名消歧
+- M1-16 的 `PLAN.md/PROGRESS.md/LEARNINGS.md` 是**每次 run 下的 artifact 文件**（存于 workspace/run 目录或 DB artifact 表），**绝非**本仓库 `docs/loop/PLAN.md` 等循环控制文件；Agent 写状态文件时不得触碰 `docs/loop/`。
+
+---
+
 ## M1 CodeAgent 核心（门槛：M0.5 全部 ✅ 后才可开始）
 
 > 原 M1-01/02/03（缺陷修复）已上移为 M0.5-01/02/03，编号保留不复用。
