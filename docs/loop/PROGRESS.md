@@ -122,3 +122,8 @@
 - 完成内容：端到端集成验证（进程内 E2E 测试 TestM0_Integration_E2E）。① 抽 buildRouter 便于测试；② 新增 server/cmd/server/integration_test.go，用 httptest 本地 OpenAI 桩（/v1/models + /v1/chat/completions SSE）跑通「注册→登录→建 openai Provider→sync 模型→启用+默认→建 Session→SSE 流式对话→GET 会话详情校验历史（刷新后仍在）」全链路。验证中发现并修复两个真问题：引擎未开启流式（llmagent 默认非流式），补 agent.WithStream(true)，否则上游被当非流式请求、无法 token 级增量且 SSE 端点报 text/event-stream 解析错；AG-UI converter 与 engine.Chat 同时累加 Delta.Content + 最终 Message.Content 导致流式回复文本重复一倍，改为优先用增量、仅非流式时回退 Message。sse_test.go 增非流式用例、engine_test.go 桩改 SSE。
 - Commit: <pending>
 - 验证: go build ✓ | go vet ✓ | go test ./... ✓（api/engine/cmd/server 全绿；E2E 流式回复「你好，世界！」无重复、历史持久化 2 条消息 user+assistant）| npm run build ✓（前端未改，M0 出口仍可用）
+
+### 2026-07-29 09:48 | M0.5-01 | ✅
+- 完成内容：**P0 多轮记忆修复**。框架 v1.10.0 的 `session` 包仅有 `inmemory`/`noop` 后端，**无 SQLite 持久化后端**（docs/03 称「文档称有 SQLite 后端」在 v1.10.0 不成立），故采用退化方案：后端从 DB `ListSessionMessages` 加载历史 → 构造 `[]model.Message` 多轮传入 Runner。具体：① `engine.Stream/Chat` 新增 `history []model.Message` 形参，通过 `agent.WithMessages(history)` 把历史 seed 进每次 `runner.Run`（fresh inmemory service 会先落库历史事件再追加本轮 user 消息，模型即拥有前序上下文）；② 新增 `internal/api/history.go`（`toFrameworkMessage` 角色映射 + `loadChatHistory(db, sessionID, excludeLast)` 排除当前刚写入的 user 消息避免重复）；③ `sse.go` 与 `chat.go` 在调用引擎前 `loadChatHistory(db, sess.ID, 1)` 回灌；④ `chat.go` 补齐会话持久化（此前仅 SSE 端点持久化，`/api/chat` 无记忆——本轮一并修复使两者一致）。
+- Commit: 6012fcb
+- 验证: go build ✓ | go vet ✓ | go test ./... ✓（cmd/server + api + engine 全绿）。新增 `TestEngine_MultiTurnHistory`（断言 LLM 请求体 messages = [system, user:我叫小明, assistant:收到, user:我刚说了什么名字？]，证明历史回灌）；`TestM0_Integration_E2E` 改造 mock 回声首句并新增第二轮记忆断言（第二轮回复引用第一轮实体「Go Multi-Agent」）；前端未改动，不影响 `npm run build`。

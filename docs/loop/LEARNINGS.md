@@ -192,3 +192,9 @@ server/
 ### 2026-07-29 | 架构 | AG-UI 文本去重（Delta vs Message）
 - aguiConverter.Convert（internal/api/sse.go）与 engine.Chat（internal/engine/engine.go）都**不能** `Delta.Content + Message.Content` 直接相加：流式场景下最终响应 Message.Content = 所有增量之和，相加会重复一倍（实测「你好，世界！你好，世界！」）。
 - 正确做法：优先累加 `choice.Delta.Content`（增量）；仅当整轮未出现过任何 Delta（纯非流式单响应）时，才回退用 `choice.Message.Content`。用 converter 的 `sawDelta` 标志区分。sse_test.go 已改 TextStream 用例（最终 Message=增量之和应跳过）并新增 TestAGUIConverter_TextNonStreaming。
+
+### 2026-07-29 | 架构 | 框架 v1.10.0 无 SQLite 会话后端（多轮记忆方案）
+- 关键事实：`trpc.group/trpc-go/trpc-agent-go@v1.10.0` 的 `session` 包**只提供 `inmemory` 与 `noop` 两种 Service**，docs/03 所述「SQLite 后端」在该版本不存在。故多轮记忆不能用「注入持久化 SessionService」方案，只能走**退化方案**：每次请求从 DB `ListSessionMessages` 读历史 → 映射为框架 `model.Message` → 经 `agent.WithMessages(history)` 作为 RunOption seed 进 `runner.Run`。
+- 实现要点：`runner.NewRunner` 每请求新建（自动挂 fresh inmemory service，无跨请求记忆），但 `runner.Run(ctx, userID, sessionID, message, agent.WithMessages(history))` 会在 session 为空（GetEventCount==0）时把 `ro.Messages` 落库为历史事件，再追加本轮 user 消息，模型即看到完整多轮上下文。注意 `UserMessageRewriter` 为 nil（默认）时才会走 `seedSessionHistory` 分支，不要误加 rewriter 否则历史被忽略。
+- 排除当前消息：handler 在调用引擎前已 `AppendMessage(user)` 写入当前轮，故 `loadChatHistory(db, sess.ID, excludeLast=1)` 跳过末尾 1 条（当前 user），避免历史与 `runner.Run` 自行追加的当前消息重复。框架请求体首个 role 是 system（指令），历史 user 消息排在其后，测试断言需按 role 过滤而非下标 0。
+- 角色映射：DB 角色字符串 user/assistant/system/tool → 框架 `model.RoleUser/RoleAssistant/RoleSystem/RoleTool`；`/api/chat` 此前不持久化，本轮一并补齐（GetOrCreateSession + 写 user/assistant），否则它永远没有历史可回灌。
