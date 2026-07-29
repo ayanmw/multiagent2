@@ -166,6 +166,14 @@
 
 ---
 
+### 2026-07-29 14:28 | M1-04 | ✅
+- 完成内容：**Executor 抽象接口（代码执行统一入口）**。新增独立包 `server/internal/executor/`：① `executor.go` 定义 `Executor` 接口（`Run(ctx, command) (*Result, error)` + `Workdir() string`，`Result{Stdout,Stderr,ExitCode}` 其中 ExitCode=0 正常、>0 命令非零退出、-1 超时中断）与包注释明确「所有代码执行必须经 Executor，禁止业务层散写 os/exec」；② `host.go` 的 `HostExecutor`（M1-04 默认实现）：`NewHostExecutor(workdir)`/`NewHostExecutorWithTimeout(workdir, timeout)` 校验 workdir 存在且为目录（空则回退 os.Getwd），`Run` 用 `exec.CommandContext` 固定 `cmd.Dir=workdir` 把命令约束在该目录内、套上下文超时（默认 60s），退出码映射（非零退出视为有效结果不报错、超时报 DeadlineExceeded 且 ExitCode=-1、启动失败报错），shell 按平台选择（Windows `cmd.exe /c`、类 Unix `bash -c`→`sh -c`）；③ `host_test.go` 六用例：正常 echo、非零退出(ExitCode=1)、cwd 约束（echo 重定向写出的 probe.txt 落在 workdir 内，证明未越界）、200ms 超时（ExitCode=-1 + 含「超时」错误）、坏/非目录 workdir 拒绝、空命令报错。
+- Commit: <pending>
+- 验证: `go build ./...` ✓ | `go vet ./...` ✓ | `go test ./... -count=1` ✓（executor 包 6 用例全绿，cmd/server+api+engine+config+provider+repo 无回归）；任务仅后端改动，未跑 `npm run build`。
+- 下一步：PLAN 中 M1-05（危险命令策略：前缀黑名单 + allow/ask/deny 枚举，无人值守默认 deny 并写审计）成为下一个 ○，下轮继续；M1-05 应在 `executor.Executor` 之上叠加策略层而非改接口。
+
+---
+
 ## M0.5 结项报告（缺陷 → 修复 commit 对照表）
 
 > 生成时间：2026-07-29 | 阶段：M0.5 缺陷修复全部完成，进入 M1 前的收口

@@ -203,3 +203,10 @@ server/
 - `model.Session.SessionKey` 早期设为全局 `gorm:"uniqueIndex"`，会**错误地禁止不同用户复用同一 key**（P1 缺陷：跨用户碰撞时破坏唯一性/混淆审计）。M0.5-03 改为复合唯一 `UNIQUE(user_id, session_key)`：`UserID gorm:"not null;uniqueIndex:idx_user_session,priority:1"` + `SessionKey gorm:"size:64;not null;uniqueIndex:idx_user_session,priority:2"`（priority 控制列序 user_id 在前，利于按用户过滤命中索引）。
 - **迁移旧库**：GORM AutoMigrate 不会删除已不存在的旧索引，故在 `repo/db.go` 的 `migrateCompositeSessionKey` 中按 `sqlite_master` 的 `sql LIKE '%session_key%' AND sql NOT LIKE '%user_id%'` 动态识别遗留单列唯一索引并 `DROP INDEX IF EXISTS`（幂等安全）；复合索引由 AutoMigrate 自动补齐。任何把单列唯一改复合唯一的地方都用此「动态识别+DROP INDEX IF EXISTS」套路，别硬编码索引名（GORM 无名索引名随版本变）。
 - **并发安全**：`GetOrCreateSession` 用「先查 → miss 则建 → 唯一约束冲突重试查已有行」循环（≤3 次，自动生成的 key 冲突时重新随机），消除并发插入竞态，保证同一 (user_id, key) 最终仅一行、各并发调用拿到同一行 id。唯一约束冲突判定用 `errors.Is(err, gorm.ErrDuplicatedKey)` 兜底 SQLite 原生 `unique constraint failed` 文本匹配（db.go 的 gorm.Config 未开 TranslateError）。
+
+### 2026-07-29 | 架构 | Executor 抽象接口（M1-04，internal/executor）
+- 新增 `server/internal/executor/` 包，作为**所有代码执行的统一入口**，业务层（M1-06 CodeAct 工具、M1-08 子代理等）只依赖 `Executor` 接口，**绝不散写 `os/exec`**（这是 M1 关键安全约定）。
+- 接口：`Executor.Run(ctx, command) (*Result, error)` + `Workdir() string`；`Result{Stdout, Stderr, ExitCode}`，约定 `ExitCode` 语义：0=正常、>0=命令自身非零退出（属有效结果，不返回 error）、-1=被超时中断（返回 error 且 `errors.Is(err, context.DeadlineExceeded)`）。
+- `HostExecutor`（M1-04 默认实现，非沙箱）：`NewHostExecutor(workdir)` / `NewHostExecutorWithTimeout(workdir, timeout)`；核心约束是 `exec.CommandContext` 固定 `cmd.Dir = workdir`（把命令锁在该目录内），默认超时 60s；shell 按平台探测（Windows `cmd.exe /c`、类 Unix 优先 `bash -c` 否则 `sh -c`）。`workdir` 为空时回退 `os.Getwd`，非目录/不存在则构造即报错。
+- **cwD 约束的本质**：HostExecutor 仅靠 `cmd.Dir` 约束「相对路径起点」，无法阻止命令内 `cd`/`../../` 逃逸（真·文件系统沙箱留 M3 Docker 后端）；M1 阶段把「cwd 越界」理解为「验证相对写入落在 workdir 内」，后续如有强隔离需求再上容器。
+- **M1-05 危险命令策略应在 Executor 之上叠加**：不要改 `Executor` 接口，而是新增一个 `policy` 包装器（或 `SafeExecutor`）在调用 `HostExecutor.Run` 前做前缀黑名单 + `allow/ask/deny` 枚举校验，无人值守默认 deny 并写审计；接口稳定有利于后续替换执行后端。
