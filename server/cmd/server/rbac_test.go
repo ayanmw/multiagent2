@@ -26,6 +26,7 @@ func newRBACRouter(t *testing.T) (*gin.Engine, *repo.DB) {
 		Port:          "0",
 		JWTSecret:     "rbac-secret",
 		EncryptionKey: enc[:],
+		WorkspaceRoot: t.TempDir(), // 隔离 workspace 目录创建，避免污染 cwd
 	}
 	db, err := repo.NewDB(cfg)
 	if err != nil {
@@ -99,6 +100,7 @@ func TestRBAC_SensitiveRoutes(t *testing.T) {
 		{"GET", "/api/auth/apikeys"},
 		{"DELETE", "/api/auth/apikeys/999"},
 		{"DELETE", "/api/sessions/whatever"},
+		{"POST", "/api/workspaces"},
 	}
 
 	// viewer 应全部被拒（403）。

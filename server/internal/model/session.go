@@ -11,9 +11,10 @@ type Session struct {
 	// 但同一用户不能重复建相同的 key。取代原先的全局 uniqueIndex（该约束会
 	// 错误地禁止跨用户复用 key）。priority 控制复合索引列顺序（user_id 在前，
 	// 利于按用户过滤的查询命中索引）。迁移旧库的单列唯一索引见 repo/db.go。
-	UserID     uint   `gorm:"not null;uniqueIndex:idx_user_session,priority:1" json:"user_id"`
-	SessionKey string `gorm:"size:64;not null;uniqueIndex:idx_user_session,priority:2" json:"session_key"`
-	Title      string `gorm:"size:256" json:"title"`
+	UserID      uint   `gorm:"not null;uniqueIndex:idx_user_session,priority:1" json:"user_id"`
+	SessionKey  string `gorm:"size:64;not null;uniqueIndex:idx_user_session,priority:2" json:"session_key"`
+	WorkspaceID *uint  `gorm:"index" json:"workspace_id"` // 绑定的 workspace（M1-07）；空表示使用默认用户目录
+	Title       string `gorm:"size:256" json:"title"`
 }
 
 // TableName 覆盖 GORM 默认表名。

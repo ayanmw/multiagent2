@@ -56,6 +56,7 @@ func SeedRoles() []Role {
 				{Resource: "sessions", Action: "*"},
 				{Resource: "chat", Action: "*"},
 				{Resource: "apikeys", Action: "write"},
+				{Resource: "workspaces", Action: "write"},
 				{Resource: "tools", Action: "read"},
 				{Resource: "skills", Action: "read"},
 				{Resource: "mcp", Action: "read"},
@@ -67,6 +68,7 @@ func SeedRoles() []Role {
 			Permissions: []RolePermission{
 				{Resource: "providers", Action: "read"},
 				{Resource: "models", Action: "read"},
+				{Resource: "workspaces", Action: "read"},
 				{Resource: "chat", Action: "read"},
 			},
 		},

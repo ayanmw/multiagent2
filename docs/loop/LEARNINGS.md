@@ -217,3 +217,20 @@ server/
 - **归一化匹配**：命令先经 `normalizeCommand`（转小写 + `strings.Fields` 折叠连续空白 + 去首尾空白）再 `strings.Contains` 匹配，使 `sudo   RM   -rf    /` 也能命中 `rm -rf /`，避免空格/大小写绕过。这是防绕过的关键细节。
 - 审计：`Auditor` 接口 + `MemoryAuditor`（测试/内省）+ `LogAuditor`（日志落盘）；每次 `Run` 无论 allow/deny/ask 都写一条 `AuditEntry`（含 command/workdir/decision/reason/allowed）。`ErrCommandDenied` 为哨兵错误供上层 `errors.Is` 判定。
 - **M1-06/07/08 复用约定**：CodeAct 工具集/子代理创建执行器时，**必须**用 `NewSafeExecutor(HostExecutor, policy, auditor, ask)` 包一层策略，禁止裸用 `HostExecutor.Run`，否则绕过危险命令防护。生产默认 `ModeUnattended` + `LogAuditor`（或 DB 审计表，M3 引入）。
+
+### 2026-07-29 | 架构 | CodeAct 工具集（M1-06，internal/tool 包）
+- 新增 `server/internal/tool/` 包（包名 `codectool`，**目录名 internal/tool 与包名 codectool 故意不同**：engine 已 import 框架 `tool` 包，若本包也叫 `tool` 会在 engine_test 等引入同名校验问题，故用 `codectool` 别名 import：`codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"`）。
+- 四个工具 `shell_exec`/`file_read`/`file_write`/`file_edit`：核心逻辑抽为纯函数 `ShellExec/FileRead/FileWrite/FileEdit`（不依赖框架工具包装），便于单测直接调用；工具包装层（`function.NewFunctionTool`）只做 JSON 入参解析后调纯函数。
+- **路径安全**：文件类工具的路径一律经 `resolveSafePath(workdir, p)`——相对路径 join workdir、绝对路径也校验 `filepath.Rel(workdir)` 不越出 `..`，越界直接报错（防 Agent 读写系统文件）。shell_exec 仅靠 HostExecutor 的 `cmd.Dir` 约束相对起点，无法阻止 `cd`/绝对路径逃逸（强隔离留 M3 Docker）。
+- **执行安全**：`shell_exec` 必须走 `executor.SafeExecutor`（M1-05 危险命令策略，无人值守 deny）；被拒时返回可读「⛔ 命令被安全策略拒绝」字符串而非 error，便于 Agent 自适应（文件类工具真错误才返回 error）。`NewCodeAct(workdir)` 是业务入口，内部组装 HostExecutor+`NewDangerousCommandPolicy(ModeUnattended)`+`NewLogAuditor(nil)`。
+- **引擎注册**：`engine.ModelConfig` 新增可选 `Tools []tool.Tool`，`New` 内 `allTools := append([]tool.Tool{echoTool(), getTimeTool()}, cfg.Tools...)` 追加，基础工具不丢。api 层 `buildCodeActTools(workspaceRoot, uid)` 按 `WorkspaceRoot/<uid>` 隔离建目录并 `codectool.NewCodeAct`；`ChatHandler`/`StreamChatHandler` 各加 `workspaceRoot string` 参数，由 `main.go` 注入 `cfg.WorkspaceRoot`。`config` 新增 `WorkspaceRoot`（env `WORKSPACE_ROOT`，默认 `data/workspaces`，启动 MkdirAll）。
+- **测试驱动技巧**：`function.NewFunctionTool` 返回的 `*FunctionTool[I,O]` 实现 `CallableTool.Call(ctx, jsonArgs []byte) (any, error)`，故单测可 `tools[i].(tool.CallableTool).Call(ctx, jsonBytes)` 直驱工具、断言真实序列化路径（无需真 LLM），比单独测纯函数更贴近 Agent 调用。
+- **M1-06 阶段限制**：工作区按 `<uid>` 自动目录隔离，但 Workspace 的 DB 模型/CRUD/对话绑定尚未建（M1-07）；当前每次请求都即时创建并装配工具，无持久化 workspace 元数据。
+
+### 2026-07-29 | 架构 | Workspace 模型与对话绑定（M1-07，internal/model/repo/api）
+- 新增 `server/internal/model/workspace.go` 的 `Workspace`：`user_id` 归属 + 复合唯一 `workspace_key`（`column:workspace_key`，注意 SQLite 中 `key` 是保留字，显式列名规避）+ `local_path` 绝对路径（后端按 `WorkspaceRoot/<uid>/<key>` 生成并 MkdirAll）+ 可选 `git_remote` + 状态。LocalPath 存绝对路径，删除 workspace 时**只删 DB 行、保留本地目录**（防误删用户文件，清理交用户手动）。
+- `model.Session` 增可空 `WorkspaceID *uint`（gorm index）；旧会话该列为 NULL，AutoMigrate 自动 ADD COLUMN（SQLite 支持），未绑定时 Executor 回退 `WorkspaceRoot/<uid>`。
+- `resolveWorkspaceLocalDir(db, uid, workspaceKey, sess)` 约定：① 指定 workspace_key → 按 (user,key) 查（跨用户返回 ErrWorkspaceNotFound→404）并绑定；② 未指定但会话已绑 workspace_id → 复用（若已被删则回退默认目录、不报错）；③ 皆无 → 返回空串（调用方回退默认目录）。绑定结果持久化到 `sessions.workspace_id`，使同会话后续不传 key 仍落在同一目录。
+- `buildCodeActTools(workspaceRoot, uid, wsLocalDir)` 签名新增 `wsLocalDir`：非空用其作 Executor 工作目录，空则回退 `userWorkspaceDir(workspaceRoot, uid)`；两处调用点（chat.go/sse.go）传入解析出的 `wsLocalDir`。
+- **RBAC 补充**：developer 种子新增 `workspaces:write`、viewer 新增 `workspaces:read`（`seedRoles` 幂等，已初始化的库重启即生效）；workspace 写路由（POST/PUT/DELETE）接 `RequirePermission(db,"workspaces","write")`，GET 仅鉴权不查权限（与 providers/sessions 列表一致）。
+- 路由约定：`GET/POST /api/workspaces`、`GET/PUT/DELETE /api/workspaces/:id`（`:id` = workspace_key）；与 Session 的 `:session_id` 同风格，前端统一用 key 作标识。

@@ -17,12 +17,16 @@ func userWorkspaceDir(workspaceRoot string, uid uint) string {
 }
 
 // buildCodeActTools 为给定用户构造一组经危险命令策略包装的 CodeAct 工具（M1-06）。
-// 每个用户有独立的工作目录（WorkspaceRoot/<uid>），自动创建；工具不可越界到该目录之外。
-// 返回的 []tool.Tool 可直接追加进 engine.ModelConfig.Tools 注册进 Agent。
-func buildCodeActTools(workspaceRoot string, uid uint) ([]tool.Tool, error) {
-	workdir := userWorkspaceDir(workspaceRoot, uid)
+// 当 wsLocalDir 非空时，Executor 在其中执行（对话绑定了某个 workspace，见 M1-07）；
+// 为空则回退到该用户的默认目录（WorkspaceRoot/<uid>）。目录自动创建，
+// 工具不可越界到目录之外。返回的 []tool.Tool 可直接追加进 engine.ModelConfig.Tools。
+func buildCodeActTools(workspaceRoot string, uid uint, wsLocalDir string) ([]tool.Tool, error) {
+	workdir := wsLocalDir
+	if workdir == "" {
+		workdir = userWorkspaceDir(workspaceRoot, uid)
+	}
 	if err := os.MkdirAll(workdir, 0o755); err != nil {
-		return nil, fmt.Errorf("创建用户工作目录失败: %w", err)
+		return nil, fmt.Errorf("创建工作目录失败: %w", err)
 	}
 	return codectool.NewCodeAct(workdir)
 }

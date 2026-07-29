@@ -18,6 +18,7 @@ type chatRequest struct {
 	Message   string `json:"message" binding:"required"`
 	ModelID   uint   `json:"model_id"`   // 可选：指定托管模型 id；为空则用用户的默认启用模型
 	SessionID string `json:"session_id"` // 可选：多轮会话 id（M0-10 仅内存态）
+	WorkspaceKey string `json:"workspace_key"` // 可选：绑定到某 workspace（M1-07），Executor 在其目录执行
 }
 
 // chatResponse 是 /api/chat 的返回体。
@@ -63,28 +64,36 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			apiKey = dec
 		}
 
-		// 解析/创建会话并持久化用户消息，用于多轮记忆（M0.5-01）。
-		sessionKey := req.SessionID
-		if sessionKey == "" {
-			sessionKey = repo.NewSessionKey()
-		}
-		sess, serr := repo.GetOrCreateSession(db, uid, sessionKey)
-		if serr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
-			return
-		}
-		if aerr := repo.AppendMessage(db, sess.ID, "user", req.Message); aerr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入用户消息失败"})
-			return
-		}
+	// 解析/创建会话并持久化用户消息，用于多轮记忆（M0.5-01）。
+	sessionKey := req.SessionID
+	if sessionKey == "" {
+		sessionKey = repo.NewSessionKey()
+	}
+	sess, serr := repo.GetOrCreateSession(db, uid, sessionKey)
+	if serr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
+		return
+	}
+	if aerr := repo.AppendMessage(db, sess.ID, "user", req.Message); aerr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入用户消息失败"})
+		return
+	}
 
-		// 构造引擎并对话。M1-06：为当前用户装配 CodeAct 工具（shell_exec/file_read/file_write/file_edit），
-		// 工作目录隔离在 WorkspaceRoot/<uid> 内，命令经危险命令策略包装。
-		tools, tErr := buildCodeActTools(workspaceRoot, uid)
-		if tErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "构建代码执行工具失败: " + tErr.Error()})
-			return
-		}
+	// 解析对话绑定的工作目录（M1-07）：若指定 workspace_key 则切到该 workspace 目录，
+	// 否则复用已绑定目录，皆无则回退默认 WorkspaceRoot/<uid>。
+	wsLocalDir, werr := resolveWorkspaceLocalDir(db, uid, req.WorkspaceKey, sess)
+	if werr != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+		return
+	}
+
+	// 构造引擎并对话。M1-06：为当前用户装配 CodeAct 工具（shell_exec/file_read/file_write/file_edit），
+	// 工作目录为本次解析出的 workspace 目录（或默认 WorkspaceRoot/<uid>），命令经危险命令策略包装。
+	tools, tErr := buildCodeActTools(workspaceRoot, uid, wsLocalDir)
+	if tErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "构建代码执行工具失败: " + tErr.Error()})
+		return
+	}
 		eng, err := engine.New(engine.ModelConfig{
 			ModelID:  m.ModelID,
 			BaseURL:  p.BaseURL,

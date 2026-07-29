@@ -166,6 +166,22 @@
 
 ---
 
+### 2026-07-29 16:31 | M1-06 | ✅
+- 完成内容：**CodeAct 工具集（M1 CodeAgent 核心，M1-04/05 之上的能力落地）**。新增 `server/internal/tool/` 包（包名 `codectool`）：① 四个工具 `shell_exec`/`file_read`/`file_write`/`file_edit`，底层逻辑抽为纯函数 `ShellExec/FileRead/FileWrite/FileEdit` 便于单测；② 文件类工具统一经 `resolveSafePath` 把路径解析并约束在工作目录内（path traversal 越界一律拒绝）；③ `shell_exec` 经 `executor.SafeExecutor`（M1-05 危险命令策略，无人值守模式）执行，**禁止裸用 HostExecutor.Run**（见 LEARNINGS）；④ `NewCodeAct(workdir)` 业务入口内部组装 HostExecutor+危险命令策略+日志审计。`engine.ModelConfig` 新增可选 `Tools []tool.Tool`，`New` 追加到基础工具（echo/get_time）之后。`api` 层新增 `buildCodeActTools(workspaceRoot, uid)` 按 `WorkspaceRoot/<uid>` 隔离建目录并装配；`ChatHandler`/`StreamChatHandler` 签名各加 `workspaceRoot` 参数，`main.go` 注入 `cfg.WorkspaceRoot`。`config` 新增 `WorkspaceRoot`（env `WORKSPACE_ROOT`，默认 `data/workspaces`，启动时自动创建）。
+- Commit: 669c36a
+- 验证: `go build ./...` ✓ | `go vet ./...` ✓ | `go test ./...` ✓。新增 `server/internal/tool/codeact_test.go` 6 用例全绿：shell_exec 正常执行返回 stdout/exit_code、危险命令（`rm -rf /`）被拒并写审计、file_write/read/edit 全链路+落盘、路径越界被拦截、空 workdir 报错；`internal/engine` 新增 `TestEngine_WithCodeActTools`（注册 4 个 CodeAct 工具后仍正常对话）。仅后端改动，未跑 `npm run build`。
+- 下一步：PLAN 中 M1-07（Workspace 模型：DB 模型+CRUD API，对话绑定 workspace，Executor 在其目录执行）成为下一个 ○，下轮继续。
+
+---
+
+### 2026-07-29 17:44 | M1-07 | ✅
+- 完成内容：**Workspace 模型（M1 CodeAgent 核心数据层，M1-04/06 之上的能力落地）**。新增 `server/internal/model/workspace.go` 的 `Workspace`（user_id 归属 + 复合唯一 `workspace_key` + `local_path` 绝对路径 + 可选 `git_remote` + 状态）；`model.Session` 增可空 `WorkspaceID` 绑定；`repo/workspace.go` 用户归属 CRUD（Create/List/GetByKey/GetByID 校验归属/Update/Delete）；`repo/db.go` AutoMigrate 加 `workspaces` 表。新增 `internal/api/workspace.go` 五个 handler（POST/GET 列表/GET 详情/PUT 更新/DELETE，写操作接 `workspaces:write`）与 `resolveWorkspaceLocalDir` 绑定解析助手；`buildCodeActTools(workspaceRoot, uid, wsLocalDir)` 增加 `wsLocalDir` 形参（指定 workspace 则在其目录执行，否则回退 `WorkspaceRoot/<uid>`）；`chat.go`/`sse.go` 请求体加 `workspace_key`，对话按绑定目录驱动 Executor；`main.go` 注册 5 条 workspace 路由；`model/role.go` 幂等种子补 `workspaces:write`(developer)/`workspaces:read`(viewer)。删除 workspace 仅删 DB 行、保留本地目录（防误删用户文件）。
+- Commit: <pending>
+- 验证: `go build ./...` ✓ | `go vet ./...` ✓ | `go test -count=1 ./...` 全绿（cmd/server + api + repo + engine 等无回归）。新增 `server/cmd/server/workspace_test.go`（TestWorkspace_API_CRUD 全生命周期+目录落盘+跨用户 404、TestWorkspace_RBAC viewer 403/developer 201）、`server/internal/repo/workspace_test.go`（CRUD+归属校验）、`server/internal/api/workspace_test.go`（TestBuildCodeActTools_WorkspaceDir 验证 shell_exec 落盘在指定 workspace 目录、TestBuildCodeActTools_DefaultFallback 回退默认目录、TestResolveWorkspaceLocalDir 绑定解析与复用）。rbac_test.go 的敏感写路由清单补 `POST /api/workspaces`（developer 仍非 403）。仅后端改动，未跑 `npm run build`。
+- 下一步：PLAN 中 M1-08（子代理委托 agenttool：Coder 子代理带代码工具集，可由 Orchestrator 委托）成为下一个 ○，下轮继续。
+
+---
+
 ### 2026-07-29 14:28 | M1-04 | ✅
 - 完成内容：**Executor 抽象接口（代码执行统一入口）**。新增独立包 `server/internal/executor/`：① `executor.go` 定义 `Executor` 接口（`Run(ctx, command) (*Result, error)` + `Workdir() string`，`Result{Stdout,Stderr,ExitCode}` 其中 ExitCode=0 正常、>0 命令非零退出、-1 超时中断）与包注释明确「所有代码执行必须经 Executor，禁止业务层散写 os/exec」；② `host.go` 的 `HostExecutor`（M1-04 默认实现）：`NewHostExecutor(workdir)`/`NewHostExecutorWithTimeout(workdir, timeout)` 校验 workdir 存在且为目录（空则回退 os.Getwd），`Run` 用 `exec.CommandContext` 固定 `cmd.Dir=workdir` 把命令约束在该目录内、套上下文超时（默认 60s），退出码映射（非零退出视为有效结果不报错、超时报 DeadlineExceeded 且 ExitCode=-1、启动失败报错），shell 按平台选择（Windows `cmd.exe /c`、类 Unix `bash -c`→`sh -c`）；③ `host_test.go` 六用例：正常 echo、非零退出(ExitCode=1)、cwd 约束（echo 重定向写出的 probe.txt 落在 workdir 内，证明未越界）、200ms 超时（ExitCode=-1 + 含「超时」错误）、坏/非目录 workdir 拒绝、空命令报错。
 - Commit: <pending>

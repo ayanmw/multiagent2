@@ -20,8 +20,9 @@ import (
 
 // streamChatRequest 是 SSE 流式对话的请求体（M0.5-06：message 由 GET query 改为 POST body）。
 type streamChatRequest struct {
-	Message string `json:"message"`
-	ModelID uint   `json:"model_id"`
+	Message      string `json:"message"`
+	ModelID      uint   `json:"model_id"`
+	WorkspaceKey string `json:"workspace_key"` // 可选：绑定到某 workspace（M1-07），Executor 在其目录执行
 }
 
 // StreamChatHandler handles POST /api/chat/:session_id/stream.
@@ -90,6 +91,13 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 			return
 		}
 
+		// 解析对话绑定的工作目录（M1-07）：指定 workspace_key 切到该目录，否则复用已绑定目录。
+		wsLocalDir, werr := resolveWorkspaceLocalDir(db, uid, req.WorkspaceKey, sess)
+		if werr != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+			return
+		}
+
 		// 准备 SSE 响应头。
 		c.Writer.Header().Set("Content-Type", "text/event-stream")
 		c.Writer.Header().Set("Cache-Control", "no-cache")
@@ -111,8 +119,8 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 		})
 
 		// 构造引擎并启动流式对话。M1-06：为当前用户装配 CodeAct 工具（工作目录隔离在
-		// WorkspaceRoot/<uid> 内，命令经危险命令策略包装）。
-		tools, tErr := buildCodeActTools(workspaceRoot, uid)
+		// 本次解析的 workspace 目录内，命令经危险命令策略包装）。
+		tools, tErr := buildCodeActTools(workspaceRoot, uid, wsLocalDir)
 		if tErr != nil {
 			emit("RUN_ERROR", gin.H{"message": "构建代码执行工具失败: " + tErr.Error()})
 			emit("RUN_FINISHED", gin.H{"threadId": sess.SessionKey, "runId": runID})
