@@ -160,7 +160,7 @@ func shellExecTool(ex executor.Executor) tool.Tool {
 		func(ctx context.Context, in shellExecInput) (string, error) {
 			return ShellExec(ctx, ex, in.Command)
 		},
-		function.WithName("shell_exec"),
+		function.WithName(ToolShellExec),
 		function.WithDescription("在受限制的工作目录中执行 shell 命令，返回 exit_code、stdout 与 stderr。"+
 			"可用于列出目录、编译运行、查看文件等。注意：危险命令（如 rm -rf /、git push --force）会被安全策略拒绝。"),
 	)
@@ -172,7 +172,7 @@ func fileReadTool(workdir string) tool.Tool {
 		func(_ context.Context, in fileReadInput) (string, error) {
 			return FileRead(workdir, in.Path)
 		},
-		function.WithName("file_read"),
+		function.WithName(ToolFileRead),
 		function.WithDescription("读取工作目录内指定路径的文件内容并以字符串返回。"+
 			"路径相对于工作目录；超出工作目录的请求会被拒绝。"),
 	)
@@ -184,7 +184,7 @@ func fileWriteTool(workdir string) tool.Tool {
 		func(_ context.Context, in fileWriteInput) (string, error) {
 			return FileWrite(workdir, in.Path, in.Content)
 		},
-		function.WithName("file_write"),
+		function.WithName(ToolFileWrite),
 		function.WithDescription("在工作目录内写入/创建文件，自动创建缺失的父目录。"+
 			"path 相对于工作目录；content 为完整文件内容（覆盖写入）。"),
 	)
@@ -196,7 +196,7 @@ func fileEditTool(workdir string) tool.Tool {
 		func(_ context.Context, in fileEditInput) (string, error) {
 			return FileEdit(workdir, in.Path, in.OldString, in.NewString, in.ExpectedReplacements)
 		},
-		function.WithName("file_edit"),
+		function.WithName(ToolFileEdit),
 		function.WithDescription("把工作目录内文件中的 old_string 替换为 new_string。"+
 			"expected_replacements>0 时要求精确匹配该次数（用于避免歧义）；为 0 时替换全部匹配。"),
 	)

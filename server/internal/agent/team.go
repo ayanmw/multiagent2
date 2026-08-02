@@ -32,26 +32,21 @@ const DefaultMaxReviewRounds = 2
 // ErrNoReadOnlyTools 表示未能为 Reviewer 装配任何只读工具（工具名约定被改动时会触发）。
 var ErrNoReadOnlyTools = errors.New("codeagent: 未能装配任何只读工具，Reviewer 无法工作")
 
-// readOnlyToolNames 是 Reviewer 允许持有的工具白名单（只读、无副作用）。
-//
-// M1-09 采用「从 CodeAct 工具集按白名单过滤」的实现方式，保证 Reviewer 在任何情况下
-// 都拿不到 file_write/file_edit/shell_exec；M1-10 会把只读工具集下沉到 codectool
-// 包内（补 grep 等检索能力并给出独立的拒绝语义）。
-var readOnlyToolNames = map[string]bool{
-	"file_read": true,
-}
-
 // ReviewerInstruction 是 Reviewer 子代理的系统提示词：只读审阅、独立视角、必须给结论。
-const ReviewerInstruction = "你是 Reviewer（代码审阅者）子代理，只拥有只读工具（file_read），" +
-	"不能修改文件、也不能执行命令。你的任务是以独立视角审阅 Coder 的改动并挑出问题。" +
-	"审阅时请先用 file_read 读取相关文件，再依据事实给出意见，不要臆测文件内容。" +
+const ReviewerInstruction = "你是 Reviewer（代码审阅者）子代理，只拥有只读工具：" +
+	"file_read（读取文件）与 grep（按正则检索代码）。" +
+	"你没有写文件与执行命令的能力——file_write / file_edit / shell_exec 不会下发给你，" +
+	"强行调用会被直接拒绝；需要改动时只能把问题写进结论，交由 Coder 落地。" +
+	"你的任务是以独立视角审阅 Coder 的改动并挑出问题：先用 grep 定位相关代码、" +
+	"用 file_read 读取具体文件，再依据事实给出意见，不要臆测文件内容。" +
 	"输出格式：第一行给出结论「通过」或「需修改」；若为「需修改」，随后逐条列出具体问题" +
 	"（问题所在文件与位置、为什么是问题、建议怎么改）。发现任何问题都必须明确指出，不要客套。"
 
 // reviewerToolDescription 是 Reviewer 作为工具暴露给 Orchestrator 时的描述。
 const reviewerToolDescription = "把「审阅代码改动」的任务委托给 Reviewer 子代理。" +
-	"Reviewer 只有只读能力（读取文件），会独立检查改动是否正确、完整、符合要求，" +
-	"并返回「通过」或「需修改 + 问题清单」。request 参数应说明要审阅什么（文件路径与验收要求）。"
+	"Reviewer 只有只读能力（file_read 读取文件、grep 检索代码），无法修改文件或执行命令，" +
+	"会独立检查改动是否正确、完整、符合要求，并返回「通过」或「需修改 + 问题清单」。" +
+	"request 参数应说明要审阅什么（文件路径与验收要求）。"
 
 // TeamConfig 描述 CodeTeam 的可配置项（M1-09「team 配置化」）。
 // 零值表示单代理模式（与 M1-06/07 行为一致）。
@@ -78,31 +73,33 @@ func (c TeamConfig) reviewerEnabled() bool {
 	return c.EnableSubAgents && c.EnableReviewer
 }
 
-// ReadOnlyTools 返回 Reviewer 可用的只读工具集（当前为 file_read）。
-// 实现方式是从 CodeAct 工具集中按白名单过滤，天然继承其路径边界约束
-// （resolveSafePath：越出工作目录一律拒绝），且不会漏出任何写/执行工具。
+// ReadOnlyTools 返回 Reviewer 可用的只读工具集（file_read + grep，M1-10）。
+//
+// M1-09 时的实现是「从 CodeAct 工具集按白名单过滤」；M1-10 起改为直接调用
+// codectool.ReadOnlyTools **独立构造**——该路径下根本不会创建 Executor，
+// 从结构上杜绝执行能力，也不存在「过滤漏网」的可能。返回前再用
+// codectool.EnsureReadOnly 做一次兜底断言（fail fast）。
 func ReadOnlyTools(workdir string) ([]tool.Tool, error) {
 	if workdir == "" {
 		return nil, ErrEmptyWorkdir
 	}
-	all, err := codectool.NewCodeAct(workdir)
+	ro, err := codectool.ReadOnlyTools(workdir)
 	if err != nil {
 		return nil, err
 	}
-	ro := make([]tool.Tool, 0, len(all))
-	for _, t := range all {
-		d := t.Declaration()
-		if d != nil && readOnlyToolNames[d.Name] {
-			ro = append(ro, t)
-		}
-	}
 	if len(ro) == 0 {
 		return nil, ErrNoReadOnlyTools
+	}
+	if err := codectool.EnsureReadOnly(ro); err != nil {
+		return nil, err
 	}
 	return ro, nil
 }
 
 // NewReviewer 构造 Reviewer 子代理：仅持有只读工具，无 file_write/file_edit/shell_exec。
+//
+// 注意 Deps.ExtraTools **不会**下发给 Reviewer：额外工具由调用方（engine）注入，
+// 无法保证其只读性，若混入写/执行工具会破坏 M1-10 的只读约束。
 func NewReviewer(d Deps) (agent.Agent, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
@@ -113,7 +110,7 @@ func NewReviewer(d Deps) (agent.Agent, error) {
 	}
 	return llmagent.New(RoleReviewer,
 		llmagent.WithModel(d.Model),
-		llmagent.WithDescription("以独立视角审阅代码改动的只读子代理（只能读取文件，不能修改或执行）"),
+		llmagent.WithDescription("以独立视角审阅代码改动的只读子代理（只能读取与检索文件，不能修改或执行）"),
 		llmagent.WithInstruction(ReviewerInstruction),
 		llmagent.WithTools(tools),
 	), nil
