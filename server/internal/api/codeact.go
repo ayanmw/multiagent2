@@ -8,7 +8,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
-	codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"
+	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
 
 // userWorkspaceDir 返回某用户在 WorkspaceRoot 下的专属工作目录（<root>/<uid>）。

@@ -12,7 +12,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 
-	codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"
+	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
 
 // mockOpenAIServer 模拟 OpenAI 兼容的 /chat/completions 流式端点（SSE）。

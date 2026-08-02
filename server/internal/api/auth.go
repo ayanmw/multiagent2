@@ -3,10 +3,10 @@ package api
 import (
 	"net/http"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/auth"
-	"github.com/anmingwei/go-multi-agent-v2/internal/middleware"
-	"github.com/anmingwei/go-multi-agent-v2/internal/model"
-	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
+	"github.com/ayanmw/multiagent2/server/internal/auth"
+	"github.com/ayanmw/multiagent2/server/internal/middleware"
+	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )

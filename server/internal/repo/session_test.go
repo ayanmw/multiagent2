@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/model"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )

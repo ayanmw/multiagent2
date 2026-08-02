@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/crypto"
-	"github.com/anmingwei/go-multi-agent-v2/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/crypto"
+	"github.com/ayanmw/multiagent2/server/internal/model"
 )
 
 // testKey is a 32-byte key used only for tests.

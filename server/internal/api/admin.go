@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
+	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )

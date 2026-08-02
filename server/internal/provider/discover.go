@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/crypto"
-	"github.com/anmingwei/go-multi-agent-v2/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/crypto"
+	"github.com/ayanmw/multiagent2/server/internal/model"
 )
 
 // ModelInfo is a normalized representation of a single discoverable model,

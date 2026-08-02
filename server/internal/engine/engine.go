@@ -16,7 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
-	codeagent "github.com/anmingwei/go-multi-agent-v2/internal/agent"
+	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
 )
 
 // defaultInstruction 是 Agent 的系统提示词（中文优先，编程助手定位）。

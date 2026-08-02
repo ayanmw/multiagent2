@@ -10,7 +10,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 )
 
 // newTestExecutor 构造一个经危险命令策略包装的执行器（无人值守 + 内存审计），供工具测试复用。

@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/config"
-	"github.com/anmingwei/go-multi-agent-v2/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/config"
+	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/google/uuid"
 )
 

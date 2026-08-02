@@ -7,11 +7,11 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/crypto"
-	"github.com/anmingwei/go-multi-agent-v2/internal/engine"
-	"github.com/anmingwei/go-multi-agent-v2/internal/model"
-	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
-	codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"
+	"github.com/ayanmw/multiagent2/server/internal/crypto"
+	"github.com/ayanmw/multiagent2/server/internal/engine"
+	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/repo"
+	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )

@@ -26,7 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 )
 
 // resolveSafePath 把工具传入的路径解析为工作目录内的绝对路径，防止越界读写。

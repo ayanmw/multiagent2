@@ -9,7 +9,7 @@
 
 | 项 | 值 |
 |----|-----|
-| Go 模块路径 | `github.com/anmingwei/go-multi-agent-v2` |
+| Go 模块路径 | `github.com/ayanmw/multiagent2/server` |
 | 后端入口 | `server/cmd/server/main.go` |
 | 后端代码根 | `server/internal/` |
 | 前端代码根 | `web/` |
@@ -219,7 +219,7 @@ server/
 - **M1-06/07/08 复用约定**：CodeAct 工具集/子代理创建执行器时，**必须**用 `NewSafeExecutor(HostExecutor, policy, auditor, ask)` 包一层策略，禁止裸用 `HostExecutor.Run`，否则绕过危险命令防护。生产默认 `ModeUnattended` + `LogAuditor`（或 DB 审计表，M3 引入）。
 
 ### 2026-07-29 | 架构 | CodeAct 工具集（M1-06，internal/tool 包）
-- 新增 `server/internal/tool/` 包（包名 `codectool`，**目录名 internal/tool 与包名 codectool 故意不同**：engine 已 import 框架 `tool` 包，若本包也叫 `tool` 会在 engine_test 等引入同名校验问题，故用 `codectool` 别名 import：`codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"`）。
+- 新增 `server/internal/tool/` 包（包名 `codectool`，**目录名 internal/tool 与包名 codectool 故意不同**：engine 已 import 框架 `tool` 包，若本包也叫 `tool` 会在 engine_test 等引入同名校验问题，故用 `codectool` 别名 import：`codectool "github.com/ayanmw/multiagent2/server/internal/tool"`）。
 - 四个工具 `shell_exec`/`file_read`/`file_write`/`file_edit`：核心逻辑抽为纯函数 `ShellExec/FileRead/FileWrite/FileEdit`（不依赖框架工具包装），便于单测直接调用；工具包装层（`function.NewFunctionTool`）只做 JSON 入参解析后调纯函数。
 - **路径安全**：文件类工具的路径一律经 `resolveSafePath(workdir, p)`——相对路径 join workdir、绝对路径也校验 `filepath.Rel(workdir)` 不越出 `..`，越界直接报错（防 Agent 读写系统文件）。shell_exec 仅靠 HostExecutor 的 `cmd.Dir` 约束相对起点，无法阻止 `cd`/绝对路径逃逸（强隔离留 M3 Docker）。
 - **执行安全**：`shell_exec` 必须走 `executor.SafeExecutor`（M1-05 危险命令策略，无人值守 deny）；被拒时返回可读「⛔ 命令被安全策略拒绝」字符串而非 error，便于 Agent 自适应（文件类工具真错误才返回 error）。`NewCodeAct(workdir)` 是业务入口，内部组装 HostExecutor+`NewDangerousCommandPolicy(ModeUnattended)`+`NewLogAuditor(nil)`。

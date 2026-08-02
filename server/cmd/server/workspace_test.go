@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/config"
-	"github.com/anmingwei/go-multi-agent-v2/internal/provider"
-	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
+	"github.com/ayanmw/multiagent2/server/internal/config"
+	"github.com/ayanmw/multiagent2/server/internal/provider"
+	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/gin-gonic/gin"
 )
 

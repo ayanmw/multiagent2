@@ -19,7 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
-	codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"
+	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
 
 // RoleReviewer 是只读审阅子代理的名称（同样会成为工具名，须匹配 ^[a-zA-Z0-9_-]+$）。

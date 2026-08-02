@@ -8,13 +8,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/api"
-	"github.com/anmingwei/go-multi-agent-v2/internal/config"
-	"github.com/anmingwei/go-multi-agent-v2/internal/engine"
-	"github.com/anmingwei/go-multi-agent-v2/internal/middleware"
-	"github.com/anmingwei/go-multi-agent-v2/internal/model"
-	"github.com/anmingwei/go-multi-agent-v2/internal/provider"
-	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
+	"github.com/ayanmw/multiagent2/server/internal/api"
+	"github.com/ayanmw/multiagent2/server/internal/config"
+	"github.com/ayanmw/multiagent2/server/internal/engine"
+	"github.com/ayanmw/multiagent2/server/internal/middleware"
+	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/provider"
+	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/gin-gonic/gin"
 )
 

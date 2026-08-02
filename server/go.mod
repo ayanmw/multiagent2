@@ -1,4 +1,4 @@
-module github.com/anmingwei/go-multi-agent-v2
+module github.com/ayanmw/multiagent2/server
 
 go 1.25.0
 

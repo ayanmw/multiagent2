@@ -4,7 +4,7 @@
 // （trpc.group/trpc-go/trpc-agent-go/agent），本包若同名会与之冲突，
 // 故沿用 internal/tool → package codectool 的同款约定，导入时写：
 //
-//	codeagent "github.com/anmingwei/go-multi-agent-v2/internal/agent"
+//	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
 //
 // 职责：
 //   - 定义各角色子代理（Coder / 后续 Reviewer）的构造工厂，统一注入指令与工具集；
@@ -28,7 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 
-	codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"
+	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
 
 // 角色名称。agenttool 会把子代理名字直接作为工具名下发给 LLM，

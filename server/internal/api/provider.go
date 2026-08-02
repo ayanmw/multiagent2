@@ -5,11 +5,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/crypto"
-	"github.com/anmingwei/go-multi-agent-v2/internal/middleware"
-	"github.com/anmingwei/go-multi-agent-v2/internal/model"
-	"github.com/anmingwei/go-multi-agent-v2/internal/provider"
-	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
+	"github.com/ayanmw/multiagent2/server/internal/crypto"
+	"github.com/ayanmw/multiagent2/server/internal/middleware"
+	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/provider"
+	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )

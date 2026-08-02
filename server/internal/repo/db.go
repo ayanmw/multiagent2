@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/config"
-	"github.com/anmingwei/go-multi-agent-v2/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/config"
+	"github.com/ayanmw/multiagent2/server/internal/model"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"

@@ -3,7 +3,7 @@ package repo
 import (
 	"errors"
 
-	"github.com/anmingwei/go-multi-agent-v2/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/model"
 	"gorm.io/gorm"
 )
 
