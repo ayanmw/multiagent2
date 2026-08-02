@@ -190,6 +190,14 @@
 
 ---
 
+### 2026-08-02 22:09 | M1-09 | ✅
+- 完成内容：**CodeTeam 编排（Orchestrator→Coder→Reviewer 审阅回环 + team 配置化）**。新增 `server/internal/agent/team.go`（包名 `codeagent`）：① 定义 `TeamConfig{EnableSubAgents, EnableReviewer, MaxReviewRounds}`（默认 2 轮）与 `ReadOnlyTools(workdir)` 按白名单 `readOnlyToolNames={file_read}` 从 `codectool.NewCodeAct` 工具集过滤，确保 Reviewer 天然继承 `resolveSafePath` 路径边界、拿不到 `file_write/file_edit/shell_exec/coder`；② `NewReviewer` 仅持 `file_read` 工具（缺失则 `ErrNoReadOnlyTools`），`NewReviewerTool` 用框架 `tool/agent`(agenttool) 包成 `reviewer` 委托工具；③ `NewTeam` 构造根 Agent：启用时 Orchestrator 挂 `coder`+`reviewer` 两个子代理委托工具、`teamInstruction` 强约束「写代码→审阅→修复」回环与 Reviewer 输出「通过/需修改+问题清单」格式，未启用 Reviewer 时 `teamInstruction` 退回原 `OrchestratorInstruction`（向后兼容 M1-08 二人组）。`factory.go` 的 `NewOrchestrator` 改委托 `NewTeam(TeamConfig{EnableSubAgents:true})` 退化。`engine.ModelConfig.EnableSubAgents` 升级为 `Team TeamConfig`（类型别名 `engine.TeamConfig = codeagent.TeamConfig`）；`config` 新增 `TEAM_REVIEWER`(默认 true)/`TEAM_MAX_REVIEW_ROUNDS`(默认 2)、`SubAgentsEnabled/ReviewerEnabled/MaxReviewRounds`；`api/{chat,sse}.go` 签名 `enableSubAgents`→`team engine.TeamConfig`，`main.go` 构造 `teamCfg` 注入两个 handler。
+- Commit: e1667a2
+- 验证: `go build ./...` ✓ | `go vet ./...` ✓ | `go test -count=1 ./internal/engine/... ./internal/config/... ./internal/tool/...` 全绿。新增 `internal/engine/team_test.go`：`TestEngine_CodeTeam_ReviewLoop`（mock LLM 脚本化驱动 Orchestrator→coder(写初版)→reviewer(只读指出问题)→coder(修复)→Orchestrator 汇报，断言 Reviewer 被委托、给出「需修改」、Reviewer 工具清单不含 file_write/file_edit/shell_exec/coder、Coder 写入≥2 次、最终文件为修复后内容）PASS；`TestEngine_CodeTeam_ReviewerDisabled`（关 Reviewer 退回 M1-08 二人组）PASS。`config_test.go` 增 `TestTeamConfigDefaults`/`TestEnvOrDefaultBool` PASS。注：`internal/repo`/`internal/api`/`cmd/server` 的 DB 测试需 CGO+sqlite3(gcc)，本沙箱无 gcc 无法运行，属历史遗留环境与本次改动无关。
+- 下一步：PLAN 中 M1-10（Reviewer 只读工具集，依赖 M1-08，验收「reviewer 调 write 被拒」——本任务已用白名单过滤铺好底）成为下一个 ○。
+
+---
+
 ### 2026-07-29 14:28 | M1-04 | ✅
 - 完成内容：**Executor 抽象接口（代码执行统一入口）**。新增独立包 `server/internal/executor/`：① `executor.go` 定义 `Executor` 接口（`Run(ctx, command) (*Result, error)` + `Workdir() string`，`Result{Stdout,Stderr,ExitCode}` 其中 ExitCode=0 正常、>0 命令非零退出、-1 超时中断）与包注释明确「所有代码执行必须经 Executor，禁止业务层散写 os/exec」；② `host.go` 的 `HostExecutor`（M1-04 默认实现）：`NewHostExecutor(workdir)`/`NewHostExecutorWithTimeout(workdir, timeout)` 校验 workdir 存在且为目录（空则回退 os.Getwd），`Run` 用 `exec.CommandContext` 固定 `cmd.Dir=workdir` 把命令约束在该目录内、套上下文超时（默认 60s），退出码映射（非零退出视为有效结果不报错、超时报 DeadlineExceeded 且 ExitCode=-1、启动失败报错），shell 按平台选择（Windows `cmd.exe /c`、类 Unix `bash -c`→`sh -c`）；③ `host_test.go` 六用例：正常 echo、非零退出(ExitCode=1)、cwd 约束（echo 重定向写出的 probe.txt 落在 workdir 内，证明未越界）、200ms 超时（ExitCode=-1 + 含「超时」错误）、坏/非目录 workdir 拒绝、空命令报错。
 - Commit: <pending>
