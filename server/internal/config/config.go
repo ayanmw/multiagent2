@@ -30,7 +30,12 @@ type Config struct {
 	EngineTimeoutSeconds int    // timeout (s) for a single LLM run (env ENGINE_TIMEOUT_SECONDS)
 	WorkspaceRoot        string // 用户工作区根目录（env WORKSPACE_ROOT，默认 data/workspaces），M1-06 CodeAct 工具的执行根
 	AgentMode            string // single / team（env AGENT_MODE，默认 single），M1-08 子代理委托开关
+	TeamReviewer         bool   // team 模式下是否加入只读 Reviewer（env TEAM_REVIEWER，默认 true），M1-09
+	TeamMaxReviewRounds  int    // 「实现→审阅→修复」回环轮数上限（env TEAM_MAX_REVIEW_ROUNDS，默认 2），M1-09
 }
+
+// DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
+const DefaultMaxReviewRounds = 2
 
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
@@ -94,12 +99,36 @@ func Load() *Config {
 	}
 	cfg.AgentMode = mode
 
+	// CodeTeam 编排配置（M1-09）：team 模式下默认加入只读 Reviewer，形成审阅回环；
+	// 可用 TEAM_REVIEWER=false 关闭（退回 M1-08 的 Orchestrator+Coder 二人组）。
+	cfg.TeamReviewer = envOrDefaultBool("TEAM_REVIEWER", true)
+	cfg.TeamMaxReviewRounds = envOrDefaultInt("TEAM_MAX_REVIEW_ROUNDS", DefaultMaxReviewRounds)
+	if cfg.TeamMaxReviewRounds <= 0 {
+		log.Printf("[WARN] TEAM_MAX_REVIEW_ROUNDS must be positive; using default %d", DefaultMaxReviewRounds)
+		cfg.TeamMaxReviewRounds = DefaultMaxReviewRounds
+	}
+
 	return cfg
 }
 
 // SubAgentsEnabled reports whether the orchestrator/sub-agent delegation mode is on.
 func (c *Config) SubAgentsEnabled() bool {
 	return c != nil && c.AgentMode == AgentModeTeam
+}
+
+// ReviewerEnabled reports whether the read-only Reviewer joins the team (M1-09).
+// It requires the team (sub-agent) mode to be enabled.
+func (c *Config) ReviewerEnabled() bool {
+	return c.SubAgentsEnabled() && c.TeamReviewer
+}
+
+// MaxReviewRounds returns the configured implement→review→fix loop budget,
+// falling back to DefaultMaxReviewRounds when unset or invalid.
+func (c *Config) MaxReviewRounds() int {
+	if c == nil || c.TeamMaxReviewRounds <= 0 {
+		return DefaultMaxReviewRounds
+	}
+	return c.TeamMaxReviewRounds
 }
 
 // EngineTimeout returns the duration used to bound a single LLM streaming run.
@@ -116,6 +145,21 @@ func envOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// envOrDefaultBool parses a boolean env var (1/t/true/0/f/false, case-insensitive).
+// Invalid values fall back to the provided default with a warning.
+func envOrDefaultBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		log.Printf("[WARN] %s is not a valid boolean; using default %v", key, fallback)
+		return fallback
+	}
+	return b
 }
 
 func envOrDefaultInt(key string, fallback int) int {

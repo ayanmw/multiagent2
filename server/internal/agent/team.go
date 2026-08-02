@@ -1,0 +1,189 @@
+// team.go 实现 CodeTeam 编排（M1-09）：Orchestrator → Coder（写）→ Reviewer（只读）→ 回环。
+//
+// 设计要点：
+//   - 团队构成「配置化」：由 TeamConfig 决定是否启用子代理委托、是否加入 Reviewer、
+//     以及「实现→审阅→修复」最多回环几轮，配置从 config（env）经 engine 注入，
+//     不在代码里写死；
+//   - 权限分层：Orchestrator 无写工具（只能委托）、Coder 持完整 CodeAct 工具集、
+//     Reviewer 只持只读工具（独立视角挑错，不能改动代码）；
+//   - 串行驱动：M1 阶段 Coder/Reviewer 由 Orchestrator 串行委托（同一 workspace），
+//     并行/worktree 隔离留待 M2（见 docs/03 §2.1 决策 3）。
+package codeagent
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+
+	codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"
+)
+
+// RoleReviewer 是只读审阅子代理的名称（同样会成为工具名，须匹配 ^[a-zA-Z0-9_-]+$）。
+const RoleReviewer = "reviewer"
+
+// DefaultMaxReviewRounds 是「实现 → 审阅 → 修复」默认最多回环轮数。
+// 仅作为写进 Orchestrator 指令的软约束；硬性熔断（LLM 调用数/工具迭代数）见 M1-13。
+const DefaultMaxReviewRounds = 2
+
+// ErrNoReadOnlyTools 表示未能为 Reviewer 装配任何只读工具（工具名约定被改动时会触发）。
+var ErrNoReadOnlyTools = errors.New("codeagent: 未能装配任何只读工具，Reviewer 无法工作")
+
+// readOnlyToolNames 是 Reviewer 允许持有的工具白名单（只读、无副作用）。
+//
+// M1-09 采用「从 CodeAct 工具集按白名单过滤」的实现方式，保证 Reviewer 在任何情况下
+// 都拿不到 file_write/file_edit/shell_exec；M1-10 会把只读工具集下沉到 codectool
+// 包内（补 grep 等检索能力并给出独立的拒绝语义）。
+var readOnlyToolNames = map[string]bool{
+	"file_read": true,
+}
+
+// ReviewerInstruction 是 Reviewer 子代理的系统提示词：只读审阅、独立视角、必须给结论。
+const ReviewerInstruction = "你是 Reviewer（代码审阅者）子代理，只拥有只读工具（file_read），" +
+	"不能修改文件、也不能执行命令。你的任务是以独立视角审阅 Coder 的改动并挑出问题。" +
+	"审阅时请先用 file_read 读取相关文件，再依据事实给出意见，不要臆测文件内容。" +
+	"输出格式：第一行给出结论「通过」或「需修改」；若为「需修改」，随后逐条列出具体问题" +
+	"（问题所在文件与位置、为什么是问题、建议怎么改）。发现任何问题都必须明确指出，不要客套。"
+
+// reviewerToolDescription 是 Reviewer 作为工具暴露给 Orchestrator 时的描述。
+const reviewerToolDescription = "把「审阅代码改动」的任务委托给 Reviewer 子代理。" +
+	"Reviewer 只有只读能力（读取文件），会独立检查改动是否正确、完整、符合要求，" +
+	"并返回「通过」或「需修改 + 问题清单」。request 参数应说明要审阅什么（文件路径与验收要求）。"
+
+// TeamConfig 描述 CodeTeam 的可配置项（M1-09「team 配置化」）。
+// 零值表示单代理模式（与 M1-06/07 行为一致）。
+type TeamConfig struct {
+	// EnableSubAgents 开启子代理委托模式：根 Agent 为 Orchestrator，代码落地委托 Coder。
+	EnableSubAgents bool
+	// EnableReviewer 在团队中加入 Reviewer（只读审阅者），形成「实现→审阅→修复」回环。
+	// 仅在 EnableSubAgents=true 时生效。
+	EnableReviewer bool
+	// MaxReviewRounds 是回环轮数上限；<=0 时取 DefaultMaxReviewRounds。
+	MaxReviewRounds int
+}
+
+// normalized 返回补齐默认值后的配置副本。
+func (c TeamConfig) normalized() TeamConfig {
+	if c.MaxReviewRounds <= 0 {
+		c.MaxReviewRounds = DefaultMaxReviewRounds
+	}
+	return c
+}
+
+// reviewerEnabled 报告是否应当装配 Reviewer（依赖子代理模式已开启）。
+func (c TeamConfig) reviewerEnabled() bool {
+	return c.EnableSubAgents && c.EnableReviewer
+}
+
+// ReadOnlyTools 返回 Reviewer 可用的只读工具集（当前为 file_read）。
+// 实现方式是从 CodeAct 工具集中按白名单过滤，天然继承其路径边界约束
+// （resolveSafePath：越出工作目录一律拒绝），且不会漏出任何写/执行工具。
+func ReadOnlyTools(workdir string) ([]tool.Tool, error) {
+	if workdir == "" {
+		return nil, ErrEmptyWorkdir
+	}
+	all, err := codectool.NewCodeAct(workdir)
+	if err != nil {
+		return nil, err
+	}
+	ro := make([]tool.Tool, 0, len(all))
+	for _, t := range all {
+		d := t.Declaration()
+		if d != nil && readOnlyToolNames[d.Name] {
+			ro = append(ro, t)
+		}
+	}
+	if len(ro) == 0 {
+		return nil, ErrNoReadOnlyTools
+	}
+	return ro, nil
+}
+
+// NewReviewer 构造 Reviewer 子代理：仅持有只读工具，无 file_write/file_edit/shell_exec。
+func NewReviewer(d Deps) (agent.Agent, error) {
+	if err := d.validate(); err != nil {
+		return nil, err
+	}
+	tools, err := ReadOnlyTools(d.Workdir)
+	if err != nil {
+		return nil, err
+	}
+	return llmagent.New(RoleReviewer,
+		llmagent.WithModel(d.Model),
+		llmagent.WithDescription("以独立视角审阅代码改动的只读子代理（只能读取文件，不能修改或执行）"),
+		llmagent.WithInstruction(ReviewerInstruction),
+		llmagent.WithTools(tools),
+	), nil
+}
+
+// NewReviewerTool 构造「可被委托的 Reviewer」：先建 Reviewer 子代理，再包成 agenttool。
+func NewReviewerTool(d Deps) (tool.Tool, error) {
+	reviewer, err := NewReviewer(d)
+	if err != nil {
+		return nil, err
+	}
+	return AsTool(reviewer, reviewerToolDescription), nil
+}
+
+// teamInstruction 依据团队配置生成 Orchestrator 的系统提示词。
+// 未启用 Reviewer 时退回 M1-08 的纯委托指令，保证行为向后兼容。
+func teamInstruction(cfg TeamConfig) string {
+	if !cfg.reviewerEnabled() {
+		return OrchestratorInstruction
+	}
+	return OrchestratorInstruction +
+		"\n\n【团队协作流程（必须遵守）】" +
+		"\n1. 需求落地：先调用 " + RoleCoder + " 工具，让它真正修改文件或执行命令；" +
+		"\n2. 独立审阅：Coder 返回后，必须调用 " + RoleReviewer + " 工具审阅其改动" +
+		"（在 request 中写明改了哪些文件、验收要求是什么）；" +
+		"\n3. 回环修复：若 Reviewer 给出「需修改」，把它列出的问题原样转交给 " + RoleCoder + " 修复，" +
+		"修复后再次调用 " + RoleReviewer + " 复审；" +
+		"\n4. 收敛：直到 Reviewer 判定「通过」，或回环达到 " + strconv.Itoa(cfg.MaxReviewRounds) +
+		" 轮为止；达到上限仍未通过时，如实向用户说明剩余问题，不要假装完成。" +
+		"\n注意：Reviewer 只有只读能力，绝不要让它去改文件；改动一律交给 " + RoleCoder + "。"
+}
+
+// NewTeam 依据 TeamConfig 构造 CodeTeam 的根代理（M1-09）。
+//
+// 配置语义：
+//   - EnableSubAgents=false：调用方不应使用本函数（应走单代理路径），这里直接报错，
+//     避免静默产出一个「没有委托能力」的编排者；
+//   - EnableReviewer=false：等价于 M1-08 的 Orchestrator + Coder；
+//   - EnableReviewer=true：Orchestrator 同时持有 coder / reviewer 两个委托工具，
+//     并在指令中约定「实现→审阅→修复」的回环及轮数上限。
+func NewTeam(d Deps, cfg TeamConfig) (agent.Agent, error) {
+	if err := d.validate(); err != nil {
+		return nil, err
+	}
+	cfg = cfg.normalized()
+	if !cfg.EnableSubAgents {
+		return nil, fmt.Errorf("codeagent: NewTeam 需要 TeamConfig.EnableSubAgents=true")
+	}
+
+	coderTool, err := NewCoderTool(d)
+	if err != nil {
+		return nil, err
+	}
+
+	tools := make([]tool.Tool, 0, len(d.ExtraTools)+2)
+	tools = append(tools, d.ExtraTools...)
+	tools = append(tools, coderTool)
+
+	if cfg.reviewerEnabled() {
+		reviewerTool, rerr := NewReviewerTool(d)
+		if rerr != nil {
+			return nil, rerr
+		}
+		tools = append(tools, reviewerTool)
+	}
+
+	return llmagent.New(RoleOrchestrator,
+		llmagent.WithModel(d.Model),
+		llmagent.WithDescription("负责目标拆解、子代理委托与「实现→审阅→修复」回环的编排者"),
+		llmagent.WithInstruction(teamInstruction(cfg)),
+		llmagent.WithTools(tools),
+	), nil
+}

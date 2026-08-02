@@ -18,9 +18,9 @@ import (
 
 // chatRequest 是 POST /api/chat 的请求体。
 type chatRequest struct {
-	Message   string `json:"message" binding:"required"`
-	ModelID   uint   `json:"model_id"`   // 可选：指定托管模型 id；为空则用用户的默认启用模型
-	SessionID string `json:"session_id"` // 可选：多轮会话 id（M0-10 仅内存态）
+	Message      string `json:"message" binding:"required"`
+	ModelID      uint   `json:"model_id"`      // 可选：指定托管模型 id；为空则用用户的默认启用模型
+	SessionID    string `json:"session_id"`    // 可选：多轮会话 id（M0-10 仅内存态）
 	WorkspaceKey string `json:"workspace_key"` // 可选：绑定到某 workspace（M1-07），Executor 在其目录执行
 }
 
@@ -36,9 +36,11 @@ type chatResponse struct {
 // 它从 DB 解析出已启用的 Model + Provider，解密 APIKey，构造 engine.Engine 并调用 LLM 得到回复。
 // engineTimeout 为单次对话流式超时（由配置 ENGINE_TIMEOUT_SECONDS 注入，M0.5-05）。
 // workspaceRoot 为用户工作区根目录（M1-06 CodeAct 工具的执行根，按 <root>/<uid> 隔离）。
-// enableSubAgents=true 时启用 M1-08 子代理委托（Orchestrator→Coder），
-// 此时 CodeAct 工具集装配给 Coder 子代理，Orchestrator 自身不持有写工具。
-func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, enableSubAgents bool) gin.HandlerFunc {
+// team 为 CodeTeam 编排配置（M1-08/M1-09）：EnableSubAgents=true 时启用子代理委托
+// （Orchestrator→Coder，CodeAct 工具集装配给 Coder，Orchestrator 自身不持有写工具）；
+// 叠加 EnableReviewer=true 时再加入只读 Reviewer，形成「实现→审阅→修复」回环。
+func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig) gin.HandlerFunc {
+	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -69,55 +71,55 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			apiKey = dec
 		}
 
-	// 解析/创建会话并持久化用户消息，用于多轮记忆（M0.5-01）。
-	sessionKey := req.SessionID
-	if sessionKey == "" {
-		sessionKey = repo.NewSessionKey()
-	}
-	sess, serr := repo.GetOrCreateSession(db, uid, sessionKey)
-	if serr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
-		return
-	}
-	if aerr := repo.AppendMessage(db, sess.ID, "user", req.Message); aerr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入用户消息失败"})
-		return
-	}
-
-	// 解析对话绑定的工作目录（M1-07）：若指定 workspace_key 则切到该 workspace 目录，
-	// 否则复用已绑定目录，皆无则回退默认 WorkspaceRoot/<uid>。
-	wsLocalDir, werr := resolveWorkspaceLocalDir(db, uid, req.WorkspaceKey, sess)
-	if werr != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
-		return
-	}
-
-	// 构造引擎并对话。M1-06：为当前用户装配 CodeAct 工具（shell_exec/file_read/file_write/file_edit），
-	// 工作目录为本次解析出的 workspace 目录（或默认 WorkspaceRoot/<uid>），命令经危险命令策略包装。
-	// M1-08：子代理委托模式下改由 Coder 子代理持有这批工具，此处不再装配到根 Agent。
-	workdir, dErr := ensureWorkdir(workspaceRoot, uid, wsLocalDir)
-	if dErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": dErr.Error()})
-		return
-	}
-	var tools []tool.Tool
-	if !enableSubAgents {
-		var tErr error
-		tools, tErr = codectool.NewCodeAct(workdir)
-		if tErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "构建代码执行工具失败: " + tErr.Error()})
+		// 解析/创建会话并持久化用户消息，用于多轮记忆（M0.5-01）。
+		sessionKey := req.SessionID
+		if sessionKey == "" {
+			sessionKey = repo.NewSessionKey()
+		}
+		sess, serr := repo.GetOrCreateSession(db, uid, sessionKey)
+		if serr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
 			return
 		}
-	}
+		if aerr := repo.AppendMessage(db, sess.ID, "user", req.Message); aerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入用户消息失败"})
+			return
+		}
+
+		// 解析对话绑定的工作目录（M1-07）：若指定 workspace_key 则切到该 workspace 目录，
+		// 否则复用已绑定目录，皆无则回退默认 WorkspaceRoot/<uid>。
+		wsLocalDir, werr := resolveWorkspaceLocalDir(db, uid, req.WorkspaceKey, sess)
+		if werr != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+			return
+		}
+
+		// 构造引擎并对话。M1-06：为当前用户装配 CodeAct 工具（shell_exec/file_read/file_write/file_edit），
+		// 工作目录为本次解析出的 workspace 目录（或默认 WorkspaceRoot/<uid>），命令经危险命令策略包装。
+		// M1-08：子代理委托模式下改由 Coder 子代理持有这批工具，此处不再装配到根 Agent。
+		workdir, dErr := ensureWorkdir(workspaceRoot, uid, wsLocalDir)
+		if dErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": dErr.Error()})
+			return
+		}
+		var tools []tool.Tool
+		if !enableSubAgents {
+			var tErr error
+			tools, tErr = codectool.NewCodeAct(workdir)
+			if tErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "构建代码执行工具失败: " + tErr.Error()})
+				return
+			}
+		}
 		eng, err := engine.New(engine.ModelConfig{
-			ModelID:         m.ModelID,
-			BaseURL:         p.BaseURL,
-			APIKey:          apiKey,
-			Protocol:        string(p.Protocol),
-			Timeout:         engineTimeout,
-			Tools:           tools,
-			EnableSubAgents: enableSubAgents,
-			Workdir:         workdir,
+			ModelID:  m.ModelID,
+			BaseURL:  p.BaseURL,
+			APIKey:   apiKey,
+			Protocol: string(p.Protocol),
+			Timeout:  engineTimeout,
+			Tools:    tools,
+			Team:     team,
+			Workdir:  workdir,
 		})
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

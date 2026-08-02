@@ -125,12 +125,12 @@ func TestEngine_SubAgentDelegation_WritesFile(t *testing.T) {
 	defer srv.Close()
 
 	eng, err := New(ModelConfig{
-		ModelID:         "mock-model",
-		BaseURL:         srv.URL,
-		APIKey:          "test-key",
-		Protocol:        "openai",
-		EnableSubAgents: true,
-		Workdir:         workdir,
+		ModelID:  "mock-model",
+		BaseURL:  srv.URL,
+		APIKey:   "test-key",
+		Protocol: "openai",
+		Team:     TeamConfig{EnableSubAgents: true},
+		Workdir:  workdir,
 	})
 	if err != nil {
 		t.Fatalf("New engine with sub-agents failed: %v", err)

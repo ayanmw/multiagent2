@@ -11,8 +11,8 @@ import (
 	"github.com/anmingwei/go-multi-agent-v2/internal/engine"
 	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
 	codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"
-	framework "trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	framework "trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"github.com/gin-gonic/gin"
@@ -39,8 +39,10 @@ type streamChatRequest struct {
 //
 // engineTimeout 为单次对话流式超时（由配置 ENGINE_TIMEOUT_SECONDS 注入，M0.5-05）。
 // workspaceRoot 为用户工作区根目录（M1-06 CodeAct 工具的执行根，按 <root>/<uid> 隔离）。
-// enableSubAgents=true 时启用 M1-08 子代理委托（Orchestrator→Coder）。
-func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, enableSubAgents bool) gin.HandlerFunc {
+// team 为 CodeTeam 编排配置（M1-08/M1-09）：EnableSubAgents=true 启用子代理委托
+// （Orchestrator→Coder），叠加 EnableReviewer=true 时加入只读 Reviewer 形成审阅回环。
+func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig) gin.HandlerFunc {
+	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -141,14 +143,14 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 			}
 		}
 		eng, err := engine.New(engine.ModelConfig{
-			ModelID:         m.ModelID,
-			BaseURL:         p.BaseURL,
-			APIKey:          apiKey,
-			Protocol:        string(p.Protocol),
-			Timeout:         engineTimeout,
-			Tools:           tools,
-			EnableSubAgents: enableSubAgents,
-			Workdir:         workdir,
+			ModelID:  m.ModelID,
+			BaseURL:  p.BaseURL,
+			APIKey:   apiKey,
+			Protocol: string(p.Protocol),
+			Timeout:  engineTimeout,
+			Tools:    tools,
+			Team:     team,
+			Workdir:  workdir,
 		})
 		if err != nil {
 			emit("RUN_ERROR", gin.H{"message": err.Error()})
@@ -263,8 +265,8 @@ func (cv *aguiConverter) onToolCalls(tcs []framework.ToolCall, emit func(string,
 			cv.closeOpenCalls(emit)
 			name := tc.Function.Name
 			emit("TOOL_CALL_START", gin.H{
-				"toolCallId":     id,
-				"toolCallName":   name,
+				"toolCallId":      id,
+				"toolCallName":    name,
 				"parentMessageId": cv.msgID,
 			})
 			cv.openCalls[id] = &aguiToolCall{name: name}

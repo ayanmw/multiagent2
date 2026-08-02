@@ -124,30 +124,15 @@ func NewCoderTool(d Deps) (tool.Tool, error) {
 	return AsTool(coder, coderToolDescription), nil
 }
 
-// NewOrchestrator 构造 Orchestrator 根代理（M1-08）。
+// NewOrchestrator 构造 Orchestrator 根代理（M1-08，不含 Reviewer）。
 //
 // 关键设计：Orchestrator **不直接持有** shell/文件写工具，只持有
 //   - Deps.ExtraTools（公共只读/无副作用工具，如 echo/get_time）
 //   - coder 委托工具（agenttool 包装的 Coder 子代理）
 //
-// 这样「产出代码」的权限被收敛到子代理内，为 M1-09/10 引入 Reviewer
-// （只读工具集、独立视角挑错）留出对称的扩展位。
+// 这样「产出代码」的权限被收敛到子代理内。M1-09 起团队构成由 TeamConfig
+// 决定（见 team.go 的 NewTeam）；本函数等价于「只有 Coder 的团队」，保留
+// 供向后兼容与单元测试使用。
 func NewOrchestrator(d Deps) (agent.Agent, error) {
-	if err := d.validate(); err != nil {
-		return nil, err
-	}
-	coderTool, err := NewCoderTool(d)
-	if err != nil {
-		return nil, err
-	}
-	tools := make([]tool.Tool, 0, len(d.ExtraTools)+1)
-	tools = append(tools, d.ExtraTools...)
-	tools = append(tools, coderTool)
-
-	return llmagent.New(RoleOrchestrator,
-		llmagent.WithModel(d.Model),
-		llmagent.WithDescription("负责目标拆解与子代理委托的编排者"),
-		llmagent.WithInstruction(OrchestratorInstruction),
-		llmagent.WithTools(tools),
-	), nil
+	return NewTeam(d, TeamConfig{EnableSubAgents: true})
 }

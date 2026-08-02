@@ -26,22 +26,29 @@ const defaultInstruction = "你是一个有用的编程助手，基于 trpc-agen
 // ModelConfig 描述一次对话所需的模型连接信息。
 // BaseURL 应为 OpenAI 兼容端点（含 /v1，例如 http://localhost:8080/v1）。
 type ModelConfig struct {
-	ModelID  string // 上游模型 id（如 gpt-4o、qwen2.5）
-	BaseURL  string // OpenAI 兼容 base URL（含 /v1）
-	APIKey   string // 上游 API Key（本地无鉴权代理可留空）
-	Protocol string // openai / anthropic / gemini（M0-10 仅实现 openai 兼容）
+	ModelID  string        // 上游模型 id（如 gpt-4o、qwen2.5）
+	BaseURL  string        // OpenAI 兼容 base URL（含 /v1）
+	APIKey   string        // 上游 API Key（本地无鉴权代理可留空）
+	Protocol string        // openai / anthropic / gemini（M0-10 仅实现 openai 兼容）
 	Timeout  time.Duration // 单次对话（流式）超时；<=0 时取默认 90s（由配置注入，M0.5-05）
 	// Tools 是可选的额外工具集（如 M1-06 CodeAct 工具），会被追加到基础工具之后。
 	// 不传则仅使用 echo/get_time 基础工具。
 	Tools []tool.Tool
-	// EnableSubAgents 开启「子代理委托」模式（M1-08）：根 Agent 换成 Orchestrator，
-	// 代码落地能力收敛到 Coder 子代理，由框架 agenttool 委托调用。
-	// 开启时 Workdir 必填；此时 Tools 仅作为 Orchestrator 的附加工具，
-	// CodeAct 工具集由 codeagent 工厂装配给 Coder（Orchestrator 自身无写权限）。
-	EnableSubAgents bool
-	// Workdir 是子代理代码工具集的受限工作目录（EnableSubAgents=true 时必填）。
+	// Team 是多代理编排（CodeTeam）配置（M1-08/M1-09）：
+	//   - EnableSubAgents=true 时根 Agent 换成 Orchestrator，代码落地能力收敛到
+	//     Coder 子代理，由框架 agenttool 委托调用；此时 Workdir 必填，Tools 仅作为
+	//     Orchestrator 的附加工具（CodeAct 工具集由 codeagent 工厂装配给 Coder）；
+	//   - EnableReviewer=true 时额外加入只读 Reviewer 子代理，形成
+	//     「实现→审阅→修复」回环，轮数上限由 MaxReviewRounds 控制。
+	// 零值 = 单代理模式（与 M1-06/07 行为一致）。
+	Team TeamConfig
+	// Workdir 是子代理代码工具集的受限工作目录（Team.EnableSubAgents=true 时必填）。
 	Workdir string
 }
+
+// TeamConfig 是 CodeTeam 编排配置（M1-09），定义在 internal/agent 包内，
+// 此处以类型别名再导出，使 api/cmd 层无需直连 codeagent 包即可配置团队。
+type TeamConfig = codeagent.TeamConfig
 
 // Engine 封装 trpc-agent-go 的 Runner/LLMAgent，负责连接 Provider+Model 并产出事件流。
 type Engine struct {
@@ -72,14 +79,15 @@ func New(cfg ModelConfig) (*Engine, error) {
 
 	// 根 Agent：
 	//   - 默认（单代理）：codeagent 直接持有全部工具，行为与 M1-07 一致；
-	//   - EnableSubAgents（M1-08）：换成 Orchestrator，代码落地委托给 Coder 子代理。
+	//   - Team.EnableSubAgents（M1-08）：换成 Orchestrator，代码落地委托给 Coder 子代理；
+	//   - 再叠加 Team.EnableReviewer（M1-09）：加入只读 Reviewer，形成审阅回环。
 	var root agent.Agent
-	if cfg.EnableSubAgents {
-		orchestrator, oerr := codeagent.NewOrchestrator(codeagent.Deps{
+	if cfg.Team.EnableSubAgents {
+		orchestrator, oerr := codeagent.NewTeam(codeagent.Deps{
 			Model:      m,
 			Workdir:    cfg.Workdir,
 			ExtraTools: allTools,
-		})
+		}, cfg.Team)
 		if oerr != nil {
 			return nil, oerr
 		}
