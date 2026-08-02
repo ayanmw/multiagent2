@@ -182,6 +182,14 @@
 
 ---
 
+### 2026-08-02 21:48 | M1-08 | ✅
+- 完成内容：**子代理委托 agenttool（Orchestrator→Coder 工厂 + AGENT_MODE 开关）**。新增 `server/internal/agent/factory.go`（包名 `codeagent`，规避框架 `agent` 包名冲突）：`NewCoder` 经 `codectool.NewCodeAct(workdir)` 装配经 `SafeExecutor`（M1-05 危险命令策略 + 路径边界约束）包装的 CodeAct 工具集；`AsTool` 用框架 `tool/agent`（agenttool）把子代理包成可被父代理委托的 `coder` 工具（工具名取子代理 `Info().Name`，输入 schema 为 `{"request":...}`）；`NewOrchestrator` **自身不持有任何写工具**，仅挂 `ExtraTools`（echo/get_time）+ coder 委托工具，把「代码落地」权限收敛到子代理（为 M1-09/10 Reviewer 留对称扩展位）。`internal/engine/engine.go` 的 `ModelConfig` 增 `EnableSubAgents/Workdir`，开启时根 Agent 换用 `codeagent.NewOrchestrator`（默认仍走原单代理，不破坏 M1-06/07）。`internal/config/config.go` 新增 `AGENT_MODE`（single/team，默认 single）与 `SubAgentsEnabled()`。`internal/api/{chat,sse,codeact}.go` 抽出 `ensureWorkdir`，按 `cfg.SubAgentsEnabled()` 在单代理模式装配 CodeAct 工具、子代理模式把工具置空（由 Coder 子代理持有），`cmd/server/main.go` 注入该开关。
+- Commit: bad5b80
+- 验证: `go build ./...` ✓ | `go vet ./...` ✓ | `internal/engine` 包测试全绿，关键新增 `TestEngine_SubAgentDelegation_WritesFile` PASS（mock LLM 脚本化驱动「Orchestrator→coder→file_write」调用链，断言 Coder 经 CodeAct 成功在工作目录写入 hello.txt，满足验收「Orchestrator 委托 Coder 写文件成功」）。注：`internal/repo`/`internal/api`/`cmd/server` 的 DB 测试需 CGO+sqlite3(gcc)，本沙箱无 gcc 故无法运行，属环境限制（与本次改动无关），其余包测试全绿。
+- 下一步：PLAN 中 M1-09（CodeTeam 编排：Orchestrator→Coder(写)→Reviewer(只读挑错)→回环）成为下一个 ○，依赖本任务 M1-08。
+
+---
+
 ### 2026-07-29 14:28 | M1-04 | ✅
 - 完成内容：**Executor 抽象接口（代码执行统一入口）**。新增独立包 `server/internal/executor/`：① `executor.go` 定义 `Executor` 接口（`Run(ctx, command) (*Result, error)` + `Workdir() string`，`Result{Stdout,Stderr,ExitCode}` 其中 ExitCode=0 正常、>0 命令非零退出、-1 超时中断）与包注释明确「所有代码执行必须经 Executor，禁止业务层散写 os/exec」；② `host.go` 的 `HostExecutor`（M1-04 默认实现）：`NewHostExecutor(workdir)`/`NewHostExecutorWithTimeout(workdir, timeout)` 校验 workdir 存在且为目录（空则回退 os.Getwd），`Run` 用 `exec.CommandContext` 固定 `cmd.Dir=workdir` 把命令约束在该目录内、套上下文超时（默认 60s），退出码映射（非零退出视为有效结果不报错、超时报 DeadlineExceeded 且 ExitCode=-1、启动失败报错），shell 按平台选择（Windows `cmd.exe /c`、类 Unix `bash -c`→`sh -c`）；③ `host_test.go` 六用例：正常 echo、非零退出(ExitCode=1)、cwd 约束（echo 重定向写出的 probe.txt 落在 workdir 内，证明未越界）、200ms 超时（ExitCode=-1 + 含「超时」错误）、坏/非目录 workdir 拒绝、空命令报错。
 - Commit: <pending>
