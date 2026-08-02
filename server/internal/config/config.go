@@ -13,6 +13,14 @@ import (
 // is unset or invalid. A single LLM run is aborted after this duration.
 const DefaultEngineTimeout = 90 * time.Second
 
+// Agent 运行模式（env AGENT_MODE，M1-08）。
+const (
+	// AgentModeSingle：单代理模式，codeagent 直接持有 CodeAct 工具（M1-06/07 行为）。
+	AgentModeSingle = "single"
+	// AgentModeTeam：子代理委托模式，根 Agent 为 Orchestrator，代码落地委托 Coder 子代理。
+	AgentModeTeam = "team"
+)
+
 // Config holds the application configuration.
 type Config struct {
 	DBPath               string
@@ -21,6 +29,7 @@ type Config struct {
 	EncryptionKey        []byte // 32-byte key for AES-256-GCM (provider API keys at rest)
 	EngineTimeoutSeconds int    // timeout (s) for a single LLM run (env ENGINE_TIMEOUT_SECONDS)
 	WorkspaceRoot        string // 用户工作区根目录（env WORKSPACE_ROOT，默认 data/workspaces），M1-06 CodeAct 工具的执行根
+	AgentMode            string // single / team（env AGENT_MODE，默认 single），M1-08 子代理委托开关
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -76,7 +85,21 @@ func Load() *Config {
 	}
 	cfg.WorkspaceRoot = workspaceRoot
 
+	// Agent 运行模式（M1-08）：team 时启用 Orchestrator→Coder 子代理委托。
+	// 非法取值退回 single，避免误配把线上对话切到未预期的编排链路。
+	mode := envOrDefault("AGENT_MODE", AgentModeSingle)
+	if mode != AgentModeSingle && mode != AgentModeTeam {
+		log.Printf("[WARN] AGENT_MODE=%q is invalid; using %q", mode, AgentModeSingle)
+		mode = AgentModeSingle
+	}
+	cfg.AgentMode = mode
+
 	return cfg
+}
+
+// SubAgentsEnabled reports whether the orchestrator/sub-agent delegation mode is on.
+func (c *Config) SubAgentsEnabled() bool {
+	return c != nil && c.AgentMode == AgentModeTeam
 }
 
 // EngineTimeout returns the duration used to bound a single LLM streaming run.

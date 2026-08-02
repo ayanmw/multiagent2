@@ -15,6 +15,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+
+	codeagent "github.com/anmingwei/go-multi-agent-v2/internal/agent"
 )
 
 // defaultInstruction 是 Agent 的系统提示词（中文优先，编程助手定位）。
@@ -32,6 +34,13 @@ type ModelConfig struct {
 	// Tools 是可选的额外工具集（如 M1-06 CodeAct 工具），会被追加到基础工具之后。
 	// 不传则仅使用 echo/get_time 基础工具。
 	Tools []tool.Tool
+	// EnableSubAgents 开启「子代理委托」模式（M1-08）：根 Agent 换成 Orchestrator，
+	// 代码落地能力收敛到 Coder 子代理，由框架 agenttool 委托调用。
+	// 开启时 Workdir 必填；此时 Tools 仅作为 Orchestrator 的附加工具，
+	// CodeAct 工具集由 codeagent 工厂装配给 Coder（Orchestrator 自身无写权限）。
+	EnableSubAgents bool
+	// Workdir 是子代理代码工具集的受限工作目录（EnableSubAgents=true 时必填）。
+	Workdir string
 }
 
 // Engine 封装 trpc-agent-go 的 Runner/LLMAgent，负责连接 Provider+Model 并产出事件流。
@@ -55,19 +64,36 @@ func New(cfg ModelConfig) (*Engine, error) {
 	// 框架模型抽象：OpenAI 兼容客户端。上游如需鉴权，api_key 透传。
 	m := openai.New(cfg.ModelID, openai.WithAPIKey(cfg.APIKey), openai.WithBaseURL(cfg.BaseURL))
 
-	// LLM Agent：注入系统提示词、模型与基础工具集（echo/get_time）+ 可选额外工具（如 M1-06 CodeAct）。
+	// 基础工具集（echo/get_time）+ 可选额外工具（如 M1-06 CodeAct）。
 	allTools := []tool.Tool{echoTool(), getTimeTool()}
 	if len(cfg.Tools) > 0 {
 		allTools = append(allTools, cfg.Tools...)
 	}
-	ag := llmagent.New("codeagent",
-		llmagent.WithModel(m),
-		llmagent.WithInstruction(defaultInstruction),
-		llmagent.WithTools(allTools),
-	)
+
+	// 根 Agent：
+	//   - 默认（单代理）：codeagent 直接持有全部工具，行为与 M1-07 一致；
+	//   - EnableSubAgents（M1-08）：换成 Orchestrator，代码落地委托给 Coder 子代理。
+	var root agent.Agent
+	if cfg.EnableSubAgents {
+		orchestrator, oerr := codeagent.NewOrchestrator(codeagent.Deps{
+			Model:      m,
+			Workdir:    cfg.Workdir,
+			ExtraTools: allTools,
+		})
+		if oerr != nil {
+			return nil, oerr
+		}
+		root = orchestrator
+	} else {
+		root = llmagent.New("codeagent",
+			llmagent.WithModel(m),
+			llmagent.WithInstruction(defaultInstruction),
+			llmagent.WithTools(allTools),
+		)
+	}
 
 	// Runner：未显式提供 session service 时框架会自动创建内存版会话服务。
-	r := runner.NewRunner("go-multi-agent-v2", ag)
+	r := runner.NewRunner("go-multi-agent-v2", root)
 
 	// 单次对话超时：<=0 时回退默认 90s（由配置 ENGINE_TIMEOUT_SECONDS 注入，M0.5-05）。
 	if cfg.Timeout <= 0 {

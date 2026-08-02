@@ -5,10 +5,13 @@ import (
 	"net/http"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+
 	"github.com/anmingwei/go-multi-agent-v2/internal/crypto"
 	"github.com/anmingwei/go-multi-agent-v2/internal/engine"
 	"github.com/anmingwei/go-multi-agent-v2/internal/model"
 	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
+	codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -33,7 +36,9 @@ type chatResponse struct {
 // 它从 DB 解析出已启用的 Model + Provider，解密 APIKey，构造 engine.Engine 并调用 LLM 得到回复。
 // engineTimeout 为单次对话流式超时（由配置 ENGINE_TIMEOUT_SECONDS 注入，M0.5-05）。
 // workspaceRoot 为用户工作区根目录（M1-06 CodeAct 工具的执行根，按 <root>/<uid> 隔离）。
-func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string) gin.HandlerFunc {
+// enableSubAgents=true 时启用 M1-08 子代理委托（Orchestrator→Coder），
+// 此时 CodeAct 工具集装配给 Coder 子代理，Orchestrator 自身不持有写工具。
+func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, enableSubAgents bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -89,18 +94,30 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 
 	// 构造引擎并对话。M1-06：为当前用户装配 CodeAct 工具（shell_exec/file_read/file_write/file_edit），
 	// 工作目录为本次解析出的 workspace 目录（或默认 WorkspaceRoot/<uid>），命令经危险命令策略包装。
-	tools, tErr := buildCodeActTools(workspaceRoot, uid, wsLocalDir)
-	if tErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "构建代码执行工具失败: " + tErr.Error()})
+	// M1-08：子代理委托模式下改由 Coder 子代理持有这批工具，此处不再装配到根 Agent。
+	workdir, dErr := ensureWorkdir(workspaceRoot, uid, wsLocalDir)
+	if dErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": dErr.Error()})
 		return
 	}
+	var tools []tool.Tool
+	if !enableSubAgents {
+		var tErr error
+		tools, tErr = codectool.NewCodeAct(workdir)
+		if tErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "构建代码执行工具失败: " + tErr.Error()})
+			return
+		}
+	}
 		eng, err := engine.New(engine.ModelConfig{
-			ModelID:  m.ModelID,
-			BaseURL:  p.BaseURL,
-			APIKey:   apiKey,
-			Protocol: string(p.Protocol),
-			Timeout:  engineTimeout,
-			Tools:    tools,
+			ModelID:         m.ModelID,
+			BaseURL:         p.BaseURL,
+			APIKey:          apiKey,
+			Protocol:        string(p.Protocol),
+			Timeout:         engineTimeout,
+			Tools:           tools,
+			EnableSubAgents: enableSubAgents,
+			Workdir:         workdir,
 		})
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

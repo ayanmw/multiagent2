@@ -10,8 +10,10 @@ import (
 	"github.com/anmingwei/go-multi-agent-v2/internal/crypto"
 	"github.com/anmingwei/go-multi-agent-v2/internal/engine"
 	"github.com/anmingwei/go-multi-agent-v2/internal/repo"
+	codectool "github.com/anmingwei/go-multi-agent-v2/internal/tool"
 	framework "trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -37,7 +39,8 @@ type streamChatRequest struct {
 //
 // engineTimeout 为单次对话流式超时（由配置 ENGINE_TIMEOUT_SECONDS 注入，M0.5-05）。
 // workspaceRoot 为用户工作区根目录（M1-06 CodeAct 工具的执行根，按 <root>/<uid> 隔离）。
-func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string) gin.HandlerFunc {
+// enableSubAgents=true 时启用 M1-08 子代理委托（Orchestrator→Coder）。
+func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, enableSubAgents bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -120,19 +123,32 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 
 		// 构造引擎并启动流式对话。M1-06：为当前用户装配 CodeAct 工具（工作目录隔离在
 		// 本次解析的 workspace 目录内，命令经危险命令策略包装）。
-		tools, tErr := buildCodeActTools(workspaceRoot, uid, wsLocalDir)
-		if tErr != nil {
-			emit("RUN_ERROR", gin.H{"message": "构建代码执行工具失败: " + tErr.Error()})
+		// M1-08：子代理委托模式下改由 Coder 子代理持有 CodeAct 工具，根 Agent 不装配写工具。
+		workdir, dErr := ensureWorkdir(workspaceRoot, uid, wsLocalDir)
+		if dErr != nil {
+			emit("RUN_ERROR", gin.H{"message": dErr.Error()})
 			emit("RUN_FINISHED", gin.H{"threadId": sess.SessionKey, "runId": runID})
 			return
 		}
+		var tools []tool.Tool
+		if !enableSubAgents {
+			var tErr error
+			tools, tErr = codectool.NewCodeAct(workdir)
+			if tErr != nil {
+				emit("RUN_ERROR", gin.H{"message": "构建代码执行工具失败: " + tErr.Error()})
+				emit("RUN_FINISHED", gin.H{"threadId": sess.SessionKey, "runId": runID})
+				return
+			}
+		}
 		eng, err := engine.New(engine.ModelConfig{
-			ModelID:  m.ModelID,
-			BaseURL:  p.BaseURL,
-			APIKey:   apiKey,
-			Protocol: string(p.Protocol),
-			Timeout:  engineTimeout,
-			Tools:    tools,
+			ModelID:         m.ModelID,
+			BaseURL:         p.BaseURL,
+			APIKey:          apiKey,
+			Protocol:        string(p.Protocol),
+			Timeout:         engineTimeout,
+			Tools:           tools,
+			EnableSubAgents: enableSubAgents,
+			Workdir:         workdir,
 		})
 		if err != nil {
 			emit("RUN_ERROR", gin.H{"message": err.Error()})

@@ -86,13 +86,14 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer) *gi
 		protected.DELETE("/workspaces/:id", middleware.RequirePermission(db.DB, "workspaces", "write"), api.DeleteWorkspaceHandler(db.DB))
 
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
-		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot))
+		// M1-08：AGENT_MODE=team 时根 Agent 换成 Orchestrator，代码落地委托 Coder 子代理。
+		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, cfg.SubAgentsEnabled()))
 
 		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化
 		// M0.5-06：message 改由 POST body 传递（避免明文进访问日志），故注册为 POST。
 		// M1-06/07：在此端点装配 CodeAct 工具；工作目录优先取对话绑定的 workspace 目录，
 		// 未绑定时回退 WorkspaceRoot/<uid>。workspace_key 经请求体传入。
-		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot))
+		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, cfg.SubAgentsEnabled()))
 	}
 
 	return r
