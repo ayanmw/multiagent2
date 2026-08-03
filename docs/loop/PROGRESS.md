@@ -287,3 +287,11 @@
   - `TestIsCircuitBreakEvent`：StopError / flow_error 熔断事件正确识别，普通错误不误判。
 - `go build ./...` ✓ | `go vet ./...` ✓ | `go test -count=1 ./internal/engine/... ./internal/agent/... ./internal/config/...` ✓（沙箱无 gcc，repo/api/cmd 的 CGO sqlite 测试仍跳过，与本次无关）。
 - 下一步：PLAN 中 **M1-14 斜杠命令注册表（后端）** 成为下一个 ○。
+
+---
+
+### 2026-08-03 13:26 | M1-14 | ✅
+- 完成内容：**斜杠命令注册表（后端，M1 前端/CLI 共用元数据来源）**。新增独立框架无关包 `server/internal/command/registry.go`：① `Command` 元数据（Name/Description/Usage/Category/Args/Kind/Template/Endpoint）+ `Arg`；三类 Kind——`client`（前端本地处理：/clear /model /workspace）、`prompt`（模板+用户输入渲染成提示词发给既有 /chat，复用 CodeAct/Goal/Plan，无需新后端执行路径：/run /review /plan）、`endpoint`（预留直连既有端点）；② `Builtin()` 单一事实源内置 6 条命令（/clear /model /workspace /run /review /plan），新增命令只改此处；③ `Find(name)` + `RenderPrompt(cmd, args)` 渲染助手（模板占位符 `{{args}}` 替换为命令后整行参数）。新增 `server/internal/api/command.go` 的 `ListCommandsHandler`（GET /api/commands，返回 `{commands:[...]}`，受保护路由，无需 DB）；`cmd/server/main.go` 在 protected 组注册该路由。`internal/command/registry_test.go` 覆盖内置命令齐全性/无重名/Find/RenderPrompt；`internal/api/command_test.go`（httptest，无 CGO）校验端点返回体结构与 prompt 类必带模板。
+- Commit: 34a4a02（已推 origin/main）
+- 验证: `go build ./...` ✓ | `go vet ./...` ✓ | `go test -count=1 ./internal/command/... ./internal/api/...`（新测试 PASS）。注：`internal/api` 包内 `TestResolveWorkspaceLocalDir` 等 DB 测试需 CGO+sqlite3(gcc)，本沙箱 `CGO_ENABLED=0` 无法运行，属既有环境限制、与本次改动无关。`internal/agent`/`engine`/`config`/`tool`/`goal`/`plan`/`executor`/`provider` 等非 DB 包测试全绿。
+- 下一步：PLAN 中 **M1-15（前端斜杠命令 UI：输入框 `/` 触发命令浮层，选择+填参，发送）** 成为下一个 ○，依赖本任务 M1-14。
