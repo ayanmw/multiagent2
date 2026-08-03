@@ -253,3 +253,10 @@ server/
 - **根治方案**：给 `executor.Executor` 接口新增 `RunCommand(ctx, name string, args ...string) (*Result, error)`，以 argv 形式（程序名 + 参数列表）**直接 `exec.CommandContext(ctx, name, args...)` 执行，完全绕过 shell 字符串解析**。HostExecutor/SafeExecutor 均补齐该方法（SafeExecutor 用 `name + " " + strings.Join(args," ")` 拼字符串做策略评估与审计，委托 `inner.RunCommand`；超时/非零退出码映射复用 `finishCommand` 私有方法）。git 工具集的 `runGit` 改为 `ex.RunCommand(ctx, "git", args...)`，彻底规避引号转义，且含空格/中文的提交说明作为单一 argv 精确传递（同时缩小命令注入面，不再经 shell 重新分词）。
 - **何时该用 RunCommand vs Run**：任何「参数可能含空格/需精确传递 argv」的外部程序（典型如 git 的 `-m <message>`、路径含空格）一律用 `RunCommand`；纯 shell 片段（如 `ls -la | head`）才用 `Run`。框架封装的 `tool/function` 工具背后若需调外部程序，优先 argv 直调。
 
+### 2026-08-03 | 架构 | MCP 管理面与工具装载解耦（M2-02）
+- M2-02 只做 MCP 配置的「管理面」：`model.MCPServer`（user 归属 + `uniqueIndex:idx_user_mcp` 按 (user_id,name) 隔离 + `Transport`[stdio/sse/streamable] + `Command`/`Args`/`Env`(stdio 组) 或 `URL`/`Headers`(sse/streamable 组) + `Enabled` + `Description`）持久化到 `mcp_servers` 表，提供 owner-scoped CRUD API（`POST`/`GET`/`PUT`/`DELETE /api/mcp`、`GET /api/mcp/:id`），读接 `mcp:read`、写接 `mcp:write`（RBAC）。`Args`/`Env`/`Headers` 用 GORM `serializer:json` 与 DB 互转 JSON，对外 JSON 直接是数组/对象，便于前端编辑与 M2-06 消费。
+- **关键解耦**：M2-02 **不装载任何 MCP 工具**，仅存配置；真实工具装载由 M2-06 toolsearch 按需调用框架 `tool/mcp`（stdio/sse/streamable）完成，届时读取本表 `mcp_servers` 配置。验收标准「无真实装载」即此意——避免管理 API 与运行时装载耦合、也避免本任务引入框架 MCP 客户端的 CGO/网络依赖。
+- transport 跨字段校验：stdio→`command` 必填、sse/streamable→`url` 必填；gin 的 `oneof` 只管单字段合法性，跨字段必填在 handler 内用 `model.MCPServer.Validate()` 兜底（创建与更新后都重校验，因 PUT 可能改 transport）。
+- 权限矩阵：developer 需 `mcp:write`（seedRoles 原有 `mcp:read`）、viewer 仅 `mcp:read`，故 viewer 调写路由 403、读路由放行。
+- env/headers 含敏感信息（token 等），M2-02 仅明文 JSON 存库（与 workspace 同级）；加密留 M3 审计/预算阶段，与 Provider AES 密钥区分对待。
+

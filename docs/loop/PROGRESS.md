@@ -332,4 +332,13 @@
 - 验证: `go build ./...` 非 CGO 包全绿（executor/tool/engine/agent 等；`internal/api`/`cmd/server` 依赖 go-sqlite3 的 CGO 测试本沙箱无 gcc 跳过，属历史环境限制）；`go vet` 同包绿；`go test -count=1 ./internal/executor/... ./internal/tool/... ./internal/engine/... ./internal/agent/...` **全绿**（含 `TestGitTools_FullChain`/`TestNewCodeActWithGit_ToolSet`/`TestNewGitTools_RequiresWorkdir` + `git_integration_test.go::TestEngine_CoderGitCommit_Workspace` 断言「coder 写 hello.txt + 初始提交 + 修改已跟踪文件后 git_status 显示改动、git_diff 显示改动、git_log 含提交说明」PASS）；`gofmt -e` 对全部改动文件语法校验通过。
 - 下一步：PLAN 中 **M2-02（MCP 管理中心后端）** 成为下一个 ○，无依赖、可独立进行。
 
+---
+
+### 2026-08-03 23:47 | M2-02 | ✅
+- 完成内容：**MCP 管理中心（后端，M2 生态第二任务）**。① 领域模型 `server/internal/model/mcpserver.go`：`MCPServer`（user 归属 + `uniqueIndex:idx_user_mcp` 按 (user_id,name) 隔离 + `Transport`(stdio/sse/streamable) + `Command` + `Args`/`Env`（stdio 组）+ `URL`/`Headers`（sse/streamable 组）+ `Enabled` + `Description`）；`Args`/`Env`/`Headers` 用 GORM `serializer:json` 与 DB 互转 JSON，对外 JSON 直接是数组/对象；`ParseMCPTransport` 归一化 + `MCPServer.Validate()` 跨字段校验（stdio→command 必填、sse/streamable→url 必填）。② `server/internal/repo/mcpserver.go`：owner-scoped CRUD（`Create/List/GetMCPServerByID`(校验归属)/`Update`/`Delete` + `GetMCPServerByName` 查重），跨用户查返回 `ErrMCPServerNotFound`（不泄露存在性）。③ `server/internal/api/mcp.go`：五个 handler（`POST/GET/PUT/DELETE /api/mcp`、`GET /api/mcp/:id`），读接 `mcp:read`、写接 `mcp:write`（RBAC）；创建前查重→409；transport 合法性 + `Validate()` 兜底→400；更新为部分更新并整体重校验。④ `model/role.go` 种子补权限：developer 加 `mcp:write`（原有 `mcp:read`）、viewer 加 `mcp:read`。⑤ `repo/db.go` AutoMigrate 加 `&model.MCPServer{}`；`cmd/server/main.go` 在 protected 组注册 5 条 MCP 路由。
+- Commit: 5184781（已推 origin/main）
+- 验证: 沙箱无 gcc，故 `internal/api`/`internal/repo`/`cmd/server`（依赖 go-sqlite3 CGO）无法编译/运行，与历史轮次一致；可独立验证的 `internal/model` 包 `go build/vet/test` 全绿（`model/mcpserver_test.go` 的 `ParseMCPTransport` + `MCPServer.Validate` 6 类用例 PASS）；全部改动文件 `gofmt -e` 语法校验通过；api/repo/路由严格对齐既有 workspace/provider 模式（handler 签名、`currentUserID`、`RequirePermission`、owner 隔离、错误码一致），CGO 包在真实 gcc 环境可编译。另新增 `repo/mcpserver_test.go`（owner-scoped CRUD + JSON 往返 + 跨用户 404）与 `cmd/server/mcp_test.go`（`TestMCP_ManagementAPI`：developer 全生命周期 CRUD + owner 隔离 404 + viewer 写 403 + 非法 transport/缺 command/缺 url 400），二者在 gcc 环境运行。
+- 范围约束：本任务**仅管理面**（配置持久化 + 校验 + RBAC），**不在此装载任何 MCP 工具**（PLAN 验收「无真实装载」）；真实工具装载由 M2-06 toolsearch 按需调用框架 `tool/mcp` 完成，届时读取本表 `mcp_servers` 配置。
+- 下一步：PLAN 中 **M2-03（Skills 仓库 & warm-start）** 成为下一个 ○，无依赖、可独立进行。
+
 
