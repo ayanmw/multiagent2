@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
+	goalpkg "github.com/ayanmw/multiagent2/server/internal/goal"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
 
@@ -58,6 +59,15 @@ type TeamConfig struct {
 	EnableReviewer bool
 	// MaxReviewRounds 是回环轮数上限；<=0 时取 DefaultMaxReviewRounds。
 	MaxReviewRounds int
+	// EnableGoal 开启目标契约（M1-11）：为 Orchestrator 注入
+	// create_goal/get_goal/update_goal 三个工具，并强制「目标未达成不许结束」。
+	// 仅在 EnableSubAgents=true 时生效——契约只装根编排者，子代理不装。
+	EnableGoal bool
+	// MaxGoalNudges 是「最多拦截几次过早的最终答复」；<=0 时取 DefaultMaxGoalNudges。
+	// 超出后放行（fail-open），避免模型不配合时把整轮 Run 卡死。
+	MaxGoalNudges int
+	// GoalStore 可选注入目标存储（测试与上层可观测用）；为空时内部自建。
+	GoalStore *goalpkg.Store
 }
 
 // normalized 返回补齐默认值后的配置副本。
@@ -65,12 +75,20 @@ func (c TeamConfig) normalized() TeamConfig {
 	if c.MaxReviewRounds <= 0 {
 		c.MaxReviewRounds = DefaultMaxReviewRounds
 	}
+	if c.MaxGoalNudges <= 0 {
+		c.MaxGoalNudges = DefaultMaxGoalNudges
+	}
 	return c
 }
 
 // reviewerEnabled 报告是否应当装配 Reviewer（依赖子代理模式已开启）。
 func (c TeamConfig) reviewerEnabled() bool {
 	return c.EnableSubAgents && c.EnableReviewer
+}
+
+// goalEnabled 报告是否应当装配目标契约（同样依赖子代理模式已开启）。
+func (c TeamConfig) goalEnabled() bool {
+	return c.EnableSubAgents && c.EnableGoal
 }
 
 // ReadOnlyTools 返回 Reviewer 可用的只读工具集（file_read + grep，M1-10）。
@@ -126,13 +144,22 @@ func NewReviewerTool(d Deps) (tool.Tool, error) {
 }
 
 // teamInstruction 依据团队配置生成 Orchestrator 的系统提示词。
-// 未启用 Reviewer 时退回 M1-08 的纯委托指令，保证行为向后兼容。
+// 未启用 Reviewer 时退回 M1-08 的纯委托指令，保证行为向后兼容；
+// 启用目标契约（M1-11）时再追加目标契约作业规程。
 func teamInstruction(cfg TeamConfig) string {
-	if !cfg.reviewerEnabled() {
-		return OrchestratorInstruction
+	base := OrchestratorInstruction
+	if cfg.reviewerEnabled() {
+		base += reviewLoopInstruction(cfg)
 	}
-	return OrchestratorInstruction +
-		"\n\n【团队协作流程（必须遵守）】" +
+	if cfg.goalEnabled() {
+		base += GoalInstruction
+	}
+	return base
+}
+
+// reviewLoopInstruction 生成「实现→审阅→修复」回环的作业规程（M1-09）。
+func reviewLoopInstruction(cfg TeamConfig) string {
+	return "\n\n【团队协作流程（必须遵守）】" +
 		"\n1. 需求落地：先调用 " + RoleCoder + " 工具，让它真正修改文件或执行命令；" +
 		"\n2. 独立审阅：Coder 返回后，必须调用 " + RoleReviewer + " 工具审阅其改动" +
 		"（在 request 中写明改了哪些文件、验收要求是什么）；" +
@@ -150,7 +177,11 @@ func teamInstruction(cfg TeamConfig) string {
 //     避免静默产出一个「没有委托能力」的编排者；
 //   - EnableReviewer=false：等价于 M1-08 的 Orchestrator + Coder；
 //   - EnableReviewer=true：Orchestrator 同时持有 coder / reviewer 两个委托工具，
-//     并在指令中约定「实现→审阅→修复」的回环及轮数上限。
+//     并在指令中约定「实现→审阅→修复」的回环及轮数上限；
+//   - EnableGoal=true（M1-11）：为 Orchestrator 装配目标契约扩展
+//     （create_goal/get_goal/update_goal + 未达成不许结束的硬拦截）。
+//     契约只装根编排者：子代理各自只对「被委托的子任务」负责，
+//     若也装契约会互相拦截，且与并行工具冲突（见 docs/03 §2.1）。
 func NewTeam(d Deps, cfg TeamConfig) (agent.Agent, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
@@ -177,10 +208,20 @@ func NewTeam(d Deps, cfg TeamConfig) (agent.Agent, error) {
 		tools = append(tools, reviewerTool)
 	}
 
-	return llmagent.New(RoleOrchestrator,
+	opts := []llmagent.Option{
 		llmagent.WithModel(d.Model),
 		llmagent.WithDescription("负责目标拆解、子代理委托与「实现→审阅→修复」回环的编排者"),
 		llmagent.WithInstruction(teamInstruction(cfg)),
 		llmagent.WithTools(tools),
-	), nil
+	}
+	if cfg.goalEnabled() {
+		// 注意：装了 goal 契约的 Agent 不能开启 EnableParallelTools——
+		// 并行工具会让「工具调用响应 / 最终响应」的时序变得不可判定，
+		// AfterModel 无法可靠区分「还在干活」与「过早收工」（见 docs/03 §2.1）。
+		opts = append(opts, llmagent.WithExtensions(NewGoalEnforcer(
+			WithGoalMaxNudges(cfg.MaxGoalNudges),
+			WithGoalStore(cfg.GoalStore),
+		)))
+	}
+	return llmagent.New(RoleOrchestrator, opts...), nil
 }

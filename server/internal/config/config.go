@@ -32,10 +32,16 @@ type Config struct {
 	AgentMode            string // single / team（env AGENT_MODE，默认 single），M1-08 子代理委托开关
 	TeamReviewer         bool   // team 模式下是否加入只读 Reviewer（env TEAM_REVIEWER，默认 true），M1-09
 	TeamMaxReviewRounds  int    // 「实现→审阅→修复」回环轮数上限（env TEAM_MAX_REVIEW_ROUNDS，默认 2），M1-09
+	GoalContract         bool   // team 模式下是否启用目标契约（env GOAL_CONTRACT，默认 true），M1-11
+	GoalMaxNudges        int    // 目标未达成时最多拦截几次过早的最终答复（env GOAL_MAX_NUDGES，默认 3），M1-11
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
 const DefaultMaxReviewRounds = 2
+
+// DefaultGoalMaxNudges 是目标契约默认的最大拦截次数（M1-11）。
+// 超出后 fail-open 放行，避免模型不配合时把整轮 Run 卡死。
+const DefaultGoalMaxNudges = 3
 
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
@@ -108,6 +114,15 @@ func Load() *Config {
 		cfg.TeamMaxReviewRounds = DefaultMaxReviewRounds
 	}
 
+	// 目标契约配置（M1-11）：team 模式下默认开启，Orchestrator 必须把目标推进到
+	// complete/blocked 才允许结束；GOAL_CONTRACT=false 可关闭（退回 M1-09 行为）。
+	cfg.GoalContract = envOrDefaultBool("GOAL_CONTRACT", true)
+	cfg.GoalMaxNudges = envOrDefaultInt("GOAL_MAX_NUDGES", DefaultGoalMaxNudges)
+	if cfg.GoalMaxNudges <= 0 {
+		log.Printf("[WARN] GOAL_MAX_NUDGES must be positive; using default %d", DefaultGoalMaxNudges)
+		cfg.GoalMaxNudges = DefaultGoalMaxNudges
+	}
+
 	return cfg
 }
 
@@ -129,6 +144,22 @@ func (c *Config) MaxReviewRounds() int {
 		return DefaultMaxReviewRounds
 	}
 	return c.TeamMaxReviewRounds
+}
+
+// GoalEnabled reports whether the goal contract is installed on the
+// orchestrator (M1-11). It requires the team (sub-agent) mode to be enabled:
+// the contract is a root-agent-only capability.
+func (c *Config) GoalEnabled() bool {
+	return c.SubAgentsEnabled() && c.GoalContract
+}
+
+// MaxGoalNudges returns the configured premature-final block budget,
+// falling back to DefaultGoalMaxNudges when unset or invalid.
+func (c *Config) MaxGoalNudges() int {
+	if c == nil || c.GoalMaxNudges <= 0 {
+		return DefaultGoalMaxNudges
+	}
+	return c.GoalMaxNudges
 }
 
 // EngineTimeout returns the duration used to bound a single LLM streaming run.

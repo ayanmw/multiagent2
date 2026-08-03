@@ -89,10 +89,14 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer) *gi
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
 		// M1-08：AGENT_MODE=team 时根 Agent 换成 Orchestrator，代码落地委托 Coder 子代理。
 		// M1-09：team 模式默认再加入只读 Reviewer（TEAM_REVIEWER），形成「实现→审阅→修复」回环。
+		// M1-11：team 模式默认启用目标契约（GOAL_CONTRACT），Orchestrator 必须把目标
+		// 推进到 complete/blocked 才允许结束，过早的最终答复会被拦截并要求继续干活。
 		teamCfg := engine.TeamConfig{
 			EnableSubAgents: cfg.SubAgentsEnabled(),
 			EnableReviewer:  cfg.ReviewerEnabled(),
 			MaxReviewRounds: cfg.MaxReviewRounds(),
+			EnableGoal:      cfg.GoalEnabled(),
+			MaxGoalNudges:   cfg.MaxGoalNudges(),
 		}
 		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg))
 
