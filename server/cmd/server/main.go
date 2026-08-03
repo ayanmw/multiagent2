@@ -78,6 +78,9 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer) *gi
 		protected.GET("/sessions/:id", api.GetSessionHandler(db.DB))
 		protected.DELETE("/sessions/:id", middleware.RequirePermission(db.DB, "sessions", "write"), api.DeleteSessionHandler(db.DB))
 
+		// 斜杠命令注册表（M1-14）：前端/CLI 共用，新增命令只改后端 command.Builtin()。
+		protected.GET("/commands", api.ListCommandsHandler())
+
 		// Workspace 管理（M1-07）：用户归属的工作区 CRUD；对话可绑定 workspace，
 		// 使 Agent 的 CodeAct 工具在该 workspace 本地目录执行。写操作需 workspaces:write 权限。
 		protected.GET("/workspaces", api.ListWorkspacesHandler(db.DB))
