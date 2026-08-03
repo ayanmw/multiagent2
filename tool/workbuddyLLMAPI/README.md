@@ -59,6 +59,31 @@ tool/workbuddyLLMAPI/
     └── acp_probe.py             # 调试工具：复现 ACP 线协议，验证守护进程连通性
 ```
 
+## 零、一键启动（推荐，无需记命令）
+
+`start_gateway_daemon.sh` 已封装「后台拉起守护进程 → 编译 → 启动网关」全流程，且所有路径用
+`$LOCALAPPDATA` 自动适配当前用户，**无需任何硬编码路径、无私密信息**：
+
+```bash
+cd tool/workbuddyLLMAPI
+
+# 默认：后台拉起本机守护进程(18765) + 编译并启动网关(8088)，后端=codebuddy
+bash start_gateway_daemon.sh
+
+# 仅探测 ACP 链路是否连通（不启动网关）
+bash start_gateway_daemon.sh probe
+```
+
+可选环境变量（不设置则用安全默认值）：
+- `WB_CLI_PATH`     WorkBuddy CLI 绝对路径（默认 `$LOCALAPPDATA/Programs/WorkBuddy/.../codebuddy`）
+- `WB_DAEMON_PORT` / `WB_DAEMON_HOST`   守护进程端口/地址（默认 18765 / 127.0.0.1）
+- `WB_LISTEN`      网关监听地址（默认 :8088）
+- `WB_BACKEND`     网关后端（默认 codebuddy；可 mock / passthrough）
+- `WB_DAEMON_MODEL` / `WB_DAEMON_FALLBACK_MODEL`   默认/回退模型
+
+> 脚本会先检测 `18765` 是否已监听：已监听则跳过启动（幂等），避免重复拉起守护进程。
+> 网关进程在前台随脚本运行；要后台常驻可加 `nohup bash start_gateway_daemon.sh &`。
+
 ## 一、启动本机 CodeBuddy 守护进程（仅需一次，常驻）
 
 使用 WorkBuddy 自带的 CLI（**不要杀 WorkBuddy 桌面进程**，它和守护进程是分开的进程）：
@@ -67,8 +92,9 @@ tool/workbuddyLLMAPI/
 # WorkBuddy 自带的 CLI 路径（Windows 示例，默认用 $LOCALAPPDATA 自动适配当前用户）
 CLI="${WB_CLI_PATH:-$LOCALAPPDATA/Programs/WorkBuddy/resources/app.asar.unpacked/cli/bin/codebuddy}"
 
-# 以守护进程模式启动，端口 18765（idempotent，重复执行安全）
-"$CLI" daemon start --port 18765 --host 127.0.0.1
+# ⚠️ daemon start 是常驻/监管进程，不会自己返回 —— 必须后台启动（加 & 或用 nohup），
+#    否则会永久卡住当前终端。推荐直接用上面的 start_gateway_daemon.sh，无需手动这一步。
+"$CLI" daemon start --port 18765 --host 127.0.0.1 &
 ```
 
 - 登录态复用 `~/.codebuddy`，所以**只要 WorkBuddy/CodeBuddy 已登录，就会自动消耗其积分**，无需任何 Key。
