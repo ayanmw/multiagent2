@@ -30,6 +30,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/ayanmw/multiagent2/server/internal/sessionstore"
 	"github.com/ayanmw/multiagent2/server/internal/taskrun"
+	"github.com/ayanmw/multiagent2/server/internal/worktree"
 	"github.com/gin-gonic/gin"
 )
 
@@ -238,9 +239,19 @@ func main() {
 			}
 			return dir, nil
 		},
+		// M2-05：worktree 隔离钩子。开启时每个 taskrun 子任务在独立 worktree（独立分支
+		// taskrun/<id>）内执行，完成后 merge 回主分支并清理，绝不 push 远程。
+		Worktree: &taskrun.WorktreeHook{Enabled: cfg.WorktreeIsolation(), Manager: worktree.NewManager()},
 	}
 	workerFactory := taskrun.BuildAgentFactory(cfg.GuardrailConfig(), workerResolver)
-	taskRunController, ctrlErr := taskrun.NewController(context.Background(), codeagent.RoleCoder, workerFactory, runStore, taskRunSession)
+	taskRunController, ctrlErr := taskrun.NewController(
+		context.Background(),
+		codeagent.RoleCoder,
+		workerFactory,
+		runStore,
+		taskRunSession,
+		workerResolver.Worktree, // inprocess.Observer：子任务终态 merge 回主分支 + 清理
+	)
 	if ctrlErr != nil {
 		log.Fatalf("Failed to initialize taskrun controller: %v", ctrlErr)
 	}

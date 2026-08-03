@@ -176,7 +176,7 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 		}
 		defer eng.Close()
 
-		ch, rerr := eng.Stream(engine.WithUserID(c.Request.Context(), strconv.FormatUint(uid, 10)), sess.SessionKey, message,
+		ch, rerr := eng.Stream(engine.WithUserID(c.Request.Context(), strconv.FormatUint(uint64(uid), 10)), sess.SessionKey, message,
 			// 多轮记忆（M0.5-01）：从 DB 加载历史（排除刚写入的当前 user 消息）回灌引擎。
 			loadChatHistory(db, sess.ID, 1))
 		if rerr != nil {

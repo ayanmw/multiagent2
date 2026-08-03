@@ -52,6 +52,8 @@ type Config struct {
 	skillsDataDir     string // 用户私有技能根目录（env SKILLS_DATA_DIR，默认 <cwd>/data/skills）
 	skillWarmStart    bool   // 是否开启「技能 warm-start」注入（env SKILL_WARM_START，默认 true），M2-03
 	skillWarmMaxChars int    // warm-start 注入内容长度上限（控长，env SKILL_WARM_START_MAX_CHARS，默认 6000），M2-03
+	// Worktree 隔离（M2-05）：后台 taskrun 子任务在独立 git worktree 内执行，完成后 merge 回主分支。
+	worktreeIsolation bool // 是否开启 worktree 隔离（env WORKTREE_ISOLATION，默认 true），M2-05
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -236,6 +238,10 @@ func Load() *Config {
 		cfg.skillWarmMaxChars = skillrepo.DefaultWarmStartMaxChars
 	}
 
+	// Worktree 隔离（M2-05）：后台 taskrun 子任务在独立 git worktree（独立分支 taskrun/<id>）内执行，
+	// 完成后 merge 回主分支并清理，绝不 push 远程。默认开启；WORKTREE_ISOLATION=false 可关闭（退化为 M2-04 直接在主目录执行）。
+	cfg.worktreeIsolation = envOrDefaultBool("WORKTREE_ISOLATION", true)
+
 	return cfg
 }
 
@@ -359,6 +365,12 @@ func (c *Config) SkillWarmStartMaxChars() int {
 		return skillrepo.DefaultWarmStartMaxChars
 	}
 	return c.skillWarmMaxChars
+}
+
+// WorktreeIsolation reports whether background taskrun sub-tasks should execute
+// inside an isolated git worktree and merge back on completion (M2-05).
+func (c *Config) WorktreeIsolation() bool {
+	return c != nil && c.worktreeIsolation
 }
 
 func envOrDefault(key, fallback string) string {

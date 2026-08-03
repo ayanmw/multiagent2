@@ -23,6 +23,7 @@ import (
 	taskruntool "trpc.group/trpc-go/trpc-agent-go/tool/taskrun"
 
 	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
+	"github.com/ayanmw/multiagent2/server/internal/worktree"
 )
 
 // AppName 是后台任务子代理 Runner 与父 Orchestrator 共用的 app 命名空间。
@@ -35,8 +36,41 @@ const AppName = "go-multi-agent-v2"
 type WorkerResolver struct {
 	// ResolveModel 返回指定用户的框架模型实例（含已解密的 APIKey + BaseURL）。
 	ResolveModel func(ctx context.Context, userID string) (model.Model, error)
-	// ResolveWorkdir 返回指定用户 worker 的执行工作目录（已确保存在）。
+	// ResolveWorkdir 返回指定用户 worker 的「主仓库」执行工作目录（已确保存在，M1-07）。
+	// 当开启 worktree 隔离时，子代理实际工作目录会被替换为该主仓库派生的独立 worktree。
 	ResolveWorkdir func(ctx context.Context, userID string) (string, error)
+	// Worktree 是可选的 worktree 隔离钩子（M2-05）。nil 表示不隔离，沿用主目录。
+	Worktree *WorktreeHook
+}
+
+// WorktreeHook 把 git worktree 隔离接入 taskrun 生命周期（M2-05）：
+//   - BuildAgentFactory 中调用 Create 为子代理换上隔离工作目录（独立分支 taskrun/<id>）；
+//   - 作为 inprocess.Observer 在子任务终态（completed/failed/canceled）时
+//     merge 回主分支并清理 worktree（或冲突保留分支交人工）。
+//
+// Enabled=false 或 Manager=nil 时本钩子为空操作，taskrun 行为与 M2-04 一致。
+type WorktreeHook struct {
+	Enabled bool
+	Manager *worktree.Manager
+}
+
+// Create 为指定 childSessionID 创建隔离 worktree；返回实际工作目录（失败回退主目录时返回空串）。
+func (h *WorktreeHook) Create(ctx context.Context, repoDir, childSessionID string) (string, error) {
+	if !h.Enabled || h.Manager == nil {
+		return "", nil
+	}
+	return h.Manager.Create(ctx, repoDir, childSessionID)
+}
+
+// OnRunUpdate 实现 taskrun.Observer：在子任务终态时 merge 回主分支并清理 worktree。
+func (h *WorktreeHook) OnRunUpdate(ctx context.Context, run taskrunruntime.Run) {
+	if !h.Enabled || h.Manager == nil {
+		return
+	}
+	if !run.Status.IsTerminal() {
+		return
+	}
+	h.Manager.Finalize(ctx, run.ChildSessionID, string(run.Status))
 }
 
 // BuildAgentFactory 构造框架 AgentFactory：每次 spawn 时从 invocation 上下文取出
@@ -70,6 +104,13 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver) 
 		if err != nil {
 			return nil, fmt.Errorf("taskrun: 解析 worker 工作目录失败: %w", err)
 		}
+		// M2-05：若开启 worktree 隔离，把子代理的执行目录切换到独立 worktree（独立分支），
+		// 使其改动不污染主分支工作区；创建失败则回退主目录（不阻断任务）。
+		if res.Worktree != nil {
+			if wt, werr := res.Worktree.Create(ctx, wd, inv.Session.ID); werr == nil && wt != "" {
+				wd = wt
+			}
+		}
 		return codeagent.NewCoder(codeagent.Deps{
 			Model:     m,
 			Workdir:   wd,
@@ -81,9 +122,10 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver) 
 // NewController 组装后台任务控制器（框架 inprocess.Service）：
 //   - worker Runner：NewRunnerWithAgentFactory(AppName, defaultAgentName, factory)，
 //     并挂持久化 session.Service（transcript 落盘）。
-//   - inprocess.Service：用 store 持久化 run 记录（跨重启保留）；
+//   - inprocess.Service：用 store 持久化 run 记录（跨重启保留）；observer 可选，
+//     用于子任务终态钩子（M2-05 worktree merge/清理）；
 //     Start 后才能在父 Agent 调用 start_task_run 时真正派生子任务。
-func NewController(ctx context.Context, defaultAgentName string, factory runner.AgentFactory, store inprocess.Store, sessionSvc session.Service) (*inprocess.Service, error) {
+func NewController(ctx context.Context, defaultAgentName string, factory runner.AgentFactory, store inprocess.Store, sessionSvc session.Service, observer taskrunruntime.Observer) (*inprocess.Service, error) {
 	if factory == nil {
 		return nil, fmt.Errorf("taskrun: 未提供 worker 代理工厂")
 	}
@@ -92,7 +134,11 @@ func NewController(ctx context.Context, defaultAgentName string, factory runner.
 		workerOpts = append(workerOpts, runner.WithSessionService(sessionSvc))
 	}
 	workerRunner := runner.NewRunnerWithAgentFactory(AppName, defaultAgentName, factory, workerOpts...)
-	svc, err := inprocess.NewService(workerRunner, inprocess.WithStore(store))
+	svcOpts := []inprocess.Option{inprocess.WithStore(store)}
+	if observer != nil {
+		svcOpts = append(svcOpts, inprocess.WithObserver(observer))
+	}
+	svc, err := inprocess.NewService(workerRunner, svcOpts...)
 	if err != nil {
 		return nil, err
 	}

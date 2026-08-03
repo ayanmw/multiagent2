@@ -38,7 +38,7 @@ func newWorkspaceRouter(t *testing.T) (*gin.Engine, *repo.DB, string) {
 		}
 	})
 	disc := provider.NewDiscoverer(cfg.EncryptionKey, 0)
-	return buildRouter(db, cfg, disc, nil, false), db, wsRoot
+	return buildRouter(db, cfg, disc, nil, false, nil, nil), db, wsRoot
 }
 
 // TestWorkspace_API_CRUD 验证 workspace 全生命周期（建/列/查/改/删）与目录落盘。

@@ -150,7 +150,7 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 		// 多轮记忆（M0.5-01）：从 DB 加载历史（排除刚写入的当前 user 消息）回灌引擎。
 		history := loadChatHistory(db, sess.ID, 1)
 
-		reply, err := eng.Chat(engine.WithUserID(c.Request.Context(), strconv.FormatUint(uid, 10)), sessionKey, req.Message, history)
+		reply, err := eng.Chat(engine.WithUserID(c.Request.Context(), strconv.FormatUint(uint64(uid), 10)), sessionKey, req.Message, history)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "调用模型失败", "detail": err.Error()})
 			return
