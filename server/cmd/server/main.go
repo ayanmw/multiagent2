@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/ayanmw/multiagent2/server/internal/api"
+	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/ayanmw/multiagent2/server/internal/config"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/provider"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
-	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/gin-gonic/gin"
 )
 
@@ -90,23 +90,32 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.PUT("/workspaces/:id", middleware.RequirePermission(db.DB, "workspaces", "write"), api.UpdateWorkspaceHandler(db.DB))
 		protected.DELETE("/workspaces/:id", middleware.RequirePermission(db.DB, "workspaces", "write"), api.DeleteWorkspaceHandler(db.DB))
 
+		// MCP 服务器管理中心（M2-02）：用户归属的 MCP 配置 CRUD（仅管理面 + 校验，
+		// 不在此装载工具；真实装载由 M2-06 toolsearch 按需调用框架 tool/mcp）。
+		// 读操作需 mcp:read，写操作需 mcp:write（RBAC）。
+		protected.GET("/mcp", middleware.RequirePermission(db.DB, "mcp", "read"), api.ListMCPServersHandler(db.DB))
+		protected.POST("/mcp", middleware.RequirePermission(db.DB, "mcp", "write"), api.CreateMCPServerHandler(db.DB))
+		protected.GET("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "read"), api.GetMCPServerHandler(db.DB))
+		protected.PUT("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.UpdateMCPServerHandler(db.DB))
+		protected.DELETE("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.DeleteMCPServerHandler(db.DB))
+
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
 		// M1-08：AGENT_MODE=team 时根 Agent 换成 Orchestrator，代码落地委托 Coder 子代理。
 		// M1-09：team 模式默认再加入只读 Reviewer（TEAM_REVIEWER），形成「实现→审阅→修复」回环。
-	// M1-11：team 模式默认启用目标契约（GOAL_CONTRACT），Orchestrator 必须把目标
-	// 推进到 complete/blocked 才允许结束，过早的最终答复会被拦截并要求继续干活。
-	// M1-12：team 模式默认启用 Plan-Execute 循环（PLAN_EXECUTE），Orchestrator 必须
-	// 先建计划、逐项执行完毕才允许结束；二者叠加在 Orchestrator 上。
-	teamCfg := engine.TeamConfig{
-		EnableSubAgents: cfg.SubAgentsEnabled(),
-		EnableReviewer:  cfg.ReviewerEnabled(),
-		MaxReviewRounds: cfg.MaxReviewRounds(),
-		EnableGoal:      cfg.GoalEnabled(),
-		MaxGoalNudges:   cfg.MaxGoalNudges(),
-		EnablePlan:      cfg.PlanEnabled(),
-		MaxPlanNudges:   cfg.MaxPlanNudges(),
-		Guardrail:       cfg.GuardrailConfig(), // M1-13：护栏熔断预算（默认启用）
-	}
+		// M1-11：team 模式默认启用目标契约（GOAL_CONTRACT），Orchestrator 必须把目标
+		// 推进到 complete/blocked 才允许结束，过早的最终答复会被拦截并要求继续干活。
+		// M1-12：team 模式默认启用 Plan-Execute 循环（PLAN_EXECUTE），Orchestrator 必须
+		// 先建计划、逐项执行完毕才允许结束；二者叠加在 Orchestrator 上。
+		teamCfg := engine.TeamConfig{
+			EnableSubAgents: cfg.SubAgentsEnabled(),
+			EnableReviewer:  cfg.ReviewerEnabled(),
+			MaxReviewRounds: cfg.MaxReviewRounds(),
+			EnableGoal:      cfg.GoalEnabled(),
+			MaxGoalNudges:   cfg.MaxGoalNudges(),
+			EnablePlan:      cfg.PlanEnabled(),
+			MaxPlanNudges:   cfg.MaxPlanNudges(),
+			Guardrail:       cfg.GuardrailConfig(), // M1-13：护栏熔断预算（默认启用）
+		}
 		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState))
 
 		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化

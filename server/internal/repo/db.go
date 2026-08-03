@@ -42,6 +42,7 @@ func NewDB(cfg *config.Config) (*DB, error) {
 		&model.Session{},
 		&model.Message{},
 		&model.Workspace{},
+		&model.MCPServer{},
 		&model.Role{},
 		&model.RolePermission{},
 	); err != nil {
