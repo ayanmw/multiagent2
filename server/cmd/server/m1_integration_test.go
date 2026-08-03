@@ -151,7 +151,7 @@ func TestM1_HTTP_Integration_E2E(t *testing.T) {
 		}
 	}()
 	disc := provider.NewDiscoverer(cfg.EncryptionKey, time.Minute)
-	r := buildRouter(db, cfg, disc, nil, false, nil, nil)
+	r := buildRouter(db, cfg, disc, nil, false, nil, nil, nil)
 	c := &e2eClient{t: t, r: r}
 
 	// 1) 注册 → 登录

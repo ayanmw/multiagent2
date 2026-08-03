@@ -54,6 +54,9 @@ type Config struct {
 	skillWarmMaxChars int    // warm-start 注入内容长度上限（控长，env SKILL_WARM_START_MAX_CHARS，默认 6000），M2-03
 	// Worktree 隔离（M2-05）：后台 taskrun 子任务在独立 git worktree 内执行，完成后 merge 回主分支。
 	worktreeIsolation bool // 是否开启 worktree 隔离（env WORKTREE_ISOLATION，默认 true），M2-05
+	// 延迟工具箱（M2-06）：把 MCP 服务器工具经 tool_search/call_tool 双控制工具按需暴露给 Agent，
+	// 默认不把全部工具声明一次性灌进模型上下文，避免 token 随工具数线性膨胀。
+	toolSearchEnabled bool // 是否开启延迟工具箱（env TOOL_SEARCH_ENABLED，默认 true），M2-06
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -242,6 +245,10 @@ func Load() *Config {
 	// 完成后 merge 回主分支并清理，绝不 push 远程。默认开启；WORKTREE_ISOLATION=false 可关闭（退化为 M2-04 直接在主目录执行）。
 	cfg.worktreeIsolation = envOrDefaultBool("WORKTREE_ISOLATION", true)
 
+	// 延迟工具箱（M2-06）：默认开启；把 MCP 服务器工具经 tool_search/call_tool 按需暴露，
+	// 避免上下文随工具数线性膨胀。TOOL_SEARCH_ENABLED=false 可关闭（纯调试 / 无 MCP 配置场景）。
+	cfg.toolSearchEnabled = envOrDefaultBool("TOOL_SEARCH_ENABLED", true)
+
 	return cfg
 }
 
@@ -371,6 +378,14 @@ func (c *Config) SkillWarmStartMaxChars() int {
 // inside an isolated git worktree and merge back on completion (M2-05).
 func (c *Config) WorktreeIsolation() bool {
 	return c != nil && c.worktreeIsolation
+}
+
+// ToolSearchEnabled reports whether the lazy toolbox (M2-06) is turned on.
+// When on, the engine exposes tool_search/call_tool control tools so the model
+// can discover and invoke MCP tools on demand instead of loading every tool
+// declaration into the context upfront.
+func (c *Config) ToolSearchEnabled() bool {
+	return c != nil && c.toolSearchEnabled
 }
 
 func envOrDefault(key, fallback string) string {

@@ -48,7 +48,10 @@ type chatResponse struct {
 // 根 Agent 挂 StateEnforcer，把 PLAN/PROGRESS/LEARNINGS 落盘以支持中断续跑。
 // skillRoot/skillDataDir/skillWarmStart/skillMaxChars 驱动「技能 warm-start」（M2-03）：
 // 会话开始时把 [共享根, 用户私有根] 交给技能仓库扫描，相关 SKILL.md 注入根 Agent 系统上下文。
-func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int, taskRunController taskrunruntime.Controller, taskRunSession session.Service) gin.HandlerFunc {
+// toolSearchEnabled/toolSearchProvider 驱动「延迟工具箱」（M2-06）：开启时引擎挂 tool_search/call_tool
+// 双控制工具，把 MCP 服务器工具按需暴露给模型，避免全部工具声明一次性灌进上下文导致 token 膨胀。
+// provider 按当前 uid 做 owner 隔离（仅加载该用户启用的 MCP 配置）。
+func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchEnabled bool, toolSearchProvider engine.ToolSearchProvider) gin.HandlerFunc {
 	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
@@ -140,6 +143,10 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			// M2-04：注入后台任务控制器与持久化 session（transcript）。
 			TaskRunController: taskRunController,
 			TaskRunSession:    taskRunSession,
+			// M2-06：延迟工具箱（tool_search/call_tool 双控制工具），按 uid 做 owner 隔离。
+			ToolSearchEnabled:  toolSearchEnabled,
+			ToolSearchProvider: toolSearchProvider,
+			ToolSearchUserID:   uid,
 		})
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

@@ -48,7 +48,8 @@ type streamChatRequest struct {
 // （Orchestrator→Coder），叠加 EnableReviewer=true 时加入只读 Reviewer 形成审阅回环。
 // stateStore 与 enableState 驱动「工作状态外置」（M1-16），语义同 ChatHandler。
 // skillRoot/skillDataDir/skillWarmStart/skillMaxChars 驱动「技能 warm-start」（M2-03），语义同 ChatHandler。
-func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int, taskRunController taskrunruntime.Controller, taskRunSession session.Service) gin.HandlerFunc {
+// toolSearchEnabled/toolSearchProvider 驱动「延迟工具箱」（M2-06），按 uid 做 owner 隔离，语义同 ChatHandler。
+func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchEnabled bool, toolSearchProvider engine.ToolSearchProvider) gin.HandlerFunc {
 	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
@@ -168,6 +169,10 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 			// M2-04：注入后台任务控制器与持久化 session（transcript）。
 			TaskRunController: taskRunController,
 			TaskRunSession:    taskRunSession,
+			// M2-06：延迟工具箱（tool_search/call_tool 双控制工具），按 uid 做 owner 隔离。
+			ToolSearchEnabled:  toolSearchEnabled,
+			ToolSearchProvider: toolSearchProvider,
+			ToolSearchUserID:   uid,
 		})
 		if err != nil {
 			emit("RUN_ERROR", gin.H{"message": err.Error()})

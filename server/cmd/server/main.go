@@ -30,12 +30,16 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/ayanmw/multiagent2/server/internal/sessionstore"
 	"github.com/ayanmw/multiagent2/server/internal/taskrun"
+	"github.com/ayanmw/multiagent2/server/internal/toolsearch"
 	"github.com/ayanmw/multiagent2/server/internal/worktree"
 	"github.com/gin-gonic/gin"
 )
 
 // buildRouter 构造 Gin 路由（含全部 API 路由），抽出来便于在集成测试中进程内复用。
-func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, stateStore artifact.Store, enableState bool, taskRunController taskrunruntime.Controller, taskRunSession session.Service) *gin.Engine {
+// toolSearchProvider 是「延迟工具箱」按需提供者（M2-06）：按当前 uid 聚合该用户启用的
+// MCP 服务器工具箱（工具默认不暴露，由 tool_search/call_tool 双控制工具按需调用）。
+// 传 nil 表示不挂载延迟工具箱（如集成测试）。
+func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, stateStore artifact.Store, enableState bool, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchProvider engine.ToolSearchProvider) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 
@@ -149,7 +153,7 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 			MaxPlanNudges:   cfg.MaxPlanNudges(),
 			Guardrail:       cfg.GuardrailConfig(), // M1-13：护栏熔断预算（默认启用）
 		}
-		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars(), taskRunController, taskRunSession))
+		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars(), taskRunController, taskRunSession, cfg.ToolSearchEnabled(), toolSearchProvider))
 
 		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化
 		// M0.5-06：message 改由 POST body 传递（避免明文进访问日志），故注册为 POST。
@@ -157,10 +161,41 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// 未绑定时回退 WorkspaceRoot/<uid>。workspace_key 经请求体传入。
 		// M1-16：stateStore/enableState 驱动「工作状态外置」，使长任务中断后续跑能接上。
 		// M2-03：skillWarmStart 等参数驱动「技能 warm-start」注入系统上下文。
-		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars(), taskRunController, taskRunSession))
+		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars(), taskRunController, taskRunSession, cfg.ToolSearchEnabled(), toolSearchProvider))
 	}
 
 	return r
+}
+
+// buildToolSearchProvider 构造「延迟工具箱」按需提供者（M2-06）。引擎在每次对话开始时调用它，
+// 按当前 uid 聚合该用户「已启用」的 MCP 服务器工具箱；工具默认不暴露给模型，由 tool_search/
+// call_tool 双控制工具按需检索与调用。单个服务器连接/初始化失败安全跳过（fail-open），不阻断
+// 对话；仅当全部服务器都不可用时才返回空工具箱（引擎据此不挂载双控制工具）。
+func buildToolSearchProvider(db *repo.DB) engine.ToolSearchProvider {
+	return func(ctx context.Context, userID uint) (*toolsearch.Toolbox, error) {
+		servers, err := repo.ListMCPServers(db.DB, userID)
+		if err != nil {
+			return nil, err
+		}
+		var box *toolsearch.Toolbox
+		for i := range servers {
+			s := servers[i]
+			if !s.Enabled {
+				continue
+			}
+			tb, lerr := toolsearch.LoadMCPServerTools(ctx, s)
+			if lerr != nil {
+				// 单个服务器不可用安全跳过，而非阻断整轮对话。
+				log.Printf("[WARN] toolsearch: 加载 MCP 服务器 %q 工具失败: %v", s.Name, lerr)
+				continue
+			}
+			if box == nil {
+				box = toolsearch.NewToolbox()
+			}
+			box.Merge(tb)
+		}
+		return box, nil
+	}
 }
 
 func main() {
@@ -256,7 +291,7 @@ func main() {
 		log.Fatalf("Failed to initialize taskrun controller: %v", ctrlErr)
 	}
 
-	r := buildRouter(db, cfg, discoverer, stateStore, enableState, taskRunController, taskRunSession)
+	r := buildRouter(db, cfg, discoverer, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db))
 
 	// Graceful shutdown
 	go func() {

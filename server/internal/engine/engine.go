@@ -22,6 +22,7 @@ import (
 	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/ayanmw/multiagent2/server/internal/skillrepo"
+	"github.com/ayanmw/multiagent2/server/internal/toolsearch"
 )
 
 // defaultInstruction 是 Agent 的系统提示词（中文优先，编程助手定位）。
@@ -76,7 +77,21 @@ type ModelConfig struct {
 	// TaskRunSession 是后台任务 child session 的持久化 session.Service（M2-04 ①）：
 	// 落盘子任务事件/transcript，进程重启后仍能读回。为空则 read_task_run_transcript 不挂载。
 	TaskRunSession session.Service
+	// ToolSearchEnabled 开启「延迟工具箱」（M2-06）：把 MCP 服务器工具经一对控制工具
+	// tool_search（检索）/call_tool（按需调用）暴露给 Agent，默认不把全部工具的声明
+	// 一次性灌进模型上下文，避免 token 随工具数线性膨胀。
+	ToolSearchEnabled bool
+	// ToolSearchProvider 在每次对话时按需构建延迟工具箱（默认不暴露全部工具）。
+	// 返回 nil 表示当前用户没有可用工具，引擎将不挂载 tool_search/call_tool 双工具。
+	ToolSearchProvider ToolSearchProvider
+	// ToolSearchUserID 是当前对话归属用户，供 provider 做 owner 隔离（M2-02 MCP 配置按用户隔离）。
+	ToolSearchUserID uint
 }
+
+// ToolSearchProvider 在每次对话时按需构建延迟工具箱的回调（M2-06）。
+// 入参 userID 取自当前对话归属用户；返回 nil 表示无可暴露工具（引擎安全跳过）。
+// 任何内部错误都应返回 error，引擎据此 fail-open（跳过工具箱而非阻断对话）。
+type ToolSearchProvider func(ctx context.Context, userID uint) (*toolsearch.Toolbox, error)
 
 // TeamConfig 是 CodeTeam 编排配置（M1-09），定义在 internal/agent 包内，
 // 此处以类型别名再导出，使 api/cmd 层无需直连 codeagent 包即可配置团队。
@@ -86,6 +101,8 @@ type TeamConfig = codeagent.TeamConfig
 type Engine struct {
 	cfg    ModelConfig
 	runner runner.Runner
+	// toolbox 是延迟工具箱（M2-06），若启用则持有本轮对话的 MCP 连接，Close 时释放。
+	toolbox *toolsearch.Toolbox
 }
 
 // New 依据 ModelConfig 构造 Agent 引擎（openai 兼容协议）。
@@ -121,6 +138,20 @@ func New(cfg ModelConfig) (*Engine, error) {
 			taskruntool.WithSessionService(cfg.TaskRunSession),
 		)
 		allTools = append(allTools, trTools.All()...)
+	}
+
+	// 延迟工具箱（M2-06）：把 MCP 服务器工具经 tool_search/call_tool 双控制工具按需暴露，
+	// 默认不把全部工具注册进 Agent 上下文（避免 token 随工具数线性膨胀）。
+	// 仅在启用、且有可用工具时才挂载双工具；provider 报错安全跳过（fail-open）。
+	var box *toolsearch.Toolbox
+	if cfg.ToolSearchEnabled && cfg.ToolSearchProvider != nil {
+		if b, berr := cfg.ToolSearchProvider(context.Background(), cfg.ToolSearchUserID); berr != nil {
+			// 构建失败不阻断对话：仅跳过工具箱（MCP 连接异常 / 用户无配置等）。
+			box = nil
+		} else if b != nil && b.Len() > 0 {
+			box = b
+			allTools = append(allTools, toolsearch.NewToolSearch(box), toolsearch.NewCallTool(box))
+		}
 	}
 
 	// 技能 warm-start（M2-03）：会话开始时把相关 SKILL.md 渲染成系统上下文片段，
@@ -183,7 +214,7 @@ func New(cfg ModelConfig) (*Engine, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 90 * time.Second
 	}
-	return &Engine{cfg: cfg, runner: r}, nil
+	return &Engine{cfg: cfg, runner: r, toolbox: box}, nil
 }
 
 // Stream 发送一条用户消息并返回 Agent 事件流（channel）。
@@ -272,7 +303,11 @@ func (e *Engine) Chat(ctx context.Context, sessionID, userMessage string, histor
 }
 
 // Close 释放 Runner 持有的资源（内存 session 等）。
+// 若本轮启用了延迟工具箱（M2-06），同时释放其持有的 MCP 连接，避免连接泄漏。
 func (e *Engine) Close() error {
+	if e.toolbox != nil {
+		_ = e.toolbox.Close()
+	}
 	if e.runner != nil {
 		return e.runner.Close()
 	}
