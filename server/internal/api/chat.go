@@ -108,7 +108,9 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 		var tools []tool.Tool
 		if !enableSubAgents {
 			var tErr error
-			tools, tErr = codectool.NewCodeAct(workdir)
+			// M2-01：单代理模式同样装配 Git 工具集（git_status/git_diff/git_commit/git_log/git_branch），
+			// 使其能对工作区改动进行版本管理；team 模式下则由 Coder 子代理持有（见 codeagent.NewCoder）。
+			tools, tErr = codectool.NewCodeActWithGit(workdir)
 			if tErr != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "构建代码执行工具失败: " + tErr.Error()})
 				return

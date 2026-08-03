@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
+	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -68,6 +71,16 @@ func CreateWorkspaceHandler(db *gorm.DB, workspaceRoot string) gin.HandlerFunc {
 		if err := os.MkdirAll(localPath, 0o755); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create workspace directory"})
 			return
+		}
+
+		// 自动 git init（M2-01）：workspace 创建时即初始化为 git 仓库，
+		// 使后续代码改动可由 Coder 经 git_commit 提交管理（验收要求「建 workspace→自动 init」）。
+		// best-effort：git 缺失或初始化失败不阻断 workspace 创建，仅打印告警。
+		// 经 executor.SafeExecutor 执行（与 CodeAct 同款危险命令策略），禁止裸用 os/exec。
+		if ex, gerr := codectool.NewGitExecutor(localPath); gerr == nil {
+			if _, ierr := codectool.GitInit(context.Background(), ex); ierr != nil {
+				log.Printf("[WARN] workspace %s 自动 git init 失败（已忽略）：%v", key, ierr)
+			}
 		}
 
 		w := &model.Workspace{

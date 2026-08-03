@@ -324,4 +324,12 @@
 - 验证：`go test ./internal/engine/ -count=1` 全绿，**`TestEngine_M1_FullChain_TeamGoalComplete` 在沙箱实跑 PASS**（0.05s）；`go vet ./cmd/server/` 对含新测试的整包**类型检查通过（exit 0）**。已知环境限制：本沙箱 `CGO_ENABLED=0` 无 gcc，`go-sqlite3` 链接期桩报错使 `cmd/server` 包测试无法运行（仅运行时阻断，非代码问题），`TestM1_HTTP_Integration_E2E` 在具备 gcc 的环境可正常编译运行（与 M1-16 既定模式一致）。未改动任何生产代码，仅新增测试文件；`go build/vet` 对非 CGO 包无影响。
 - 下一步：**M1 阶段全部 ✅（M1-04..17），M1 收口**。下一步可进入 M2（生态：MCP/Skills/Git+taskrun 后台任务/Worktree 隔离/toolsearch）或按 PLAN 既定里程碑推进；本轮循环 STOP。
 
+---
+
+### 2026-08-03 22:40 | M2-01 | ✅
+- 完成内容：**Git 基础 & workspace 绑定（M2 生态首任务）**。① 新增 `server/internal/tool/git.go`（包 `codectool`）：Git 工具集 `git_status`/`git_diff`/`git_commit`/`git_log`/`git_branch`，全部经 `executor.SafeExecutor`（与 CodeAct 同款危险命令策略，正常 git 子命令放行、仅 `git push --force`/`git reset --hard`/`git checkout --`/`git clean -f` 等降级 deny）；纯函数 `GitInit/GitStatus/GitDiff/GitCommit/GitLog/GitBranch` 与工具包装层分离；`NewGitTools(workdir)` 返回 5 个工具，`NewCodeActWithGit(workdir)` = `NewCodeAct` + `NewGitTools`（供单代理模式）。② workspace 创建时 best-effort 自动 `git init`：`internal/api/workspace.go` 的 `CreateWorkspaceHandler` 在 `os.MkdirAll` 后调 `codectool.NewGitExecutor`+`GitInit`（失败仅告警不阻断）。③ 接线：`internal/agent/factory.go` 的 `NewCoder` 装配 Git 工具集（CoderInstruction 说明可用 git_* 提交改动，team 模式下由 Coder 持有）；`internal/api/{chat,sse}.go` 单代理分支由 `codectool.NewCodeAct(workdir)` 改 `codectool.NewCodeActWithGit(workdir)`（team 模式仍由 Coder 子代理持有，不重复装配）。④ **关键修复（跨平台坑）**：原 `runGit` 拼接 `git commit -m "..."` 经 `cmd.exe /c` 执行，Go 给整条命令加外层引号并把内部引号转义为 `\"`，cmd 移除外层引号后内部 `\"` 泄露给 git，导致含空格提交说明被解析崩坏（`pathspec 'hello.txt"' did not match`）。彻底方案：给 `executor.Executor` 接口**新增 `RunCommand(ctx, name, args...)`（argv 直调，不经 shell）**，HostExecutor/SafeExecutor 均补齐（策略评估+审计+超时+退出码映射语义与 Run 一致），git 工具集改用 `ex.RunCommand(ctx, "git", args...)`，既消除引号转义问题又缩小命令注入面。
+- Commit: <pending>
+- 验证: `go build ./...` 非 CGO 包全绿（executor/tool/engine/agent 等；`internal/api`/`cmd/server` 依赖 go-sqlite3 的 CGO 测试本沙箱无 gcc 跳过，属历史环境限制）；`go vet` 同包绿；`go test -count=1 ./internal/executor/... ./internal/tool/... ./internal/engine/... ./internal/agent/...` **全绿**（含 `TestGitTools_FullChain`/`TestNewCodeActWithGit_ToolSet`/`TestNewGitTools_RequiresWorkdir` + `git_integration_test.go::TestEngine_CoderGitCommit_Workspace` 断言「coder 写 hello.txt + 初始提交 + 修改已跟踪文件后 git_status 显示改动、git_diff 显示改动、git_log 含提交说明」PASS）；`gofmt -e` 对全部改动文件语法校验通过。
+- 下一步：PLAN 中 **M2-02（MCP 管理中心后端）** 成为下一个 ○，无依赖、可独立进行。
+
 

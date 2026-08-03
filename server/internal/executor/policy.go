@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -146,6 +147,46 @@ func (s *SafeExecutor) Run(ctx context.Context, command string) (*Result, error)
 		return s.inner.Run(ctx, command)
 	default:
 		return s.inner.Run(ctx, command)
+	}
+}
+
+// WorkCommand 以 argv 形式执行命令（透传给底层 Executor.RunCommand），
+// 策略评估与审计逻辑与 Run 完全一致，仅把 argv 拼成命令字符串用于评估。
+func (s *SafeExecutor) RunCommand(ctx context.Context, name string, args ...string) (*Result, error) {
+	command := name
+	if len(args) > 0 {
+		command += " " + strings.Join(args, " ")
+	}
+	if s.policy == nil {
+		// 无策略：放行（调用方明确知情，仅用于测试/受信任环境）。
+		return s.inner.RunCommand(ctx, name, args...)
+	}
+	decision, reason := s.policy.Evaluate(command)
+	switch decision {
+	case DecisionAllow:
+		s.auditor.Record(AuditEntry{
+			Timestamp: time.Now(), Command: command, Workdir: s.inner.Workdir(),
+			Decision: DecisionAllow, Reason: "策略放行", Allowed: true,
+		})
+		return s.inner.RunCommand(ctx, name, args...)
+	case DecisionDeny:
+		s.auditor.Record(AuditEntry{
+			Timestamp: time.Now(), Command: command, Workdir: s.inner.Workdir(),
+			Decision: DecisionDeny, Reason: reason, Allowed: false,
+		})
+		return nil, fmt.Errorf("%w: %s", ErrCommandDenied, reason)
+	case DecisionAsk:
+		allow := s.ask != nil && s.ask(command, reason)
+		s.auditor.Record(AuditEntry{
+			Timestamp: time.Now(), Command: command, Workdir: s.inner.Workdir(),
+			Decision: DecisionAsk, Reason: reason, Allowed: allow, Note: "交互模式确认",
+		})
+		if !allow {
+			return nil, fmt.Errorf("%w: %s", ErrCommandDenied, reason)
+		}
+		return s.inner.RunCommand(ctx, name, args...)
+	default:
+		return s.inner.RunCommand(ctx, name, args...)
 	}
 }
 

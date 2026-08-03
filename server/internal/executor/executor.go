@@ -25,6 +25,12 @@ type Executor interface {
 	// 命令的具体解释由实现决定（HostExecutor 走 shell -c）。
 	Run(ctx context.Context, command string) (*Result, error)
 
+	// RunCommand 以 argv 形式（程序名 + 参数列表）直接执行命令，不经过 shell 字符串解析，
+	// 避免 Windows cmd.exe 引号转义等跨平台差异；其余语义（cwd 约束、超时、退出码映射）
+	// 与 Run 一致。适用于 git 这类需精确传递含空格参数（如提交说明）的外部程序，
+	// 同时缩小命令注入面（参数不再经 shell 重新分词）。
+	RunCommand(ctx context.Context, name string, args ...string) (*Result, error)
+
 	// Workdir 返回当前受限工作目录的绝对路径（供工具、审计与展示使用）。
 	Workdir() string
 }

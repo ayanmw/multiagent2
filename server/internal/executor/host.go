@@ -93,12 +93,39 @@ func (h *HostExecutor) Run(ctx context.Context, command string) (*Result, error)
 	defer cancel()
 
 	var stdout, stderr bytes.Buffer
-	args := append(append([]string{}, h.shell[1:]...), command)
-	cmd := exec.CommandContext(runCtx, h.shell[0], args...)
+	shellArgs := append(append([]string{}, h.shell[1:]...), command)
+	cmd := exec.CommandContext(runCtx, h.shell[0], shellArgs...)
 	cmd.Dir = h.workdir // 关键：把所有命令约束在该工作目录下
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	return h.finishCommand(cmd, runCtx, timeout, &stdout, &stderr)
+}
 
+// RunCommand 以 argv 形式直接执行 name + args，不经过 shell 字符串解析。
+// 其余语义（cwd 约束、超时、退出码映射）与 Run 完全一致。
+// 适用于 git 这类需精确传递含空格参数（如提交说明）的外部程序，
+// 规避 Windows cmd.exe 对带引号命令字符串的二次解析导致的参数崩坏。
+func (h *HostExecutor) RunCommand(ctx context.Context, name string, args ...string) (*Result, error) {
+	if name == "" {
+		return nil, fmt.Errorf("executor: 程序名不能为空")
+	}
+	timeout := h.timeout
+	if timeout <= 0 {
+		timeout = defaultHostTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(runCtx, name, args...)
+	cmd.Dir = h.workdir
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	return h.finishCommand(cmd, runCtx, timeout, &stdout, &stderr)
+}
+
+// finishCommand 运行已构造好的 *exec.Cmd，收集输出并按统一规则映射退出码。
+func (h *HostExecutor) finishCommand(cmd *exec.Cmd, runCtx context.Context, timeout time.Duration, stdout, stderr *bytes.Buffer) (*Result, error) {
 	res := &Result{ExitCode: 0}
 	err := cmd.Run()
 	if err != nil {
@@ -117,7 +144,7 @@ func (h *HostExecutor) Run(ctx context.Context, command string) (*Result, error)
 			res.ExitCode = exitErr.ExitCode()
 			return res, nil
 		}
-		// 命令启动失败（shell 缺失、权限等）：返回错误。
+		// 命令启动失败（程序缺失、权限等）：返回错误。
 		return nil, fmt.Errorf("executor: 命令启动失败: %w", err)
 	}
 	res.Stdout = stdout.String()

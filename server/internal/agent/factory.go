@@ -44,6 +44,9 @@ const (
 // CoderInstruction 是 Coder 子代理的系统提示词：强调「必须真正调用工具」。
 const CoderInstruction = "你是 Coder 子代理，负责在受限的工作目录内真正落地代码改动。" +
 	"你可以使用 shell_exec（执行命令）、file_read（读文件）、file_write（写文件）、file_edit（改文件）工具。" +
+	"工作区已自动 git init（若尚未提交过），你还可以使用 git_status/git_diff/git_commit/git_log/git_branch " +
+	"工具对改动进行版本管理：完成一批改动后调用 git_commit 提交（message 写明本次改了什么），" +
+	"提交前可用 git_status/git_diff 确认改动范围。" +
 	"收到任务后必须实际调用工具完成改动，不要只给出计划或代码片段而不执行。" +
 	"完成后用一段简短中文说明你做了什么（改动了哪些文件、执行了哪些命令、结果如何）。" +
 	"若命令被安全策略拒绝，请如实说明并给出更安全的替代方案。"
@@ -106,9 +109,16 @@ func NewCoder(d Deps) (agent.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	// M2-01：Coder 同时持有 Git 工具集（git_status/git_diff/git_commit/git_log/git_branch），
+	// 使其在完成代码改动后能显式提交到 workspace 的 git 仓库。
+	gitTools, gerr := codectool.NewGitTools(d.Workdir)
+	if gerr != nil {
+		return nil, gerr
+	}
+	tools = append(tools, gitTools...)
 	opts := []llmagent.Option{
 		llmagent.WithModel(d.Model),
-		llmagent.WithDescription("在受限工作目录内实际落地代码改动的子代理（可执行命令、读写与编辑文件）"),
+		llmagent.WithDescription("在受限工作目录内实际落地代码改动的子代理（可执行命令、读写与编辑文件，并提交 git）"),
 		llmagent.WithInstruction(CoderInstruction),
 		llmagent.WithTools(tools),
 	}
