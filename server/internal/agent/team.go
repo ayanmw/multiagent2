@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	goalpkg "github.com/ayanmw/multiagent2/server/internal/goal"
+	planpkg "github.com/ayanmw/multiagent2/server/internal/plan"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
 
@@ -68,6 +69,16 @@ type TeamConfig struct {
 	MaxGoalNudges int
 	// GoalStore 可选注入目标存储（测试与上层可观测用）；为空时内部自建。
 	GoalStore *goalpkg.Store
+	// EnablePlan 开启 Plan-Execute 循环（M1-12）：为 Orchestrator 注入
+	// create_plan/get_plan/update_step/add_steps 四个工具，并强制「计划未做完不许结束」。
+	// 仅在 EnableSubAgents=true 时生效——契约只装根编排者，子代理不装。
+	// 与 M1-11 目标契约分工：Goal 管「要不要收工」，Plan 管「怎么一步步干」，二者可叠加。
+	EnablePlan bool
+	// MaxPlanNudges 是「最多拦截几次计划未做完就收工的答复」；<=0 时取 DefaultMaxPlanNudges。
+	// 超出后放行（fail-open），避免模型不配合时把整轮 Run 卡死。
+	MaxPlanNudges int
+	// PlanStore 可选注入计划存储（测试与上层可观测用）；为空时内部自建。
+	PlanStore *planpkg.Store
 }
 
 // normalized 返回补齐默认值后的配置副本。
@@ -77,6 +88,9 @@ func (c TeamConfig) normalized() TeamConfig {
 	}
 	if c.MaxGoalNudges <= 0 {
 		c.MaxGoalNudges = DefaultMaxGoalNudges
+	}
+	if c.MaxPlanNudges <= 0 {
+		c.MaxPlanNudges = DefaultMaxPlanNudges
 	}
 	return c
 }
@@ -89,6 +103,11 @@ func (c TeamConfig) reviewerEnabled() bool {
 // goalEnabled 报告是否应当装配目标契约（同样依赖子代理模式已开启）。
 func (c TeamConfig) goalEnabled() bool {
 	return c.EnableSubAgents && c.EnableGoal
+}
+
+// planEnabled 报告是否应当装配 Plan-Execute 循环（同样依赖子代理模式已开启）。
+func (c TeamConfig) planEnabled() bool {
+	return c.EnableSubAgents && c.EnablePlan
 }
 
 // ReadOnlyTools 返回 Reviewer 可用的只读工具集（file_read + grep，M1-10）。
@@ -153,6 +172,9 @@ func teamInstruction(cfg TeamConfig) string {
 	}
 	if cfg.goalEnabled() {
 		base += GoalInstruction
+	}
+	if cfg.planEnabled() {
+		base += PlanInstruction
 	}
 	return base
 }
@@ -221,6 +243,15 @@ func NewTeam(d Deps, cfg TeamConfig) (agent.Agent, error) {
 		opts = append(opts, llmagent.WithExtensions(NewGoalEnforcer(
 			WithGoalMaxNudges(cfg.MaxGoalNudges),
 			WithGoalStore(cfg.GoalStore),
+		)))
+	}
+	if cfg.planEnabled() {
+		// Plan-Execute 与目标契约同款约束：不开并行工具，保证 AfterModel 能可靠判定
+		// 「还在执行计划」与「过早收工」。二者都装根编排者，回调用安装顺序短路，
+		// 可叠加：先要求立目标，再要求把计划做完（见 plan.go 顶部说明）。
+		opts = append(opts, llmagent.WithExtensions(NewPlanEnforcer(
+			WithPlanMaxNudges(cfg.MaxPlanNudges),
+			WithPlanStore(cfg.PlanStore),
 		)))
 	}
 	return llmagent.New(RoleOrchestrator, opts...), nil

@@ -34,6 +34,8 @@ type Config struct {
 	TeamMaxReviewRounds  int    // 「实现→审阅→修复」回环轮数上限（env TEAM_MAX_REVIEW_ROUNDS，默认 2），M1-09
 	GoalContract         bool   // team 模式下是否启用目标契约（env GOAL_CONTRACT，默认 true），M1-11
 	GoalMaxNudges        int    // 目标未达成时最多拦截几次过早的最终答复（env GOAL_MAX_NUDGES，默认 3），M1-11
+	PlanExecute          bool   // team 模式下是否启用 Plan-Execute 循环（env PLAN_EXECUTE，默认 true），M1-12
+	PlanMaxNudges        int    // 计划未做完时最多拦截几次过早的最终答复（env PLAN_MAX_NUDGES，默认 3），M1-12
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -42,6 +44,10 @@ const DefaultMaxReviewRounds = 2
 // DefaultGoalMaxNudges 是目标契约默认的最大拦截次数（M1-11）。
 // 超出后 fail-open 放行，避免模型不配合时把整轮 Run 卡死。
 const DefaultGoalMaxNudges = 3
+
+// DefaultMaxPlanNudges 是 Plan-Execute 循环默认的最大拦截次数（M1-12）。
+// 超出后 fail-open 放行，避免模型不配合时把整轮 Run 卡死。
+const DefaultMaxPlanNudges = 3
 
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
@@ -123,6 +129,16 @@ func Load() *Config {
 		cfg.GoalMaxNudges = DefaultGoalMaxNudges
 	}
 
+	// Plan-Execute 循环配置（M1-12）：team 模式下默认开启，Orchestrator 必须先建计划、
+	// 逐项执行完毕才允许结束（requirePlan 默认 false，一句话能答完的请求不强制建计划）；
+	// PLAN_EXECUTE=false 可关闭（退回 M1-11 行为）。
+	cfg.PlanExecute = envOrDefaultBool("PLAN_EXECUTE", true)
+	cfg.PlanMaxNudges = envOrDefaultInt("PLAN_MAX_NUDGES", DefaultMaxPlanNudges)
+	if cfg.PlanMaxNudges <= 0 {
+		log.Printf("[WARN] PLAN_MAX_NUDGES must be positive; using default %d", DefaultMaxPlanNudges)
+		cfg.PlanMaxNudges = DefaultMaxPlanNudges
+	}
+
 	return cfg
 }
 
@@ -160,6 +176,22 @@ func (c *Config) MaxGoalNudges() int {
 		return DefaultGoalMaxNudges
 	}
 	return c.GoalMaxNudges
+}
+
+// PlanEnabled reports whether the Plan-Execute loop is installed on the
+// orchestrator (M1-12). It requires the team (sub-agent) mode to be enabled:
+// the loop is a root-agent-only capability.
+func (c *Config) PlanEnabled() bool {
+	return c.SubAgentsEnabled() && c.PlanExecute
+}
+
+// MaxPlanNudges returns the configured premature-final block budget for the
+// plan loop, falling back to DefaultMaxPlanNudges when unset or invalid.
+func (c *Config) MaxPlanNudges() int {
+	if c == nil || c.PlanMaxNudges <= 0 {
+		return DefaultMaxPlanNudges
+	}
+	return c.PlanMaxNudges
 }
 
 // EngineTimeout returns the duration used to bound a single LLM streaming run.
