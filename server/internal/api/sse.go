@@ -11,6 +11,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
+	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	framework "trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -41,7 +42,8 @@ type streamChatRequest struct {
 // workspaceRoot 为用户工作区根目录（M1-06 CodeAct 工具的执行根，按 <root>/<uid> 隔离）。
 // team 为 CodeTeam 编排配置（M1-08/M1-09）：EnableSubAgents=true 启用子代理委托
 // （Orchestrator→Coder），叠加 EnableReviewer=true 时加入只读 Reviewer 形成审阅回环。
-func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig) gin.HandlerFunc {
+// stateStore 与 enableState 驱动「工作状态外置」（M1-16），语义同 ChatHandler。
+func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool) gin.HandlerFunc {
 	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
@@ -143,14 +145,16 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 			}
 		}
 		eng, err := engine.New(engine.ModelConfig{
-			ModelID:  m.ModelID,
-			BaseURL:  p.BaseURL,
-			APIKey:   apiKey,
-			Protocol: string(p.Protocol),
-			Timeout:  engineTimeout,
-			Tools:    tools,
-			Team:     team,
-			Workdir:  workdir,
+			ModelID:    m.ModelID,
+			BaseURL:    p.BaseURL,
+			APIKey:     apiKey,
+			Protocol:   string(p.Protocol),
+			Timeout:    engineTimeout,
+			Tools:      tools,
+			Team:       team,
+			Workdir:    workdir,
+			EnableState: enableState,
+			StateStore: stateStore,
 		})
 		if err != nil {
 			emit("RUN_ERROR", gin.H{"message": err.Error()})

@@ -31,6 +31,8 @@ type Config struct {
 	EncryptionKey        []byte // 32-byte key for AES-256-GCM (provider API keys at rest)
 	EngineTimeoutSeconds int    // timeout (s) for a single LLM run (env ENGINE_TIMEOUT_SECONDS)
 	WorkspaceRoot        string // 用户工作区根目录（env WORKSPACE_ROOT，默认 data/workspaces），M1-06 CodeAct 工具的执行根
+	artifactRoot         string // 工作状态文件根目录（env ARTIFACT_ROOT，默认 data/agent-state），M1-16
+	stateEnabled         bool   // 是否开启「工作状态外置」（env STATE_ENABLED，默认 true），M1-16
 	AgentMode            string // single / team（env AGENT_MODE，默认 single），M1-08 子代理委托开关
 	TeamReviewer         bool   // team 模式下是否加入只读 Reviewer（env TEAM_REVIEWER，默认 true），M1-09
 	TeamMaxReviewRounds  int    // 「实现→审阅→修复」回环轮数上限（env TEAM_MAX_REVIEW_ROUNDS，默认 2），M1-09
@@ -120,6 +122,23 @@ func Load() *Config {
 		panic("failed to create workspace root directory: " + err.Error())
 	}
 	cfg.WorkspaceRoot = workspaceRoot
+
+	// 工作状态文件根目录（M1-16「工作状态外置」）：按 <root>/<sessionKey>/ 落盘
+	// PLAN.md/PROGRESS.md/LEARNINGS.md，使进程重启/中断后续跑能接上。
+	// 默认 data/agent-state（与 workspace 同级的运行时目录，gitignore 已忽略 data/）。
+	artifactRoot := envOrDefault("ARTIFACT_ROOT", "")
+	if artifactRoot == "" {
+		execPath, _ := os.Getwd()
+		artifactRoot = filepath.Join(execPath, "data", "agent-state")
+	}
+	if err := os.MkdirAll(artifactRoot, 0755); err != nil {
+		panic("failed to create artifact root directory: " + err.Error())
+	}
+	cfg.artifactRoot = artifactRoot
+
+	// 工作状态外置开关（M1-16）：默认开启。仅在需要关闭状态落盘（如纯单轮问答调试）时设
+	// STATE_ENABLED=false；24h 自主推进循环应保持开启以具备「中断续跑」能力。
+	cfg.stateEnabled = envOrDefaultBool("STATE_ENABLED", true)
 
 	// Agent 运行模式（M1-08）：team 时启用 Orchestrator→Coder 子代理委托。
 	// 非法取值退回 single，避免误配把线上对话切到未预期的编排链路。
@@ -257,6 +276,23 @@ func (c *Config) EngineTimeout() time.Duration {
 		return DefaultEngineTimeout
 	}
 	return time.Duration(c.EngineTimeoutSeconds) * time.Second
+}
+
+// ArtifactRoot returns the on-disk root directory for the working-state
+// artifacts (PLAN/PROGRESS/LEARNINGS, M1-16). It is created during Load, so an
+// empty value should never be returned for a loaded config.
+func (c *Config) ArtifactRoot() string {
+	if c == nil {
+		return ""
+	}
+	return c.artifactRoot
+}
+
+// StateEnabled reports whether the working-state externalization
+// (StateEnforcer, M1-16) is turned on. When false, the engine does not install
+// the enforcer and no PLAN/PROGRESS/LEARNINGS files are written.
+func (c *Config) StateEnabled() bool {
+	return c != nil && c.stateEnabled
 }
 
 func envOrDefault(key, fallback string) string {

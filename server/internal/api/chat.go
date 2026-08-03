@@ -12,6 +12,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
+	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -39,7 +40,9 @@ type chatResponse struct {
 // team 为 CodeTeam 编排配置（M1-08/M1-09）：EnableSubAgents=true 时启用子代理委托
 // （Orchestrator→Coder，CodeAct 工具集装配给 Coder，Orchestrator 自身不持有写工具）；
 // 叠加 EnableReviewer=true 时再加入只读 Reviewer，形成「实现→审阅→修复」回环。
-func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig) gin.HandlerFunc {
+// stateStore 与 enableState 驱动「工作状态外置」（M1-16）：enableState 且 store 非空时，
+// 根 Agent 挂 StateEnforcer，把 PLAN/PROGRESS/LEARNINGS 落盘以支持中断续跑。
+func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool) gin.HandlerFunc {
 	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
@@ -112,14 +115,16 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			}
 		}
 		eng, err := engine.New(engine.ModelConfig{
-			ModelID:  m.ModelID,
-			BaseURL:  p.BaseURL,
-			APIKey:   apiKey,
-			Protocol: string(p.Protocol),
-			Timeout:  engineTimeout,
-			Tools:    tools,
-			Team:     team,
-			Workdir:  workdir,
+			ModelID:    m.ModelID,
+			BaseURL:    p.BaseURL,
+			APIKey:     apiKey,
+			Protocol:   string(p.Protocol),
+			Timeout:    engineTimeout,
+			Tools:      tools,
+			Team:       team,
+			Workdir:    workdir,
+			EnableState: enableState,
+			StateStore: stateStore,
 		})
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

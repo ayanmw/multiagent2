@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
+	"github.com/ayanmw/multiagent2/server/internal/artifact"
 )
 
 // defaultInstruction 是 Agent 的系统提示词（中文优先，编程助手定位）。
@@ -47,6 +48,14 @@ type ModelConfig struct {
 	// Guardrail 是护栏熔断预算（M1-13），经 config 注入；Team.EnableSubAgents=true 时
 	// 由 codeagent.NewTeam 下发给 Orchestrator 与各子代理共用同一套约束。
 	Guardrail codeagent.GuardrailConfig
+	// EnableState 开启「工作状态外置」（M1-16）：根 Agent 装上 StateEnforcer，
+	// 维护 PLAN.md/PROGRESS.md/LEARNINGS.md 并落盘，进程重启/中断后续跑能接上。
+	// 仅当 StateStore 非空时生效，根 Agent（单代理或 Orchestrator）持有该扩展，
+	// 子代理（Coder/Reviewer）不装。
+	EnableState bool
+	// StateStore 是状态文件的存储后端（M1-16），经 config 注入；
+	// nil 时即使 EnableState=true 也不会安装扩展（避免落空）。
+	StateStore artifact.Store
 }
 
 // TeamConfig 是 CodeTeam 编排配置（M1-09），定义在 internal/agent 包内，
@@ -91,6 +100,7 @@ func New(cfg ModelConfig) (*Engine, error) {
 			Workdir:    cfg.Workdir,
 			ExtraTools: allTools,
 			Guardrail:  cfg.Guardrail,
+			StateStore: cfg.StateStore,
 		}, cfg.Team)
 		if oerr != nil {
 			return nil, oerr
@@ -107,6 +117,12 @@ func New(cfg ModelConfig) (*Engine, error) {
 		}
 		if grdOpts := cfg.Guardrail.Options(); grdOpts != nil {
 			singleOpts = append(singleOpts, grdOpts...)
+		}
+		// 工作状态外置（M1-16）：根 Agent 挂 StateEnforcer，把 PLAN/PROGRESS/LEARNINGS 落盘，
+		// 进程重启 / 中断后续跑能接上。单代理模式（24h 循环实际模式）同样需要它。
+		if cfg.EnableState && cfg.StateStore != nil {
+			singleOpts = append(singleOpts, llmagent.WithExtensions(
+				codeagent.NewStateEnforcer(codeagent.WithStateStore(cfg.StateStore))))
 		}
 		root = llmagent.New("codeagent", singleOpts...)
 	}

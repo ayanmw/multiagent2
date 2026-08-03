@@ -249,6 +249,12 @@ func NewTeam(d Deps, cfg TeamConfig) (agent.Agent, error) {
 	if grdOpts := d.Guardrail.Options(); grdOpts != nil {
 		opts = append(opts, grdOpts...)
 	}
+	// 工作状态外置（M1-16）：根 Orchestrator 挂 StateEnforcer，把 PLAN/PROGRESS/LEARNINGS
+	// 落盘，进程重启 / 中断后续跑能接上。仅当配置了落盘存储且开启时生效。
+	if d.StateStore != nil {
+		opts = append(opts, llmagent.WithExtensions(
+			NewStateEnforcer(WithStateStore(d.StateStore))))
+	}
 	if cfg.goalEnabled() {
 		// 注意：装了 goal 契约的 Agent 不能开启 EnableParallelTools——
 		// 并行工具会让「工具调用响应 / 最终响应」的时序变得不可判定，

@@ -38,7 +38,7 @@ func newRBACRouter(t *testing.T) (*gin.Engine, *repo.DB) {
 		}
 	})
 	disc := provider.NewDiscoverer(cfg.EncryptionKey, time.Minute)
-	return buildRouter(db, cfg, disc), db
+	return buildRouter(db, cfg, disc, nil, false), db
 }
 
 // createViewerToken 直接落库一个 viewer 角色用户，并签发其 JWT（避免依赖注册默认 developer）。

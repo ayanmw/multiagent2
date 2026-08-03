@@ -15,11 +15,12 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/provider"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
+	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/gin-gonic/gin"
 )
 
 // buildRouter 构造 Gin 路由（含全部 API 路由），抽出来便于在集成测试中进程内复用。
-func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer) *gin.Engine {
+func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, stateStore artifact.Store, enableState bool) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 
@@ -106,13 +107,14 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer) *gi
 		MaxPlanNudges:   cfg.MaxPlanNudges(),
 		Guardrail:       cfg.GuardrailConfig(), // M1-13：护栏熔断预算（默认启用）
 	}
-		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg))
+		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState))
 
 		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化
 		// M0.5-06：message 改由 POST body 传递（避免明文进访问日志），故注册为 POST。
 		// M1-06/07：在此端点装配 CodeAct 工具；工作目录优先取对话绑定的 workspace 目录，
 		// 未绑定时回退 WorkspaceRoot/<uid>。workspace_key 经请求体传入。
-		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg))
+		// M1-16：stateStore/enableState 驱动「工作状态外置」，使长任务中断后续跑能接上。
+		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState))
 	}
 
 	return r
@@ -131,7 +133,14 @@ func main() {
 	// Model auto-discovery (provider /v1/models, cached 5 minutes).
 	discoverer := provider.NewDiscoverer(cfg.EncryptionKey, 5*time.Minute)
 
-	r := buildRouter(db, cfg, discoverer)
+	// 工作状态文件存储（M1-16）：落盘到 cfg.ArtifactRoot()，使长任务中断/重启后可续跑。
+	stateStore, stErr := artifact.NewFileStore(cfg.ArtifactRoot())
+	if stErr != nil {
+		log.Fatalf("Failed to initialize artifact store: %v", stErr)
+	}
+	enableState := cfg.StateEnabled()
+
+	r := buildRouter(db, cfg, discoverer, stateStore, enableState)
 
 	// Graceful shutdown
 	go func() {

@@ -29,6 +29,7 @@ import (
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
+	"github.com/ayanmw/multiagent2/server/internal/artifact"
 )
 
 // 角色名称。agenttool 会把子代理名字直接作为工具名下发给 LLM，
@@ -78,6 +79,10 @@ type Deps struct {
 	// 零值 = 按默认预算启用（无人值守必须有兜底）；由 NewTeam 统一从 TeamConfig 下发，
 	// 使 Orchestrator 与各子代理共用同一套预算。
 	Guardrail GuardrailConfig
+	// StateStore 是「工作状态外置」的存储后端（M1-16）。仅 Orchestrator 使用，
+	// 不下发给 Coder/Reviewer——维护 run 级状态文件是编排者的职责，避免子代理并发写冲突。
+	// 为空时 NewTeam 不安装 StateEnforcer（状态外置功能关闭）。
+	StateStore artifact.Store
 }
 
 // validate 校验依赖完整性。
