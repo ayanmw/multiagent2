@@ -1,0 +1,116 @@
+// Package taskrun 封装「后台任务扇出」的接线（M2-04）：
+//   - BuildAgentFactory：构造 worker 子代理工厂，按 child session 的 OwnerUserID
+//     从闭包解析模型 + 工作目录，构建 Coder 子代理（与 M1-08 同款）。
+//   - NewController：组装框架 inprocess.Service（自带 run 记录持久化 FileStore）+ 内部
+//     worker Runner（挂持久化 session.Service，使 transcript 跨重启可读）。
+//   - Tools：把框架 tool/taskrun 的六个控制工具挂到根 Agent（Orchestrator/单代理）。
+//
+// 本包只依赖框架与 internal/agent/internal/sessionstore，均为非 CGO；
+// 真正的 DB/模型解析闭包由 cmd/server（CGO）注入，业务层不直连 DB。
+package taskrun
+
+import (
+	"context"
+	"fmt"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
+	inprocess "trpc.group/trpc-go/trpc-agent-go/agent/taskrun/inprocess"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	taskruntool "trpc.group/trpc-go/trpc-agent-go/tool/taskrun"
+
+	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
+)
+
+// AppName 是后台任务子代理 Runner 与父 Orchestrator 共用的 app 命名空间。
+// transcript 回查钥匙依赖父子 appName 一致（见框架 tool/taskrun 实现），
+// 故必须与 engine.New 中 runner.NewRunner 的 appName 相同。
+const AppName = "go-multi-agent-v2"
+
+// WorkerResolver 按 OwnerUserID 解析 worker 子代理所需的模型与工作目录。
+// 由 cmd/server（CGO）注入真实 DB + Provider 解析逻辑。
+type WorkerResolver struct {
+	// ResolveModel 返回指定用户的框架模型实例（含已解密的 APIKey + BaseURL）。
+	ResolveModel func(ctx context.Context, userID string) (model.Model, error)
+	// ResolveWorkdir 返回指定用户 worker 的执行工作目录（已确保存在）。
+	ResolveWorkdir func(ctx context.Context, userID string) (string, error)
+}
+
+// BuildAgentFactory 构造框架 AgentFactory：每次 spawn 时从 invocation 上下文取出
+// OwnerUserID，经闭包解析模型 + 工作目录后构建 Coder 子代理。
+// 注意：worker Runner 的 AgentFactory 签名不含 UserID，因此从
+// agent.InvocationFromContext(ctx).Session.UserID 取（= OwnerUserID）。
+func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver) runner.AgentFactory {
+	resolveModel := res.ResolveModel
+	resolveWorkdir := res.ResolveWorkdir
+	if resolveModel == nil {
+		resolveModel = func(ctx context.Context, userID string) (model.Model, error) {
+			return nil, fmt.Errorf("taskrun: 未配置模型解析器")
+		}
+	}
+	if resolveWorkdir == nil {
+		resolveWorkdir = func(ctx context.Context, userID string) (string, error) {
+			return "", fmt.Errorf("taskrun: 未配置工作目录解析器")
+		}
+	}
+	return func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
+		inv, ok := agent.InvocationFromContext(ctx)
+		if !ok || inv == nil || inv.Session == nil {
+			return nil, fmt.Errorf("taskrun: 无法从上下文获取 worker 调用的用户身份")
+		}
+		uid := inv.Session.UserID
+		m, err := resolveModel(ctx, uid)
+		if err != nil {
+			return nil, fmt.Errorf("taskrun: 解析 worker 模型失败: %w", err)
+		}
+		wd, err := resolveWorkdir(ctx, uid)
+		if err != nil {
+			return nil, fmt.Errorf("taskrun: 解析 worker 工作目录失败: %w", err)
+		}
+		return codeagent.NewCoder(codeagent.Deps{
+			Model:     m,
+			Workdir:   wd,
+			Guardrail: guardrail,
+		})
+	}
+}
+
+// NewController 组装后台任务控制器（框架 inprocess.Service）：
+//   - worker Runner：NewRunnerWithAgentFactory(AppName, defaultAgentName, factory)，
+//     并挂持久化 session.Service（transcript 落盘）。
+//   - inprocess.Service：用 store 持久化 run 记录（跨重启保留）；
+//     Start 后才能在父 Agent 调用 start_task_run 时真正派生子任务。
+func NewController(ctx context.Context, defaultAgentName string, factory runner.AgentFactory, store inprocess.Store, sessionSvc session.Service) (*inprocess.Service, error) {
+	if factory == nil {
+		return nil, fmt.Errorf("taskrun: 未提供 worker 代理工厂")
+	}
+	workerOpts := []runner.Option{}
+	if sessionSvc != nil {
+		workerOpts = append(workerOpts, runner.WithSessionService(sessionSvc))
+	}
+	workerRunner := runner.NewRunnerWithAgentFactory(AppName, defaultAgentName, factory, workerOpts...)
+	svc, err := inprocess.NewService(workerRunner, inprocess.WithStore(store))
+	if err != nil {
+		return nil, err
+	}
+	svc.Start(ctx)
+	return svc, nil
+}
+
+// Tools 返回挂到根 Agent 的后台任务控制工具集（start/list/get/cancel/wait + transcript）。
+// sessionSvc 非空时才会追加 read_task_run_transcript（M2-04 ① 持久化 transcript）；
+// defaultAgentName 指定未显式指定 agent 时派生的默认 worker（建议 codeagent.RoleCoder）。
+func Tools(controller taskrunruntime.Controller, sessionSvc session.Service, defaultAgentName string) []tool.Tool {
+	opts := []taskruntool.Option{
+		taskruntool.WithDefaultAgentName(defaultAgentName),
+		taskruntool.WithParentAppNamePropagation(true),
+	}
+	if sessionSvc != nil {
+		opts = append(opts, taskruntool.WithSessionService(sessionSvc))
+	}
+	tr := taskruntool.NewTools(controller, opts...)
+	return tr.All()
+}

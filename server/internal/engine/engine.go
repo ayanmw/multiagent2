@@ -10,11 +10,14 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	taskruntool "trpc.group/trpc-go/trpc-agent-go/tool/taskrun"
 
 	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
@@ -66,6 +69,13 @@ type ModelConfig struct {
 	SkillKeywords []string
 	// SkillMaxChars 是 warm-start 注入内容的长度上限（控长）；<=0 时取默认 6000。
 	SkillMaxChars int
+	// TaskRunController 是后台任务控制器（M2-04）：框架 inprocess.Service 实现，
+	// 由 cmd 层装配（含 worker 子代理工厂 + run 记录持久化）。非空时把六个后台任务
+	// 控制工具挂到根 Agent（Orchestrator/单代理），使 Agent 能派生子任务并行推进。
+	TaskRunController taskrunruntime.Controller
+	// TaskRunSession 是后台任务 child session 的持久化 session.Service（M2-04 ①）：
+	// 落盘子任务事件/transcript，进程重启后仍能读回。为空则 read_task_run_transcript 不挂载。
+	TaskRunSession session.Service
 }
 
 // TeamConfig 是 CodeTeam 编排配置（M1-09），定义在 internal/agent 包内，
@@ -97,6 +107,20 @@ func New(cfg ModelConfig) (*Engine, error) {
 	allTools := []tool.Tool{echoTool(), getTimeTool()}
 	if len(cfg.Tools) > 0 {
 		allTools = append(allTools, cfg.Tools...)
+	}
+
+	// 后台任务控制面（M2-04）：把六个控制工具挂到根 Agent（单代理或 Orchestrator 均可），
+	// 使 Agent 能派生子任务后台并行推进。默认 worker 为 codeagent.RoleCoder（与 cmd 层
+	// worker Runner 的默认代理名一致）；WithParentAppNamePropagation(true) 使父子
+	// appName 一致，从而 transcript 回查钥匙可命中（见框架 tool/taskrun 实现）。
+	if cfg.TaskRunController != nil {
+		trTools := taskruntool.NewTools(
+			cfg.TaskRunController,
+			taskruntool.WithDefaultAgentName(codeagent.RoleCoder),
+			taskruntool.WithParentAppNamePropagation(true),
+			taskruntool.WithSessionService(cfg.TaskRunSession),
+		)
+		allTools = append(allTools, trTools.All()...)
 	}
 
 	// 技能 warm-start（M2-03）：会话开始时把相关 SKILL.md 渲染成系统上下文片段，
@@ -183,7 +207,10 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 		// runner 会先落库历史事件再追加本轮 user 消息，模型即拥有多轮上下文。
 		runOpts = append(runOpts, agent.WithMessages(history))
 	}
-	ch, err := e.runner.Run(runCtx, "user", sessionID, model.NewUserMessage(userMessage), runOpts...)
+	// userID 透传真实用户标识（M2-04）：后台任务派生时 OwnerUserID 取自此值，
+	// 管控 API 据此做 owner 隔离；未注入时回退 "user"（兼容历史/测试调用）。
+	userID := userIDFromContext(ctx)
+	ch, err := e.runner.Run(runCtx, userID, sessionID, model.NewUserMessage(userMessage), runOpts...)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -250,4 +277,24 @@ func (e *Engine) Close() error {
 		return e.runner.Close()
 	}
 	return nil
+}
+
+// ctxKeyUserID 是注入真实用户标识的上下文键（M2-04 userID 透传）。
+type ctxKeyUserID int
+
+const ctxKeyUserIDVal ctxKeyUserID = iota
+
+// WithUserID 把真实用户标识注入 ctx，供 engine.Stream 透传给框架 runner.Run，
+// 使后台任务派生时的 OwnerUserID 正确隔离（管控 API 据此做 owner 过滤）。
+// 未注入时 engine 回退为 "user"（兼容历史/测试调用）。
+func WithUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, ctxKeyUserIDVal, userID)
+}
+
+// userIDFromContext 从 ctx 取出注入的用户标识，未注入或为空时回退 "user"。
+func userIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxKeyUserIDVal).(string); ok && v != "" {
+		return v
+	}
+	return "user"
 }

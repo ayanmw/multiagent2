@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"time"
 
+	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
@@ -46,7 +48,7 @@ type chatResponse struct {
 // 根 Agent 挂 StateEnforcer，把 PLAN/PROGRESS/LEARNINGS 落盘以支持中断续跑。
 // skillRoot/skillDataDir/skillWarmStart/skillMaxChars 驱动「技能 warm-start」（M2-03）：
 // 会话开始时把 [共享根, 用户私有根] 交给技能仓库扫描，相关 SKILL.md 注入根 Agent 系统上下文。
-func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int) gin.HandlerFunc {
+func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int, taskRunController taskrunruntime.Controller, taskRunSession session.Service) gin.HandlerFunc {
 	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
@@ -135,6 +137,9 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			SkillRoots:     []string{skillRoot, filepath.Join(skillDataDir, strconv.FormatUint(uint64(uid), 10))},
 			SkillKeywords:  nil,
 			SkillMaxChars:  skillMaxChars,
+			// M2-04：注入后台任务控制器与持久化 session（transcript）。
+			TaskRunController: taskRunController,
+			TaskRunSession:    taskRunSession,
 		})
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -145,7 +150,7 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 		// 多轮记忆（M0.5-01）：从 DB 加载历史（排除刚写入的当前 user 消息）回灌引擎。
 		history := loadChatHistory(db, sess.ID, 1)
 
-		reply, err := eng.Chat(c.Request.Context(), sessionKey, req.Message, history)
+		reply, err := eng.Chat(engine.WithUserID(c.Request.Context(), strconv.FormatUint(uid, 10)), sessionKey, req.Message, history)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "调用模型失败", "detail": err.Error()})
 			return

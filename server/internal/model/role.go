@@ -62,6 +62,8 @@ func SeedRoles() []Role {
 				{Resource: "skills", Action: "write"},
 				{Resource: "mcp", Action: "read"},
 				{Resource: "mcp", Action: "write"},
+				{Resource: "taskruns", Action: "read"},
+				{Resource: "taskruns", Action: "write"},
 			},
 		},
 		{
@@ -74,6 +76,7 @@ func SeedRoles() []Role {
 				{Resource: "chat", Action: "read"},
 				{Resource: "mcp", Action: "read"},
 				{Resource: "skills", Action: "read"},
+				{Resource: "taskruns", Action: "read"},
 			},
 		},
 	}

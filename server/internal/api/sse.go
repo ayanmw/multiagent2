@@ -14,8 +14,10 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
+	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	framework "trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"github.com/gin-gonic/gin"
@@ -46,7 +48,7 @@ type streamChatRequest struct {
 // （Orchestrator→Coder），叠加 EnableReviewer=true 时加入只读 Reviewer 形成审阅回环。
 // stateStore 与 enableState 驱动「工作状态外置」（M1-16），语义同 ChatHandler。
 // skillRoot/skillDataDir/skillWarmStart/skillMaxChars 驱动「技能 warm-start」（M2-03），语义同 ChatHandler。
-func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int) gin.HandlerFunc {
+func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int, taskRunController taskrunruntime.Controller, taskRunSession session.Service) gin.HandlerFunc {
 	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
@@ -163,6 +165,9 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 			SkillRoots:     []string{skillRoot, filepath.Join(skillDataDir, strconv.FormatUint(uint64(uid), 10))},
 			SkillKeywords:  nil,
 			SkillMaxChars:  skillMaxChars,
+			// M2-04：注入后台任务控制器与持久化 session（transcript）。
+			TaskRunController: taskRunController,
+			TaskRunSession:    taskRunSession,
 		})
 		if err != nil {
 			emit("RUN_ERROR", gin.H{"message": err.Error()})
@@ -171,7 +176,7 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 		}
 		defer eng.Close()
 
-		ch, rerr := eng.Stream(c.Request.Context(), sess.SessionKey, message,
+		ch, rerr := eng.Stream(engine.WithUserID(c.Request.Context(), strconv.FormatUint(uid, 10)), sess.SessionKey, message,
 			// 多轮记忆（M0.5-01）：从 DB 加载历史（排除刚写入的当前 user 消息）回灌引擎。
 			loadChatHistory(db, sess.ID, 1))
 		if rerr != nil {
