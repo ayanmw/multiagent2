@@ -178,8 +178,9 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 			emit(t, d)
 		})
 
-		// 仅在正常结束时落库助手消息（客户端中途断开不写脏数据）。
-		if convErr == nil {
+		// 仅在正常结束或护栏熔断（partial 结果）时落库助手消息（M1-13 运行级兜底：
+		// circuitBroken 时保留已产出的部分结果）；客户端中途断开不写脏数据。
+		if convErr == nil || conv.circuitBroken {
 			if perr := repo.AppendMessage(db, sess.ID, "assistant", text); perr != nil {
 				emit("RUN_ERROR", gin.H{"message": "写入助手消息失败: " + perr.Error()})
 			}
@@ -195,6 +196,9 @@ type aguiConverter struct {
 	autoInc   int
 	msgID     string
 	ds        *engine.DeltaState // 文本去重状态（优先 Delta，未出现增量才回退 Message，见 M0.5-04）
+	// circuitBroken 标记本轮是否因护栏熔断（预算耗尽）提前结束（M1-13 运行级兜底）。
+	// 命中时 partial 文本已通过 TEXT_MESSAGE_CONTENT 增量推送，handler 仍应将其落库。
+	circuitBroken bool
 }
 
 type aguiToolCall struct {
@@ -221,6 +225,16 @@ func (cv *aguiConverter) Convert(ch <-chan *event.Event, emit func(string, gin.H
 			msg := "agent error"
 			if ev.Response.Error != nil {
 				msg = ev.Response.Error.Message
+			}
+			if engine.IsCircuitBreakEvent(ev) {
+				// 运行级兜底（M1-13）：护栏熔断是优雅终止，partial 文本已在前面
+				// 以 TEXT_MESSAGE_CONTENT 增量推送给客户端。这里追加一条明确的熔断
+				// 提示，并标记 circuitBroken，使 handler 仍把 partial 文本落库，
+				// 而非当作运行错误丢弃。
+				cv.circuitBroken = true
+				emit("RUN_ERROR", gin.H{"message": engine.CircuitBreakNotice()})
+				cv.closeOpenCalls(emit)
+				return sb.String(), fmt.Errorf("%s", msg)
 			}
 			emit("RUN_ERROR", gin.H{"message": msg})
 			cv.closeOpenCalls(emit)

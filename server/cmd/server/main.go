@@ -101,6 +101,7 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer) *gi
 		MaxGoalNudges:   cfg.MaxGoalNudges(),
 		EnablePlan:      cfg.PlanEnabled(),
 		MaxPlanNudges:   cfg.MaxPlanNudges(),
+		Guardrail:       cfg.GuardrailConfig(), // M1-13：护栏熔断预算（默认启用）
 	}
 		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg))
 

@@ -66,7 +66,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | M1-10 | **Reviewer 只读工具集**：reviewer 仅 read/grep，无 write/exec | ✅ | reviewer 调 write 被拒 | M1-08 |
 | M1-11 | **Goal 契约**：goal 扩展注入 get_goal/create_goal/update_goal，Orchestrator 必须推进到 complete/blocked 才结束 | ✅ | Agent 不能过早给 final；未达成时继续 | M1-09 |
 | M1-12 | **CycleAgent / Plan-Execute**：planner 产出计划外置 PLAN/PROGRESS，逐项执行更新 | ✅ | 中型任务能拆计划并逐步完成 | M1-11 |
-| M1-13 | **护栏熔断**：`WithMaxLLMCalls/WithMaxToolIterations/WithMaxRetries` 配置 + 运行级兜底；暴露到 Agent 配置表 | ○ | 超限后优雅终止并产出 partial 结果 | M1-11 |
+| M1-13 | **护栏熔断**：`WithMaxLLMCalls/WithMaxToolIterations/WithMaxRetries` 配置 + 运行级兜底；暴露到 Agent 配置表 | ✅ | 超限后优雅终止并产出 partial 结果 | M1-11 |
 | M1-14 | **斜杠命令注册表（后端）**：Command 元数据（name/desc/args/handler 或 prompt 模板），`GET /api/commands` 下发；内置 /clear /model /workspace /run /review /plan | ○ | 前端/CLI 共用，新增命令只改后端 | M0.5 |
 | M1-15 | **前端斜杠命令 UI**：输入框 `/` 触发命令浮层，选择+填参，发送 | ○ | 输入 `/run ls` 正确触发后端 | M1-14 |
 | M1-16 | **工作状态外置**：长任务维护 PLAN.md/PROGRESS.md/LEARNINGS.md（artifact 存储），Agent 先读再续跑 | ○ | 中断后续跑能接上 | M1-12 |

@@ -44,6 +44,9 @@ type ModelConfig struct {
 	Team TeamConfig
 	// Workdir 是子代理代码工具集的受限工作目录（Team.EnableSubAgents=true 时必填）。
 	Workdir string
+	// Guardrail 是护栏熔断预算（M1-13），经 config 注入；Team.EnableSubAgents=true 时
+	// 由 codeagent.NewTeam 下发给 Orchestrator 与各子代理共用同一套约束。
+	Guardrail codeagent.GuardrailConfig
 }
 
 // TeamConfig 是 CodeTeam 编排配置（M1-09），定义在 internal/agent 包内，
@@ -87,17 +90,25 @@ func New(cfg ModelConfig) (*Engine, error) {
 			Model:      m,
 			Workdir:    cfg.Workdir,
 			ExtraTools: allTools,
+			Guardrail:  cfg.Guardrail,
 		}, cfg.Team)
 		if oerr != nil {
 			return nil, oerr
 		}
 		root = orchestrator
 	} else {
-		root = llmagent.New("codeagent",
+		// 单代理模式（默认 AGENT_MODE=single，也是 24h 循环的实际运行模式）：
+		// 同样必须挂载护栏熔断（M1-13）。否则无人值守循环在单代理模式下无任何
+		// LLM 调用/工具迭代上限，模型一旦陷入死循环会卡死整轮 Run。
+		singleOpts := []llmagent.Option{
 			llmagent.WithModel(m),
 			llmagent.WithInstruction(defaultInstruction),
 			llmagent.WithTools(allTools),
-		)
+		}
+		if grdOpts := cfg.Guardrail.Options(); grdOpts != nil {
+			singleOpts = append(singleOpts, grdOpts...)
+		}
+		root = llmagent.New("codeagent", singleOpts...)
 	}
 
 	// Runner：未显式提供 session service 时框架会自动创建内存版会话服务。
@@ -167,8 +178,19 @@ func (e *Engine) Chat(ctx context.Context, sessionID, userMessage string, histor
 	// 与 AG-UI converter 共用同一逻辑（见 internal/engine/delta.go / M0.5-04）。
 	var sb strings.Builder
 	ds := NewDeltaState()
+	// 运行级兜底（M1-13）：护栏熔断（LLM 调用/工具迭代预算耗尽）由框架以 IsError()
+	// 事件表达，但本质是优雅终止。这里保留已产出的 partial 文本，并在末尾追加提示，
+	// 而不是把它当成运行错误丢弃（见 IsCircuitBreakEvent）。
+	circuitBroken := false
 	for ev := range ch {
 		if ev == nil || ev.Response == nil {
+			continue
+		}
+		if IsCircuitBreakEvent(ev) {
+			if !circuitBroken {
+				sb.WriteString(CircuitBreakNotice())
+				circuitBroken = true
+			}
 			continue
 		}
 		for i := range ev.Response.Choices {

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
 )
 
 // DefaultEngineTimeout is the fallback streaming timeout when ENGINE_TIMEOUT_SECONDS
@@ -36,6 +38,12 @@ type Config struct {
 	GoalMaxNudges        int    // 目标未达成时最多拦截几次过早的最终答复（env GOAL_MAX_NUDGES，默认 3），M1-11
 	PlanExecute          bool   // team 模式下是否启用 Plan-Execute 循环（env PLAN_EXECUTE，默认 true），M1-12
 	PlanMaxNudges        int    // 计划未做完时最多拦截几次过早的最终答复（env PLAN_MAX_NUDGES，默认 3），M1-12
+	// 护栏熔断预算（M1-13）：防止自主推进的 Agent 陷入死循环烧掉预算 / 卡死 24h 循环。
+	// 默认按 codeagent 包默认预算启用；GUARDRAIL_DISABLED=true 可完全解除（仅本地调试）。
+	MaxLLMCalls       int  // 单次 invocation LLM 调用次数上限（env MAX_LLM_CALLS，默认 32），M1-13
+	MaxToolIterations int  // 单次 invocation 工具迭代轮数上限（env MAX_TOOL_ITERATIONS，默认 16），M1-13
+	MaxToolRetries    int  // 单个工具失败后的重试次数（env MAX_TOOL_RETRIES，默认 2），M1-13
+	GuardrailDisabled bool // 关闭护栏（env GUARDRAIL_DISABLED，默认 false）；生产/无人值守禁止开启，M1-13
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -48,6 +56,17 @@ const DefaultGoalMaxNudges = 3
 // DefaultMaxPlanNudges 是 Plan-Execute 循环默认的最大拦截次数（M1-12）。
 // 超出后 fail-open 放行，避免模型不配合时把整轮 Run 卡死。
 const DefaultMaxPlanNudges = 3
+
+// 护栏熔断默认预算（M1-13）直接复用 codeagent 包定义，避免两处漂移：
+// 业务层默认以 codeagent.Default* 为准，config 仅做 env 注入入口。
+const (
+	// DefaultMaxLLMCalls 是单次 invocation 默认的 LLM 调用次数上限。
+	DefaultMaxLLMCalls = codeagent.DefaultMaxLLMCalls
+	// DefaultMaxToolIterations 是单次 invocation 默认的工具迭代轮数上限。
+	DefaultMaxToolIterations = codeagent.DefaultMaxToolIterations
+	// DefaultMaxToolRetries 是单个工具调用失败后默认的重试次数。
+	DefaultMaxToolRetries = codeagent.DefaultMaxToolRetries
+)
 
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
@@ -139,7 +158,44 @@ func Load() *Config {
 		cfg.PlanMaxNudges = DefaultMaxPlanNudges
 	}
 
+	// 护栏熔断预算（M1-13）：默认按 codeagent 默认预算启用，无人值守必须有兜底；
+	// 取值非法时回落默认并打印告警。GUARDRAIL_DISABLED=true 完全解除限制（仅本地调试）。
+	cfg.MaxLLMCalls = envOrDefaultInt("MAX_LLM_CALLS", DefaultMaxLLMCalls)
+	if cfg.MaxLLMCalls <= 0 {
+		log.Printf("[WARN] MAX_LLM_CALLS must be positive; using default %d", DefaultMaxLLMCalls)
+		cfg.MaxLLMCalls = DefaultMaxLLMCalls
+	}
+	cfg.MaxToolIterations = envOrDefaultInt("MAX_TOOL_ITERATIONS", DefaultMaxToolIterations)
+	if cfg.MaxToolIterations <= 0 {
+		log.Printf("[WARN] MAX_TOOL_ITERATIONS must be positive; using default %d", DefaultMaxToolIterations)
+		cfg.MaxToolIterations = DefaultMaxToolIterations
+	}
+	cfg.MaxToolRetries = envOrDefaultInt("MAX_TOOL_RETRIES", DefaultMaxToolRetries)
+	if cfg.MaxToolRetries < 0 {
+		log.Printf("[WARN] MAX_TOOL_RETRIES must be non-negative; using default %d", DefaultMaxToolRetries)
+		cfg.MaxToolRetries = DefaultMaxToolRetries
+	}
+	cfg.GuardrailDisabled = envOrDefaultBool("GUARDRAIL_DISABLED", false)
+	if cfg.GuardrailDisabled {
+		log.Println("[WARN] GUARDRAIL_DISABLED=true: circuit-breaker limit lifted; only for local debugging, NOT for unattended runs.")
+	}
+
 	return cfg
+}
+
+// GuardrailConfig returns the circuit-breaker budget as a codeagent.GuardrailConfig
+// (M1-13). Zero-valued config fields are normalized inside codeagent.GuardrailConfig,
+// so callers can use the result directly with Options() to build llmagent options.
+func (c *Config) GuardrailConfig() codeagent.GuardrailConfig {
+	if c == nil {
+		return codeagent.GuardrailConfig{}
+	}
+	return codeagent.GuardrailConfig{
+		Disabled:          c.GuardrailDisabled,
+		MaxLLMCalls:       c.MaxLLMCalls,
+		MaxToolIterations: c.MaxToolIterations,
+		MaxToolRetries:    c.MaxToolRetries,
+	}
 }
 
 // SubAgentsEnabled reports whether the orchestrator/sub-agent delegation mode is on.

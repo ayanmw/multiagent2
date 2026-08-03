@@ -79,6 +79,10 @@ type TeamConfig struct {
 	MaxPlanNudges int
 	// PlanStore 可选注入计划存储（测试与上层可观测用）；为空时内部自建。
 	PlanStore *planpkg.Store
+	// Guardrail 是护栏熔断预算（M1-13）：LLM 调用数 / 工具迭代轮数 / 工具重试。
+	// 零值 = 按默认预算启用（无人值守必须有兜底）；经 engine 注入 Deps 后，
+	// Orchestrator 与各子代理共用同一套约束。
+	Guardrail GuardrailConfig
 }
 
 // normalized 返回补齐默认值后的配置副本。
@@ -145,12 +149,16 @@ func NewReviewer(d Deps) (agent.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return llmagent.New(RoleReviewer,
+	opts := []llmagent.Option{
 		llmagent.WithModel(d.Model),
 		llmagent.WithDescription("以独立视角审阅代码改动的只读子代理（只能读取与检索文件，不能修改或执行）"),
 		llmagent.WithInstruction(ReviewerInstruction),
 		llmagent.WithTools(tools),
-	), nil
+	}
+	// 护栏熔断（M1-13）：即便 Reviewer 只读，也约束其迭代轮数，
+	// 防止模型反复 grep/读取把整轮 Run 卡死。
+	opts = append(opts, d.Guardrail.Options()...)
+	return llmagent.New(RoleReviewer, opts...), nil
 }
 
 // NewReviewerTool 构造「可被委托的 Reviewer」：先建 Reviewer 子代理，再包成 agenttool。
@@ -235,6 +243,11 @@ func NewTeam(d Deps, cfg TeamConfig) (agent.Agent, error) {
 		llmagent.WithDescription("负责目标拆解、子代理委托与「实现→审阅→修复」回环的编排者"),
 		llmagent.WithInstruction(teamInstruction(cfg)),
 		llmagent.WithTools(tools),
+	}
+	// 护栏熔断（M1-13）：Orchestrator 受 LLM 调用数 / 工具迭代数 / 工具重试约束，
+	// 这是 24h 无人值守循环的总闸——超限后框架会优雅终止本轮并保留已产出的 partial 结果。
+	if grdOpts := d.Guardrail.Options(); grdOpts != nil {
+		opts = append(opts, grdOpts...)
 	}
 	if cfg.goalEnabled() {
 		// 注意：装了 goal 契约的 Agent 不能开启 EnableParallelTools——

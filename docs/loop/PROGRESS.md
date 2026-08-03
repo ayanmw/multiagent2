@@ -257,3 +257,33 @@
 - **前端**：`npm run build` ✓（vite 2862 modules）、`vue-tsc --noEmit` ✓（0 错）
 - **E2E 三场景整合**：`TestM0_5_Regression` 串联多轮记忆 / RBAC 403 / SessionKey 复合唯一，一次运行全绿
 - **门禁**：M0.5-01..07 全部 ✅ → M1 阶段门槛解除，下一轮从 M1-04 续推
+
+---
+
+## M1-13 | 护栏熔断（2026-08-03）
+
+**目标**：单代理/团队模式下都给 Agent 装上「预算熔断」——LLM 调用数 / 工具迭代轮数 / 工具重试上限；超限后优雅终止并保留 partial 结果，使 24h 无人值守循环不会因模型死循环卡死。
+
+**实现**：
+- 配置层 `server/internal/agent/guard.go`（新增）：`GuardrailConfig` + `Normalized()`/`Enabled()`/`RetryPolicy()`/`Options()`，把预算映射为框架三件套选项
+  `WithMaxLLMCalls`/`WithMaxToolIterations`/`WithToolCallRetryPolicy`。默认值（零值即启用）：MaxLLMCalls=32、MaxToolIterations=16、MaxToolRetries=2、退避 200ms×2.0≤5s。
+  失败安全：零值=按默认启用（无人值守必须有兜底），仅 `Disabled=true` 才解除。
+- 接线：
+  - `agent/team.go` `TeamConfig` 增 `Guardrail` 字段；`NewTeam`/`NewCoder`/`NewReviewer` 的 `llmagent.New` 均叠加 `d.Guardrail.Options()`，Orchestrator 与各子代理共用同一套约束；
+  - `agent/factory.go` `Deps` 增 `Guardrail` 注入点；
+  - `engine/engine.go` `ModelConfig` 增 `Guardrail` 并注入 `Deps`；**关键修复**：单代理分支（默认 `AGENT_MODE=single`，24h 循环的实际运行模式）此前未挂护栏，本次一并补上；
+  - `config/config.go` 增 env `MAX_LLM_CALLS`/`MAX_TOOL_ITERATIONS`/`MAX_TOOL_RETRIES` + `GUARDRAIL_DISABLED`，默认值复用 `codeagent` 包常量（单一真相源），新增 `GuardrailConfig()` 访问器；
+  - `cmd/server/main.go` 把 `cfg.GuardrailConfig()` 注入 `teamCfg.Guardrail`。
+- 运行级兜底 `server/internal/engine/guard.go`（新增）：
+  - `IsCircuitBreakEvent(ev)` 区分「护栏熔断（IsError 但属预算耗尽：max LLM calls / max tool iterations 文案 + stop_agent_error 类型）」与「运行失败」；
+  - `CircuitBreakNotice()` 追加在 partial 结果末尾的明确提示；
+  - `engine.Chat` 命中熔断时保留已产出 partial 文本 + 追加提示，返回 nil error（不丢结果）；
+  - `api/sse.go` 转换器命中熔断时发出友好提示并**仍落库 partial 文本**（此前 IsError 分支会丢弃 partial 不落库），满足「产出 partial 结果」。
+
+**验收**：
+- `internal/engine/guard_test.go`：
+  - `TestEngine_Guardrail_CircuitBreak_PartialResult`：单代理 + 收紧预算(1/1)，mock 反复调工具触发熔断 → `err==nil`、partial 文本 `PARTIAL_DRAFT` 保留、附 `[护栏熔断]` 提示；
+  - `TestEngine_Guardrail_NoBreach_NormalCompletion`：正常一轮答复不被误判、无熔断提示；
+  - `TestIsCircuitBreakEvent`：StopError / flow_error 熔断事件正确识别，普通错误不误判。
+- `go build ./...` ✓ | `go vet ./...` ✓ | `go test -count=1 ./internal/engine/... ./internal/agent/... ./internal/config/...` ✓（沙箱无 gcc，repo/api/cmd 的 CGO sqlite 测试仍跳过，与本次无关）。
+- 下一步：PLAN 中 **M1-14 斜杠命令注册表（后端）** 成为下一个 ○。

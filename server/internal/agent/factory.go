@@ -74,6 +74,10 @@ type Deps struct {
 	// ExtraTools 是追加给 Orchestrator 的公共工具（如 echo/get_time）。
 	// 不会下发给 Coder —— Coder 的工具集由本包固定装配，避免越权。
 	ExtraTools []tool.Tool
+	// Guardrail 是护栏熔断预算（M1-13）：LLM 调用数 / 工具迭代轮数 / 工具重试。
+	// 零值 = 按默认预算启用（无人值守必须有兜底）；由 NewTeam 统一从 TeamConfig 下发，
+	// 使 Orchestrator 与各子代理共用同一套预算。
+	Guardrail GuardrailConfig
 }
 
 // validate 校验依赖完整性。
@@ -97,12 +101,16 @@ func NewCoder(d Deps) (agent.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return llmagent.New(RoleCoder,
+	opts := []llmagent.Option{
 		llmagent.WithModel(d.Model),
 		llmagent.WithDescription("在受限工作目录内实际落地代码改动的子代理（可执行命令、读写与编辑文件）"),
 		llmagent.WithInstruction(CoderInstruction),
 		llmagent.WithTools(tools),
-	), nil
+	}
+	// 护栏熔断（M1-13）：Coder 子代理同样受 LLM 调用数 / 工具迭代数约束，
+	// 避免陷入死循环把无人工值守的 24h 循环卡死。
+	opts = append(opts, d.Guardrail.Options()...)
+	return llmagent.New(RoleCoder, opts...), nil
 }
 
 // AsTool 把任意子代理包装成可被父代理调用的工具（框架 agenttool）。
