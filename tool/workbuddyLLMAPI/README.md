@@ -64,8 +64,8 @@ tool/workbuddyLLMAPI/
 使用 WorkBuddy 自带的 CLI（**不要杀 WorkBuddy 桌面进程**，它和守护进程是分开的进程）：
 
 ```bash
-# WorkBuddy 自带的 CLI 路径（Windows 示例）
-CLI="C:/Users/anmingwei/AppData/Local/Programs/WorkBuddy/resources/app.asar.unpacked/cli/bin/codebuddy"
+# WorkBuddy 自带的 CLI 路径（Windows 示例，默认用 $LOCALAPPDATA 自动适配当前用户）
+CLI="${WB_CLI_PATH:-$LOCALAPPDATA/Programs/WorkBuddy/resources/app.asar.unpacked/cli/bin/codebuddy}"
 
 # 以守护进程模式启动，端口 18765（idempotent，重复执行安全）
 "$CLI" daemon start --port 18765 --host 127.0.0.1
@@ -89,7 +89,7 @@ go build -o bin/workbuddy-llm-api.exe .      # 编译
 WB_BACKEND=codebuddy \
 WB_LISTEN=:8088 \
 WB_DAEMON_URL=http://127.0.0.1:18765 \
-WB_DAEMON_CWD="C:/Users/anmingwei/WorkBuddy/goMultiAgentV2" \
+WB_DAEMON_CWD="$(pwd)" \
 WB_DAEMON_MODEL=hy3 \
 WB_DAEMON_FALLBACK_MODEL=deepseek-v4-pro \
 ./bin/workbuddy-llm-api.exe -backend codebuddy -addr :8088

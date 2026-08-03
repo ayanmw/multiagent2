@@ -37,3 +37,4 @@ Thumbs.db
 # Build artifacts (compiled binaries, keep sources only)
 tool/**/workbuddy-llm-api
 **/*.exe
+*.exe~

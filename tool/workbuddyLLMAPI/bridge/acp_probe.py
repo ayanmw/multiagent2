@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """ACP probe v4: deltas arrive on the persistent GET SSE stream, not the POST body."""
 import json
+import os
 import sys
 import time
 import threading
@@ -95,7 +96,7 @@ def main():
 
     b = post_raw("/api/v1/acp", {
         "jsonrpc": "2.0", "id": 2, "method": "session/new",
-        "params": {"cwd": "C:/Users/anmingwei/WorkBuddy/goMultiAgentV2", "mcpServers": []},
+        "params": {"cwd": os.environ.get("WB_DAEMON_CWD", os.getcwd()), "mcpServers": []},
     }, acp_h)
     print(f"[session/new] POST body objs: {[o for o in parse_sse_blob(b) if o.get('id') == 2]}")
     time.sleep(0.6)
