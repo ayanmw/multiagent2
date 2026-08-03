@@ -68,7 +68,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | M1-12 | **CycleAgent / Plan-Execute**：planner 产出计划外置 PLAN/PROGRESS，逐项执行更新 | ✅ | 中型任务能拆计划并逐步完成 | M1-11 |
 | M1-13 | **护栏熔断**：`WithMaxLLMCalls/WithMaxToolIterations/WithMaxRetries` 配置 + 运行级兜底；暴露到 Agent 配置表 | ✅ | 超限后优雅终止并产出 partial 结果 | M1-11 |
 | M1-14 | **斜杠命令注册表（后端）**：Command 元数据（name/desc/args/handler 或 prompt 模板），`GET /api/commands` 下发；内置 /clear /model /workspace /run /review /plan | ✅ | 前端/CLI 共用，新增命令只改后端 | M0.5 |
-| M1-15 | **前端斜杠命令 UI**：输入框 `/` 触发命令浮层，选择+填参，发送 | ○ | 输入 `/run ls` 正确触发后端 | M1-14 |
+| M1-15 | **前端斜杠命令 UI**：输入框 `/` 触发命令浮层，选择+填参，发送 | ✅ | 输入 `/run ls` 正确触发后端 | M1-14 |
 | M1-16 | **工作状态外置**：长任务维护 PLAN.md/PROGRESS.md/LEARNINGS.md（artifact 存储），Agent 先读再续跑 | ○ | 中断后续跑能接上 | M1-12 |
 | M1-17 | **集成验证 E2E**：登录→建 workspace→选模型→多轮有记忆→/run 执行→Coder/Reviewer 协同改文件→Goal 循环到 complete→刷新历史仍在 | ○ | 全链路走通，新增 E2E 测试 | M1-04..16 |
 

@@ -295,3 +295,11 @@
 - Commit: 34a4a02（已推 origin/main）
 - 验证: `go build ./...` ✓ | `go vet ./...` ✓ | `go test -count=1 ./internal/command/... ./internal/api/...`（新测试 PASS）。注：`internal/api` 包内 `TestResolveWorkspaceLocalDir` 等 DB 测试需 CGO+sqlite3(gcc)，本沙箱 `CGO_ENABLED=0` 无法运行，属既有环境限制、与本次改动无关。`internal/agent`/`engine`/`config`/`tool`/`goal`/`plan`/`executor`/`provider` 等非 DB 包测试全绿。
 - 下一步：PLAN 中 **M1-15（前端斜杠命令 UI：输入框 `/` 触发命令浮层，选择+填参，发送）** 成为下一个 ○，依赖本任务 M1-14。
+
+---
+
+### 2026-08-03 14:23 | M1-15 | ✅
+- 完成内容：**前端斜杠命令 UI（M1 前端/CLI 共用元数据落地的消费端，依赖 M1-14 后端注册表）**。新增 `web/src/api/command.ts`：`Command`/`CommandArg` 接口（对齐后端 JSON）、`fetchCommands`（GET /api/commands）、`resolveSlashCommand`（以 / 开头 + 命令名精确匹配注册表才视为命令，其余整行作 args，不精确匹配则当普通文本发模型）、`renderCommandPrompt`（前端渲染 prompt 模板 {{args}}，与后端 RenderPrompt 对齐）。`web/src/api/chat.ts` 的 `StreamOptions` 增 `workspaceKey?` 并在 body 带 `workspace_key`，支撑 /workspace 绑定透传后端（sse.go 已支持）。`web/src/views/ChatView.vue` 改造：① 命令浮层——输入框以 `/` 开头且尚未输入空格（命令名阶段）时弹出，按输入前缀过滤、↑↓ 导航、Enter 选中、Esc 关闭、点击选中；② `applyCommand`——有参数命令（run/plan/model/workspace）把 `/name ` 填回输入框等用户填参，无参数命令（clear/review）直接执行；③ 发送分流——`resolveSlashCommand` 解析后 `executeSlashCommand` 按 Kind 处理：client/clear→clearContext、client/model→解析 model_id 切换 `selectedModelId`、client/workspace→设 `selectedWorkspaceKey` 发送时透传、prompt/*→渲染提示词经 `sendMessage` 发模型；④ 抽出 `sendMessage(text)` 供普通消息与 prompt 命令共用；顶部工具条显示当前绑定工作区、placeholder 提示命令清单。
+- 验收实现「输入 /run ls 正确触发后端」：用户 `/run` 选中→输入框 `/run `→输入 `ls`→Enter→resolve 出 run 命令、args="ls"→renderCommandPrompt 渲染「请在当前工作区执行以下 shell 命令，并汇报执行结果与输出：\nls」→sendMessage 经 streamChat 发给 /api/chat/:session/stream→后端装配 CodeAct 执行 shell_exec。client 类命令不触模型、纯本地/状态联动。
+- 验证: 前端 `npm run build` ✓（vite 2863 modules，ChatView chunk 125KB）+ `vue-tsc --noEmit` ✓（exit 0）；仅前端改动，后端未动（`go build/vet` 无关无需重跑，M1-14 已绿）。
+- 下一步：PLAN 中 **M1-16（工作状态外置 artifact：长任务维护 PLAN.md/PROGRESS.md/LEARNINGS.md，Agent 先读再续跑）** 成为下一个 ○，依赖 M1-12。

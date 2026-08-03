@@ -50,6 +50,8 @@ export interface StreamOptions {
   message: string
   // 指定托管模型 id（可选）；缺省后端取默认启用模型。
   modelId?: number
+  // 绑定工作区 key（可选，M1-15 /workspace 命令透传）；缺省后端回退默认目录。
+  workspaceKey?: string
   // 取消信号，用于「停止生成」。
   signal?: AbortSignal
   // 每收到一条 AG-UI 事件即回调。
@@ -64,6 +66,9 @@ export async function streamChat(opts: StreamOptions): Promise<void> {
   const body: Record<string, unknown> = { message: opts.message }
   if (opts.modelId != null) {
     body.model_id = opts.modelId
+  }
+  if (opts.workspaceKey != null && opts.workspaceKey !== '') {
+    body.workspace_key = opts.workspaceKey
   }
   const res = await fetch(url, {
     method: 'POST',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import {
   NButton,
   NInput,
@@ -22,6 +22,12 @@ import {
   type EnabledModel,
   type AGUIEvent,
 } from '@/api/chat'
+import {
+  fetchCommands,
+  resolveSlashCommand,
+  renderCommandPrompt,
+  type Command,
+} from '@/api/command'
 import { renderMarkdown } from '@/utils/markdown'
 
 // 一条前端对话消息（id 仅本地用于渲染 key）。
@@ -41,9 +47,18 @@ const messages = ref<ChatMsg[]>([])
 const input = ref('')
 const models = ref<EnabledModel[]>([])
 const selectedModelId = ref<number | null>(null)
+const selectedWorkspaceKey = ref<string | null>(null)
 const streaming = ref(false)
 const abortController = ref<AbortController | null>(null)
 const scrollRef = ref<HTMLElement | null>(null)
+const inputRef = ref<InstanceType<typeof NInput> | null>(null)
+
+// 斜杠命令注册表（M1-15，来自后端 GET /api/commands）。
+const commands = ref<Command[]>([])
+// 命令浮层是否临时关闭（用户按 Esc 后，重新清空/输入 / 再开启）。
+const dismissPalette = ref(false)
+// 浮层中高亮项索引。
+const highlightIndex = ref(0)
 
 // 当前选中的会话对象（用于顶部标题显示）。
 const activeSession = computed(
@@ -68,7 +83,29 @@ const currentProviderName = computed(() => {
   return defaultModel.value ? defaultModel.value.provider_name : '—'
 })
 
-// 拉取会话列表与可用模型。
+// 命令浮层可见条件：输入框以 / 开头且仍处于「命令名输入阶段」（尚未输入空格进入填参）。
+const showPalette = computed(() => {
+  if (dismissPalette.value) return false
+  const t = input.value
+  if (!t.startsWith('/')) return false
+  return !t.slice(1).includes(' ')
+})
+// 根据已输入的命令名前缀过滤命令。
+const filteredCommands = computed(() => {
+  const t = input.value
+  if (!t.startsWith('/')) return commands.value
+  const q = t.slice(1).toLowerCase()
+  if (!q) return commands.value
+  return commands.value.filter((c) => c.name.startsWith(q))
+})
+// 命令分类着色（与后端 CategorySystem/Workspace/Agent 对齐）。
+function categoryType(c: Command): 'default' | 'warning' | 'success' {
+  if (c.category === 'workspace') return 'warning'
+  if (c.category === 'agent') return 'success'
+  return 'default'
+}
+
+// 拉取会话列表与可用模型与命令注册表。
 async function loadSessions() {
   sessions.value = await listSessions()
 }
@@ -79,10 +116,18 @@ async function loadModels() {
     message.error((e as Error).message)
   }
 }
+async function loadCommands() {
+  try {
+    commands.value = await fetchCommands()
+  } catch (e) {
+    message.error(`命令列表加载失败：${(e as Error).message}`)
+  }
+}
 
-// 切换会话：加载其历史消息（服务端已持久化）。
+// 切换会话：重置绑定状态并加载其历史消息（服务端已持久化）。
 async function selectSession(key: string) {
   activeKey.value = key
+  selectedWorkspaceKey.value = null
   messages.value = []
   try {
     const detail = await getSession(key)
@@ -104,16 +149,9 @@ async function newSession() {
   await selectSession(s.session_key)
 }
 
-// 发送消息：追加用户消息 + 助手占位，再消费 SSE 流式回复。
-async function send() {
-  const text = input.value.trim()
-  if (!text || !activeKey.value || streaming.value) return
-  // 支持 /clear 命令：清空当前会话上下文（不发送给模型）。
-  if (text === '/clear') {
-    input.value = ''
-    clearContext()
-    return
-  }
+// 发送渲染后的提示词或普通文本（client 命令与正常消息共用此路径）。
+async function sendMessage(text: string) {
+  if (!activeKey.value || streaming.value) return
   if (models.value.length === 0) {
     message.warning('请先在「Model 管理」启用至少一个模型')
     return
@@ -123,6 +161,7 @@ async function send() {
   const assistantId = `a-${Date.now()}`
   messages.value.push({ id: assistantId, role: 'assistant', content: '', streaming: true })
   input.value = ''
+  dismissPalette.value = false
   scrollToBottom()
 
   streaming.value = true
@@ -133,6 +172,7 @@ async function send() {
       sessionKey: activeKey.value,
       message: text,
       modelId: selectedModelId.value ?? undefined,
+      workspaceKey: selectedWorkspaceKey.value ?? undefined,
       signal: ac.signal,
       onEvent: (ev: AGUIEvent) => onEvent(ev, assistantId),
     })
@@ -149,6 +189,128 @@ async function send() {
     streaming.value = false
     abortController.value = null
     scrollToBottom()
+  }
+}
+
+// 执行已解析的斜杠命令（三类 Kind 分流）。
+function executeSlashCommand(cmd: Command, args: string) {
+  switch (cmd.kind) {
+    case 'client':
+      if (cmd.name === 'clear') clearContext()
+      else if (cmd.name === 'model') applyModelCommand(args)
+      else if (cmd.name === 'workspace') applyWorkspaceCommand(args)
+      else message.info(`命令 /${cmd.name} 暂未在前端实现`)
+      break
+    case 'prompt': {
+      const prompt = renderCommandPrompt(cmd, args)
+      if (!prompt) {
+        message.warning(`命令 /${cmd.name} 无可用模板`)
+        return
+      }
+      sendMessage(prompt)
+      break
+    }
+    case 'endpoint':
+      message.info(`命令 /${cmd.name} 暂未在前端实现`)
+      break
+    default:
+      message.info(`未知命令类型：${cmd.kind}`)
+  }
+}
+
+// /model <model_id>：解析并切换当前对话模型（本地状态）。
+function applyModelCommand(args: string) {
+  const key = args.trim()
+  if (!key) {
+    message.warning('用法：/model <model_id>')
+    return
+  }
+  const m = models.value.find((x) => String(x.id) === key || x.model_id === key)
+  if (!m) {
+    message.warning(`未找到模型：${key}`)
+    return
+  }
+  selectedModelId.value = m.id
+  message.success(`已切换模型：${m.name}`)
+}
+
+// /workspace <key>：绑定/取消绑定当前对话工作区（本地状态，发送时透传后端）。
+function applyWorkspaceCommand(args: string) {
+  const key = args.trim()
+  selectedWorkspaceKey.value = key || null
+  message.success(key ? `已绑定工作区：${key}` : '已取消工作区绑定（回退默认目录）')
+}
+
+// 主发送入口：先尝试解析斜杠命令，否则按普通消息发送。
+function send() {
+  const text = input.value.trim()
+  if (!text || !activeKey.value || streaming.value) return
+
+  // 保底：命令表未加载时仍支持 /clear。
+  if (text === '/clear') {
+    input.value = ''
+    clearContext()
+    return
+  }
+
+  const parsed = resolveSlashCommand(text, commands.value)
+  if (parsed) {
+    input.value = ''
+    dismissPalette.value = false
+    executeSlashCommand(parsed.command, parsed.args)
+    return
+  }
+
+  sendMessage(text)
+}
+
+// 命令浮层：选中某命令后的行为。
+// 有参数的命令（run/plan/model/workspace）→ 把「/name 」填回输入框等用户填参；
+// 无参数的命令（clear/review）→ 直接执行。
+function applyCommand(cmd: Command) {
+  const hasArgs = !!cmd.args && cmd.args.length > 0
+  if (!hasArgs) {
+    input.value = ''
+    dismissPalette.value = false
+    executeSlashCommand(cmd, '')
+    return
+  }
+  input.value = `/${cmd.name} `
+  dismissPalette.value = false
+  highlightIndex.value = 0
+  nextTick(() => inputRef.value?.focus())
+}
+
+// 输入框键盘事件：浮层打开时优先做命令导航，否则 Enter 发送。
+function onKeydown(e: KeyboardEvent) {
+  if (showPalette.value && filteredCommands.value.length > 0 && input.value.trim().length > 1) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      highlightIndex.value = (highlightIndex.value + 1) % filteredCommands.value.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      highlightIndex.value =
+        (highlightIndex.value - 1 + filteredCommands.value.length) % filteredCommands.value.length
+      return
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      const cmd = filteredCommands.value[highlightIndex.value]
+      if (cmd) applyCommand(cmd)
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      dismissPalette.value = true
+      return
+    }
+  }
+  // 否则 Enter 发送，Shift+Enter 换行。
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    send()
   }
 }
 
@@ -186,14 +348,6 @@ function clearContext() {
   message.success('上下文已清空')
 }
 
-// Enter 发送，Shift+Enter 换行。
-function onEnter(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    send()
-  }
-}
-
 // 滚动到底部（流式输出时持续跟随）。
 function scrollToBottom() {
   nextTick(() => {
@@ -202,8 +356,14 @@ function scrollToBottom() {
   })
 }
 
+// 输入变化时重置高亮（前缀变了，候选列表变了）。
+watch(input, () => {
+  highlightIndex.value = 0
+})
+
 onMounted(async () => {
   await loadModels()
+  await loadCommands()
   await loadSessions()
   if (sessions.value.length > 0) {
     await selectSession(sessions.value[0].session_key)
@@ -251,7 +411,10 @@ onMounted(async () => {
         <n-tag v-if="activeSession" size="small" :bordered="false" type="info">
           {{ activeSession.title }}
         </n-tag>
-        <span class="ml-auto text-xs text-gray-400">对话工作台 · 输入 /clear 可重置上下文</span>
+        <span v-if="selectedWorkspaceKey" class="text-xs text-amber-500">
+          📁 {{ selectedWorkspaceKey }}
+        </span>
+        <span class="ml-auto text-xs text-gray-400">对话工作台 · 输入 / 唤起命令</span>
       </header>
 
       <!-- 对话工具栏：当前模型/Provider 可点击切换 + 清空上下文 -->
@@ -323,13 +486,41 @@ onMounted(async () => {
       <footer
         class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
       >
-        <div class="max-w-3xl mx-auto flex items-end gap-2">
+        <div class="max-w-3xl mx-auto relative flex items-end gap-2">
+          <!-- 斜杠命令浮层（输入框以 / 开头时弹出） -->
+          <div
+            v-if="showPalette && filteredCommands.length"
+            class="absolute bottom-full left-0 right-0 mb-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg overflow-hidden z-10"
+          >
+            <div
+              v-for="(cmd, i) in filteredCommands"
+              :key="cmd.name"
+              @click="applyCommand(cmd)"
+              @mouseenter="highlightIndex = i"
+              class="flex items-start gap-2 px-3 py-2 cursor-pointer border-b border-gray-100 dark:border-gray-700/60 last:border-b-0"
+              :class="i === highlightIndex ? 'bg-blue-50 dark:bg-blue-900/30' : 'hover:bg-gray-50 dark:hover:bg-gray-700/40'"
+            >
+              <n-tag size="small" :bordered="false" :type="categoryType(cmd)" class="mt-0.5 shrink-0">
+                {{ cmd.usage }}
+              </n-tag>
+              <div class="min-w-0">
+                <div class="text-xs text-gray-500 dark:text-gray-400 truncate">
+                  {{ cmd.description }}
+                </div>
+                <div v-if="cmd.args && cmd.args.length" class="text-[11px] text-gray-400 mt-0.5">
+                  参数：<code class="font-mono">{{ cmd.args.map((a) => a.name).join(' ') }}</code>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <n-input
+            ref="inputRef"
             v-model:value="input"
             type="textarea"
             :autosize="{ minRows: 1, maxRows: 5 }"
-            placeholder="输入消息，Enter 发送，Shift+Enter 换行；输入 /clear 清空上下文"
-            @keydown="onEnter"
+            placeholder="输入消息，Enter 发送，Shift+Enter 换行；输入 / 唤起命令（/run /review /plan /clear /model /workspace）"
+            @keydown="onKeydown"
           />
           <n-button
             v-if="!streaming"
