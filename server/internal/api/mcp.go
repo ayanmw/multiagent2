@@ -115,7 +115,7 @@ func CreateMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
 		if _, derr := repo.GetMCPServerByName(db, uid, m.Name); derr == nil {
 			c.JSON(http.StatusConflict, gin.H{"error": "mcp server name already exists"})
 			return
-		} else if derr != ErrMCPServerNotFound {
+		} else if derr != repo.ErrMCPServerNotFound {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check mcp server name"})
 			return
 		}

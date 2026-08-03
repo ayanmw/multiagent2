@@ -28,8 +28,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 
-	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
+	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
 
 // 角色名称。agenttool 会把子代理名字直接作为工具名下发给 LLM，
@@ -86,6 +86,10 @@ type Deps struct {
 	// 不下发给 Coder/Reviewer——维护 run 级状态文件是编排者的职责，避免子代理并发写冲突。
 	// 为空时 NewTeam 不安装 StateEnforcer（状态外置功能关闭）。
 	StateStore artifact.Store
+	// SkillContext 是「技能 warm-start」（M2-03）注入的系统上下文片段。
+	// 仅根 Agent（Orchestrator/单代理）使用，不下发给子代理（Coder/Reviewer）——
+	// 维护 run 级上下文是编排者的职责，子代理不应被额外技能上下文干扰。
+	SkillContext string
 }
 
 // validate 校验依赖完整性。

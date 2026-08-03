@@ -4,14 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
-	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	framework "trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -43,7 +45,8 @@ type streamChatRequest struct {
 // team 为 CodeTeam 编排配置（M1-08/M1-09）：EnableSubAgents=true 启用子代理委托
 // （Orchestrator→Coder），叠加 EnableReviewer=true 时加入只读 Reviewer 形成审阅回环。
 // stateStore 与 enableState 驱动「工作状态外置」（M1-16），语义同 ChatHandler。
-func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool) gin.HandlerFunc {
+// skillRoot/skillDataDir/skillWarmStart/skillMaxChars 驱动「技能 warm-start」（M2-03），语义同 ChatHandler。
+func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int) gin.HandlerFunc {
 	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
@@ -146,16 +149,20 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 			}
 		}
 		eng, err := engine.New(engine.ModelConfig{
-			ModelID:    m.ModelID,
-			BaseURL:    p.BaseURL,
-			APIKey:     apiKey,
-			Protocol:   string(p.Protocol),
-			Timeout:    engineTimeout,
-			Tools:      tools,
-			Team:       team,
-			Workdir:    workdir,
-			EnableState: enableState,
-			StateStore: stateStore,
+			ModelID:        m.ModelID,
+			BaseURL:        p.BaseURL,
+			APIKey:         apiKey,
+			Protocol:       string(p.Protocol),
+			Timeout:        engineTimeout,
+			Tools:          tools,
+			Team:           team,
+			Workdir:        workdir,
+			EnableState:    enableState,
+			StateStore:     stateStore,
+			SkillWarmStart: skillWarmStart,
+			SkillRoots:     []string{skillRoot, filepath.Join(skillDataDir, strconv.FormatUint(uint64(uid), 10))},
+			SkillKeywords:  nil,
+			SkillMaxChars:  skillMaxChars,
 		})
 		if err != nil {
 			emit("RUN_ERROR", gin.H{"message": err.Error()})

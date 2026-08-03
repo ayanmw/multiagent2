@@ -9,6 +9,7 @@ import (
 	"time"
 
 	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
+	"github.com/ayanmw/multiagent2/server/internal/skillrepo"
 )
 
 // DefaultEngineTimeout is the fallback streaming timeout when ENGINE_TIMEOUT_SECONDS
@@ -46,6 +47,11 @@ type Config struct {
 	MaxToolIterations int  // 单次 invocation 工具迭代轮数上限（env MAX_TOOL_ITERATIONS，默认 16），M1-13
 	MaxToolRetries    int  // 单个工具失败后的重试次数（env MAX_TOOL_RETRIES，默认 2），M1-13
 	GuardrailDisabled bool // 关闭护栏（env GUARDRAIL_DISABLED，默认 false）；生产/无人值守禁止开启，M1-13
+	// Skills 仓库（M2-03）：共享技能根（内置/管理员，只读）+ 用户私有技能根（owner 隔离）。
+	skillsRoot        string // 共享技能根目录（env SKILLS_ROOT，默认 <cwd>/skills）
+	skillsDataDir     string // 用户私有技能根目录（env SKILLS_DATA_DIR，默认 <cwd>/data/skills）
+	skillWarmStart    bool   // 是否开启「技能 warm-start」注入（env SKILL_WARM_START，默认 true），M2-03
+	skillWarmMaxChars int    // warm-start 注入内容长度上限（控长，env SKILL_WARM_START_MAX_CHARS，默认 6000），M2-03
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -199,6 +205,37 @@ func Load() *Config {
 		log.Println("[WARN] GUARDRAIL_DISABLED=true: circuit-breaker limit lifted; only for local debugging, NOT for unattended runs.")
 	}
 
+	// Skills 仓库（M2-03）：共享技能根（内置/管理员，只读）+ 用户私有技能根（owner 隔离）。
+	// 两目录均在 Load 时确保存在，使 warm-start 扫描与私有技能写入不会因目录缺失失败。
+	skillsRoot := envOrDefault("SKILLS_ROOT", "")
+	if skillsRoot == "" {
+		execPath, _ := os.Getwd()
+		skillsRoot = filepath.Join(execPath, "skills")
+	}
+	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
+		panic("failed to create skills root directory: " + err.Error())
+	}
+	cfg.skillsRoot = skillsRoot
+
+	skillsDataDir := envOrDefault("SKILLS_DATA_DIR", "")
+	if skillsDataDir == "" {
+		execPath, _ := os.Getwd()
+		skillsDataDir = filepath.Join(execPath, "data", "skills")
+	}
+	if err := os.MkdirAll(skillsDataDir, 0o755); err != nil {
+		panic("failed to create skills data directory: " + err.Error())
+	}
+	cfg.skillsDataDir = skillsDataDir
+
+	// 技能 warm-start（M2-03）：默认开启；把相关 SKILL.md 注入根 Agent 系统上下文，
+	// 使新会话自动「带着技能知识」开工。SKILL_WARM_START=false 可关闭（纯调试）。
+	cfg.skillWarmStart = envOrDefaultBool("SKILL_WARM_START", true)
+	cfg.skillWarmMaxChars = envOrDefaultInt("SKILL_WARM_START_MAX_CHARS", skillrepo.DefaultWarmStartMaxChars)
+	if cfg.skillWarmMaxChars <= 0 {
+		log.Printf("[WARN] SKILL_WARM_START_MAX_CHARS must be positive; using default %d", skillrepo.DefaultWarmStartMaxChars)
+		cfg.skillWarmMaxChars = skillrepo.DefaultWarmStartMaxChars
+	}
+
 	return cfg
 }
 
@@ -293,6 +330,35 @@ func (c *Config) ArtifactRoot() string {
 // the enforcer and no PLAN/PROGRESS/LEARNINGS files are written.
 func (c *Config) StateEnabled() bool {
 	return c != nil && c.stateEnabled
+}
+
+// SkillsRoot returns the shared (read-only) skills repository root (M2-03).
+func (c *Config) SkillsRoot() string {
+	if c == nil {
+		return ""
+	}
+	return c.skillsRoot
+}
+
+// SkillsDataDir returns the per-user private skills repository root (M2-03).
+func (c *Config) SkillsDataDir() string {
+	if c == nil {
+		return ""
+	}
+	return c.skillsDataDir
+}
+
+// SkillWarmStart reports whether skill warm-start injection is enabled (M2-03).
+func (c *Config) SkillWarmStart() bool {
+	return c != nil && c.skillWarmStart
+}
+
+// SkillWarmStartMaxChars returns the length cap for the warm-start context block (M2-03).
+func (c *Config) SkillWarmStartMaxChars() int {
+	if c == nil || c.skillWarmMaxChars <= 0 {
+		return skillrepo.DefaultWarmStartMaxChars
+	}
+	return c.skillWarmMaxChars
 }
 
 func envOrDefault(key, fallback string) string {

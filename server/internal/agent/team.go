@@ -241,7 +241,7 @@ func NewTeam(d Deps, cfg TeamConfig) (agent.Agent, error) {
 	opts := []llmagent.Option{
 		llmagent.WithModel(d.Model),
 		llmagent.WithDescription("负责目标拆解、子代理委托与「实现→审阅→修复」回环的编排者"),
-		llmagent.WithInstruction(teamInstruction(cfg)),
+		llmagent.WithInstruction(teamInstruction(cfg) + d.SkillContext),
 		llmagent.WithTools(tools),
 	}
 	// 护栏熔断（M1-13）：Orchestrator 受 LLM 调用数 / 工具迭代数 / 工具重试约束，

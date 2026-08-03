@@ -18,6 +18,7 @@ import (
 
 	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
+	"github.com/ayanmw/multiagent2/server/internal/skillrepo"
 )
 
 // defaultInstruction 是 Agent 的系统提示词（中文优先，编程助手定位）。
@@ -56,6 +57,15 @@ type ModelConfig struct {
 	// StateStore 是状态文件的存储后端（M1-16），经 config 注入；
 	// nil 时即使 EnableState=true 也不会安装扩展（避免落空）。
 	StateStore artifact.Store
+	// SkillWarmStart 开启「技能 warm-start」（M2-03）：会话开始时把相关 SKILL.md
+	// 注入根 Agent 系统上下文，使新会话自动带着技能知识开工。
+	SkillWarmStart bool
+	// SkillRoots 是 warm-start 扫描的技能根目录（共享 + 用户私有），由 api 层按 uid 拼好传入。
+	SkillRoots []string
+	// SkillKeywords 是可选的检索关键词（来自 workspace 或首条消息）；为空则注入全部（受长度上限约束）。
+	SkillKeywords []string
+	// SkillMaxChars 是 warm-start 注入内容的长度上限（控长）；<=0 时取默认 6000。
+	SkillMaxChars int
 }
 
 // TeamConfig 是 CodeTeam 编排配置（M1-09），定义在 internal/agent 包内，
@@ -89,6 +99,20 @@ func New(cfg ModelConfig) (*Engine, error) {
 		allTools = append(allTools, cfg.Tools...)
 	}
 
+	// 技能 warm-start（M2-03）：会话开始时把相关 SKILL.md 渲染成系统上下文片段，
+	// 注入根 Agent 指令。SkillRoots 由 api 层按 [共享根, 用户私有根] 拼好传入；
+	// 长度由 SkillMaxChars 上限控制，避免技能膨胀撑爆上下文。
+	skillCtx := ""
+	if cfg.SkillWarmStart && len(cfg.SkillRoots) > 0 {
+		max := cfg.SkillMaxChars
+		if max <= 0 {
+			max = skillrepo.DefaultWarmStartMaxChars
+		}
+		if b, serr := skillrepo.WarmStartBlockRoots(cfg.SkillRoots, cfg.SkillKeywords, max); serr == nil {
+			skillCtx = b
+		}
+	}
+
 	// 根 Agent：
 	//   - 默认（单代理）：codeagent 直接持有全部工具，行为与 M1-07 一致；
 	//   - Team.EnableSubAgents（M1-08）：换成 Orchestrator，代码落地委托给 Coder 子代理；
@@ -96,11 +120,12 @@ func New(cfg ModelConfig) (*Engine, error) {
 	var root agent.Agent
 	if cfg.Team.EnableSubAgents {
 		orchestrator, oerr := codeagent.NewTeam(codeagent.Deps{
-			Model:      m,
-			Workdir:    cfg.Workdir,
-			ExtraTools: allTools,
-			Guardrail:  cfg.Guardrail,
-			StateStore: cfg.StateStore,
+			Model:        m,
+			Workdir:      cfg.Workdir,
+			ExtraTools:   allTools,
+			Guardrail:    cfg.Guardrail,
+			StateStore:   cfg.StateStore,
+			SkillContext: skillCtx,
 		}, cfg.Team)
 		if oerr != nil {
 			return nil, oerr
@@ -112,7 +137,7 @@ func New(cfg ModelConfig) (*Engine, error) {
 		// LLM 调用/工具迭代上限，模型一旦陷入死循环会卡死整轮 Run。
 		singleOpts := []llmagent.Option{
 			llmagent.WithModel(m),
-			llmagent.WithInstruction(defaultInstruction),
+			llmagent.WithInstruction(defaultInstruction + skillCtx),
 			llmagent.WithTools(allTools),
 		}
 		if grdOpts := cfg.Guardrail.Options(); grdOpts != nil {

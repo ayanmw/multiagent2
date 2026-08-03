@@ -99,6 +99,15 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.PUT("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.UpdateMCPServerHandler(db.DB))
 		protected.DELETE("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.DeleteMCPServerHandler(db.DB))
 
+		// Skills 技能仓库（M2-03）：用户归属的技能管理（文件系统后端，owner 隔离）。
+		// 读操作需 skills:read，写操作（建/更新/删私有技能）需 skills:write（RBAC）。
+		// 共享技能（仓库 skills/ 目录）对所有用户可见但只读，不可经 API 改写。
+		protected.GET("/skills", middleware.RequirePermission(db.DB, "skills", "read"), api.ListSkillsHandler(cfg.SkillsRoot(), cfg.SkillsDataDir()))
+		protected.POST("/skills", middleware.RequirePermission(db.DB, "skills", "write"), api.CreateSkillHandler(cfg.SkillsRoot(), cfg.SkillsDataDir()))
+		protected.GET("/skills/:name", middleware.RequirePermission(db.DB, "skills", "read"), api.GetSkillHandler(cfg.SkillsRoot(), cfg.SkillsDataDir()))
+		protected.PUT("/skills/:name", middleware.RequirePermission(db.DB, "skills", "write"), api.UpdateSkillHandler(cfg.SkillsRoot(), cfg.SkillsDataDir()))
+		protected.DELETE("/skills/:name", middleware.RequirePermission(db.DB, "skills", "write"), api.DeleteSkillHandler(cfg.SkillsRoot(), cfg.SkillsDataDir()))
+
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
 		// M1-08：AGENT_MODE=team 时根 Agent 换成 Orchestrator，代码落地委托 Coder 子代理。
 		// M1-09：team 模式默认再加入只读 Reviewer（TEAM_REVIEWER），形成「实现→审阅→修复」回环。
@@ -106,6 +115,8 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// 推进到 complete/blocked 才允许结束，过早的最终答复会被拦截并要求继续干活。
 		// M1-12：team 模式默认启用 Plan-Execute 循环（PLAN_EXECUTE），Orchestrator 必须
 		// 先建计划、逐项执行完毕才允许结束；二者叠加在 Orchestrator 上。
+		// M2-03：skillWarmStart 等参数驱动「技能 warm-start」，会话开始把相关 SKILL.md
+		// 注入根 Agent 系统上下文（长度受 SkillWarmStartMaxChars 上限控制）。
 		teamCfg := engine.TeamConfig{
 			EnableSubAgents: cfg.SubAgentsEnabled(),
 			EnableReviewer:  cfg.ReviewerEnabled(),
@@ -116,14 +127,15 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 			MaxPlanNudges:   cfg.MaxPlanNudges(),
 			Guardrail:       cfg.GuardrailConfig(), // M1-13：护栏熔断预算（默认启用）
 		}
-		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState))
+		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars()))
 
 		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化
 		// M0.5-06：message 改由 POST body 传递（避免明文进访问日志），故注册为 POST。
 		// M1-06/07：在此端点装配 CodeAct 工具；工作目录优先取对话绑定的 workspace 目录，
 		// 未绑定时回退 WorkspaceRoot/<uid>。workspace_key 经请求体传入。
 		// M1-16：stateStore/enableState 驱动「工作状态外置」，使长任务中断后续跑能接上。
-		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState))
+		// M2-03：skillWarmStart 等参数驱动「技能 warm-start」注入系统上下文。
+		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars()))
 	}
 
 	return r

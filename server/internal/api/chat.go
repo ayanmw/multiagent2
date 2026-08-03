@@ -3,16 +3,18 @@ package api
 import (
 	"errors"
 	"net/http"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
+	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
-	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -42,7 +44,9 @@ type chatResponse struct {
 // 叠加 EnableReviewer=true 时再加入只读 Reviewer，形成「实现→审阅→修复」回环。
 // stateStore 与 enableState 驱动「工作状态外置」（M1-16）：enableState 且 store 非空时，
 // 根 Agent 挂 StateEnforcer，把 PLAN/PROGRESS/LEARNINGS 落盘以支持中断续跑。
-func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool) gin.HandlerFunc {
+// skillRoot/skillDataDir/skillWarmStart/skillMaxChars 驱动「技能 warm-start」（M2-03）：
+// 会话开始时把 [共享根, 用户私有根] 交给技能仓库扫描，相关 SKILL.md 注入根 Agent 系统上下文。
+func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int) gin.HandlerFunc {
 	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
@@ -117,16 +121,20 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			}
 		}
 		eng, err := engine.New(engine.ModelConfig{
-			ModelID:    m.ModelID,
-			BaseURL:    p.BaseURL,
-			APIKey:     apiKey,
-			Protocol:   string(p.Protocol),
-			Timeout:    engineTimeout,
-			Tools:      tools,
-			Team:       team,
-			Workdir:    workdir,
-			EnableState: enableState,
-			StateStore: stateStore,
+			ModelID:        m.ModelID,
+			BaseURL:        p.BaseURL,
+			APIKey:         apiKey,
+			Protocol:       string(p.Protocol),
+			Timeout:        engineTimeout,
+			Tools:          tools,
+			Team:           team,
+			Workdir:        workdir,
+			EnableState:    enableState,
+			StateStore:     stateStore,
+			SkillWarmStart: skillWarmStart,
+			SkillRoots:     []string{skillRoot, filepath.Join(skillDataDir, strconv.FormatUint(uint64(uid), 10))},
+			SkillKeywords:  nil,
+			SkillMaxChars:  skillMaxChars,
 		})
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
