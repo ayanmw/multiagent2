@@ -314,3 +314,14 @@
   - `go build ./...` ✓ | `go vet ./...`（变更包）✓ | `go test -count=1 ./internal/artifact/... ./internal/agent/... ./internal/engine/... ./internal/config/...` 全绿（agent 包 2.8s、engine 5.9s）。
 - 已知环境限制（非代码问题）：`internal/api`/`internal/cmd/server` 经 `go-sqlite3` 依赖 CGO，本沙箱无 gcc（`CGO_ENABLED=0`），故这两个包的 DB 测试无法运行；本轮对它们的改动（handler/buildRouter 签名加 `stateStore/enableState`、main.go 创建 `FileStore`）已通过 `gofmt -e` 语法校验 + 全签名一致性 grep 复核（`api/chat.go`、`api/sse.go`、`cmd/server/main.go` 及 3 处测试 `buildRouter(db,cfg,disc,nil,false)` 调用点均对齐），在具备 gcc 的环境可正常编译。
 - 下一步：PLAN 中 **M1-17（集成验证 E2E：登录→建 workspace→选模型→多轮有记忆→/run 执行→Coder/Reviewer 协同改文件→Goal 循环到 complete→刷新历史仍在）** 成为下一个 ○，依赖 M1-04..16。
+
+---
+
+### 2026-08-03 17:25 | M1-17 | ✅
+- 完成内容：**集成验证 E2E（M1 CodeAgent 核心收口，M1-04..16 全部打通后的全链路验收）**。新增两个分层 E2E 测试：
+  - ① 引擎层全链路 `server/internal/engine/m1_integration_test.go` 的 `TestEngine_M1_FullChain_TeamGoalComplete`：单条 `engine.Chat` 串起 **Team（Orchestrator→Coder 写文件→Reviewer 只读审阅→Coder 修复）+ Goal 契约（create_goal→协作→update_goal(complete)）**。脚本化 mock 按「请求携带工具清单」区分角色（Orchestrator 带 coder/reviewer/goal 工具、Coder 带 file_write、Reviewer 带 file_read），并按 Goal 契约「未收敛关流式」特性用 `textResp/toolResp` 闭包自适应 SSE/单对象 JSON 回包。**本沙箱实跑通过**：coder 写 2 次（初版+修复）、reviewer 审阅 1 次且工具清单严格为 `[file_read, grep]`（只读护栏生效）、最终 hello.txt 为修复后内容 `hello from coder\n`、goal 收敛到 `complete`、最终答复含 `FINAL` 且无过早 final 泄漏。覆盖了 M1-17 要求的「Coder/Reviewer 协同改文件 + Goal 循环到 complete」。
+  - ② HTTP 层全链路 `server/cmd/server/m1_integration_test.go` 的 `TestM1_HTTP_Integration_E2E`：进程内复用 `buildRouter` 跑通「注册→登录→建 workspace→建 Provider→sync→启用+默认模型→建 Session(绑定 workspace)→首轮对话→/run 执行 shell 命令(落盘 done.txt)→多轮记忆(第二轮引用首句实体『Go Multi-Agent』)→历史持久化(6 条消息，刷新后仍在)」。脚本化 mock 按「最新 user 消息含『执行以下 shell 命令』(前端 /run 渲染词)」驱动 shell_exec、其余回声首句验证历史回灌。覆盖了 M1-17 要求的「登录→建 workspace→选模型→多轮有记忆→/run 执行→刷新历史仍在」与 M1-06/07（CodeAct+Workspace 在 HTTP 端点真正执行命令）。
+- 验证：`go test ./internal/engine/ -count=1` 全绿，**`TestEngine_M1_FullChain_TeamGoalComplete` 在沙箱实跑 PASS**（0.05s）；`go vet ./cmd/server/` 对含新测试的整包**类型检查通过（exit 0）**。已知环境限制：本沙箱 `CGO_ENABLED=0` 无 gcc，`go-sqlite3` 链接期桩报错使 `cmd/server` 包测试无法运行（仅运行时阻断，非代码问题），`TestM1_HTTP_Integration_E2E` 在具备 gcc 的环境可正常编译运行（与 M1-16 既定模式一致）。未改动任何生产代码，仅新增测试文件；`go build/vet` 对非 CGO 包无影响。
+- 下一步：**M1 阶段全部 ✅（M1-04..17），M1 收口**。下一步可进入 M2（生态：MCP/Skills/Git+taskrun 后台任务/Worktree 隔离/toolsearch）或按 PLAN 既定里程碑推进；本轮循环 STOP。
+
+

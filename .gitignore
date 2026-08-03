@@ -38,3 +38,4 @@ Thumbs.db
 tool/**/workbuddy-llm-api
 **/*.exe
 *.exe~
+*.log
