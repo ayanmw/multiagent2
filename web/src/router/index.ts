@@ -63,6 +63,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '任务中心', desc: '后台任务列表、状态与 transcript' },
       },
       {
+        path: 'audit',
+        name: 'audit',
+        component: () => import('@/views/AuditView.vue'),
+        meta: { title: '审计日志', desc: '命令执行审计：按用户/决策/时间筛选' },
+      },
+      {
         path: 'settings',
         name: 'settings',
         component: () => import('@/views/SettingsView.vue'),

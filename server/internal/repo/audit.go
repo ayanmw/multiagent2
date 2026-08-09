@@ -2,6 +2,7 @@ package repo
 
 import (
 	"log"
+	"time"
 
 	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/model"
@@ -47,14 +48,33 @@ func CreateAuditLog(db *gorm.DB, e *model.AuditLog) error {
 	return db.Create(e).Error
 }
 
+// 审计日志分页大小约定：缺省 50，单页上限 200（防止前端误传超大 limit 拖垮查询）。
+const (
+	DefaultAuditPageSize = 50
+	MaxAuditPageSize     = 200
+)
+
 // AuditLogFilter 是审计日志查询的过滤条件。
 // UserID=0 表示不按归属过滤（developer/admin 看全员）；非 0 时只返回该用户记录（owner 隔离）。
 type AuditLogFilter struct {
-	UserID   uint   // 0 = 不过滤归属
-	Decision string // 可选：allow/deny/ask
-	Command  string // 可选：命令模糊匹配
-	Limit    int    // 分页大小，<=0 时回退 50
-	Offset   int    // 偏移
+	UserID   uint      // 0 = 不过滤归属
+	Decision string    // 可选：allow/deny/ask
+	Command  string    // 可选：命令模糊匹配
+	Start    time.Time // 可选：起始时间（含），零值表示不限
+	End      time.Time // 可选：截止时间（含），零值表示不限
+	Limit    int       // 分页大小，<=0 时回退 DefaultAuditPageSize，超出上限则钳到 MaxAuditPageSize
+	Offset   int       // 偏移，负值按 0 处理
+}
+
+// NormalizeAuditPageSize 归一化分页大小：<=0 回退缺省值，超上限钳制。
+func NormalizeAuditPageSize(limit int) int {
+	if limit <= 0 {
+		return DefaultAuditPageSize
+	}
+	if limit > MaxAuditPageSize {
+		return MaxAuditPageSize
+	}
+	return limit
 }
 
 // ListAuditLogs 返回按条件过滤的审计日志（按时间倒序），并带总数（分页友好）。
@@ -69,16 +89,23 @@ func ListAuditLogs(db *gorm.DB, f AuditLogFilter) ([]model.AuditLog, int64, erro
 	if f.Command != "" {
 		q = q.Where("command LIKE ?", "%"+f.Command+"%")
 	}
+	if !f.Start.IsZero() {
+		q = q.Where("created_at >= ?", f.Start)
+	}
+	if !f.End.IsZero() {
+		q = q.Where("created_at <= ?", f.End)
+	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	limit := f.Limit
-	if limit <= 0 {
-		limit = 50
+	limit := NormalizeAuditPageSize(f.Limit)
+	offset := f.Offset
+	if offset < 0 {
+		offset = 0
 	}
 	var list []model.AuditLog
-	if err := q.Order("created_at desc").Limit(limit).Offset(f.Offset).Find(&list).Error; err != nil {
+	if err := q.Order("created_at desc").Order("id desc").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
 		return nil, 0, err
 	}
 	return list, total, nil

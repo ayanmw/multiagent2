@@ -382,3 +382,10 @@
 - 范围约束：本任务只做「落库 + API + 全链路覆盖 + 建表 + 单测」，前端 `AuditView` 留 **M3-02**（依赖本任务）；不改动 `AuditEntry` 接口、不影响 `MemoryAuditor`/`LogAuditor` 既有行为。
 - 下一步：PLAN 中 **M3-02（审计日志 API + 前端页 `AuditView`，owner 隔离 + 筛选 + vue-tsc 通过）** 成为下一个 ○，依赖 M3-01（已 ✅）。
 
+---
+
+### 2026-08-09 22:20 | M3-02 | ✅
+- 完成内容：**审计日志 API 增强 + 前端 `AuditView`（M3 企业化第二任务，依赖 M3-01，对齐 PLAN 验收「developer 看全员、viewer 只看自己；筛选生效；vue-tsc 通过」）**。① 后端 `server/internal/repo/audit.go`：`AuditLogFilter` 扩展 `Start/End time.Time` 时间范围过滤 + `Limit/Offset` 分页；新增 `DefaultAuditPageSize=50`/`MaxAuditPageSize=200` 与 `NormalizeAuditPageSize`（<=0 回退缺省、超上限钳制、负 offset 按 0）；`ListAuditLogs` 增加 `created_at >= ? / <= ?` 条件、按 `created_at desc, id desc` 排序。② 后端 `server/internal/api/audit.go` 全量增强 `ListAuditLogsHandler`：`decision` 合法性校验（allow/ask/deny，非法 400）、`user_id` 仅 admin/developer 生效且 viewer 强制只看本人（忽略传入 user_id，owner 隔离兜底）、`start/end` 支持毫秒时间戳与 RFC3339/日期字符串（坏格式或 end<start 400）、`limit/offset` 回显；返回体新增 `scope(all/self)`/`limit`/`offset` 元信息供前端渲染。③ **新增单测**（纯 Go `glebarez/sqlite`，无需 gcc）：`repo/audit_test.go` 3 例（时间范围过滤/分页归一化/超大 limit 钳制）、`api/audit_test.go` 6 例（角色可见范围 dev/admin 看全员·viewer 仅看自己·viewer user_id 被忽略、各类筛选、坏参 400、未认证 401、parseAuditTime 覆盖）；全部 PASS。④ 前端：`web/src/api/audit.ts` 封装 `listAuditLogs(params)`（查询字符串构造、decision 映射）；`web/src/views/AuditView.vue`（NDataTable：ID/用户/命令/工作目录/决策 Tag/执行/原因/备注/时间 + 筛选区：决策 NSelect、命令 NInput、用户ID NInputNumber【仅 admin/developer】、时间范围 NDatePicker daterange；服务端分页 + 详情弹窗 NDescriptions）；`router/index.ts` 增 `audit` 路由、`DefaultLayout.vue` 增「审计日志」菜单项。
+- 验证：`go build ./...` ✓ | `go vet ./...` ✓（含 CGO 包）；`go test ./internal/api/... ./internal/repo/...` 中 **audit 相关 13 例全 PASS**（纯 Go sqlite 运行）；前端 `vue-tsc --noEmit` ✓ | `vite build` ✓（产出 `AuditView` chunk）。已知环境限制：本沙箱 `CGO_ENABLED=0` 无 gcc，历史 `go-sqlite3` 用例（`TestListSessionsScopedAndOrdered`/`TestGetRoleIDByName` 等 10 例）按 AGENTS.md 豁免跳过、与本任务无关，非代码缺陷。
+- 下一步：PLAN 中 **M3-03（Token/费用计量）** 成为下一个 ○，依赖 M2。
+

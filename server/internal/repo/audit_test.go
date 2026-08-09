@@ -136,3 +136,98 @@ func TestListAuditLogs_FilterAndPagination(t *testing.T) {
 		t.Fatalf("分页异常: total=%d returned=%d", totalP, len(p))
 	}
 }
+
+// TestListAuditLogs_TimeRangeFilter 验证 M3-02 新增的时间范围过滤：
+// 只返回 [Start, End] 区间内的审计记录，区间外记录不出现。
+func TestListAuditLogs_TimeRangeFilter(t *testing.T) {
+	db := newAuditTestDB(t)
+	const owner uint = 11
+	now := time.Now()
+
+	// 直接落库以精确控制 created_at（DBAuditor 走 GORM 自动时间戳，无法回溯）。
+	rows := []struct {
+		command   string
+		createdAt time.Time
+	}{
+		{"old-cmd", now.Add(-72 * time.Hour)},
+		{"mid-cmd", now.Add(-24 * time.Hour)},
+		{"new-cmd", now.Add(-1 * time.Hour)},
+	}
+	for _, r := range rows {
+		rec := &model.AuditLog{
+			UserID:   owner,
+			Command:  r.command,
+			Decision: executor.DecisionAllow.String(),
+			Allowed:  true,
+		}
+		rec.CreatedAt = r.createdAt
+		if err := CreateAuditLog(db, rec); err != nil {
+			t.Fatalf("create audit log %s: %v", r.command, err)
+		}
+	}
+
+	// 仅取最近 48 小时：应命中 mid-cmd 与 new-cmd。
+	list, total, err := ListAuditLogs(db, AuditLogFilter{UserID: owner, Start: now.Add(-48 * time.Hour)})
+	if err != nil {
+		t.Fatalf("ListAuditLogs start: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("Start 过滤应命中 2 条，实际 %d", total)
+	}
+	for _, l := range list {
+		if l.Command == "old-cmd" {
+			t.Fatal("Start 过滤后不应出现区间外的 old-cmd")
+		}
+	}
+
+	// 闭区间 [-48h, -12h]：只剩 mid-cmd。
+	list, total, err = ListAuditLogs(db, AuditLogFilter{
+		UserID: owner,
+		Start:  now.Add(-48 * time.Hour),
+		End:    now.Add(-12 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("ListAuditLogs range: %v", err)
+	}
+	if total != 1 || len(list) != 1 || list[0].Command != "mid-cmd" {
+		t.Fatalf("时间区间过滤异常: total=%d list=%+v", total, list)
+	}
+
+	// 不带时间条件时全部可见（确认过滤是可选的）。
+	if _, all, err := ListAuditLogs(db, AuditLogFilter{UserID: owner}); err != nil || all != 3 {
+		t.Fatalf("无时间条件应见 3 条，实际 %d (err=%v)", all, err)
+	}
+}
+
+// TestNormalizeAuditPageSize 验证分页大小归一化：缺省回退与上限钳制。
+func TestNormalizeAuditPageSize(t *testing.T) {
+	cases := []struct{ in, want int }{
+		{0, DefaultAuditPageSize},
+		{-5, DefaultAuditPageSize},
+		{20, 20},
+		{MaxAuditPageSize, MaxAuditPageSize},
+		{9999, MaxAuditPageSize},
+	}
+	for _, c := range cases {
+		if got := NormalizeAuditPageSize(c.in); got != c.want {
+			t.Fatalf("NormalizeAuditPageSize(%d)=%d，期望 %d", c.in, got, c.want)
+		}
+	}
+}
+
+// TestListAuditLogs_LimitClamped 验证超大 limit 被钳到单页上限（防拖垮查询）。
+func TestListAuditLogs_LimitClamped(t *testing.T) {
+	db := newAuditTestDB(t)
+	const owner uint = 12
+	aud := NewDBAuditor(db, owner)
+	for i := 0; i < 3; i++ {
+		aud.Record(executor.AuditEntry{Command: "ls", Decision: executor.DecisionAllow, Allowed: true, Timestamp: time.Now()})
+	}
+	list, total, err := ListAuditLogs(db, AuditLogFilter{UserID: owner, Limit: 100000, Offset: -3})
+	if err != nil {
+		t.Fatalf("ListAuditLogs clamp: %v", err)
+	}
+	if total != 3 || len(list) != 3 {
+		t.Fatalf("钳制后仍应返回全部 3 条，实际 total=%d len=%d", total, len(list))
+	}
+}
