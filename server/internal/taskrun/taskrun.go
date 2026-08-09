@@ -47,6 +47,11 @@ type WorkerResolver struct {
 	// 返回审计器写入 audit_logs 表的对应 owner 名下，实现 taskrun 后台子任务命令的全量审计；
 	// nil 时 worker 命令经日志审计（LogAuditor，不落库）。若未注入则 worker 使用 nil 审计器。
 	NewAuditor func(ownerUserID uint) executor.Auditor
+	// NewCheckpointer 按 OwnerUserID + 子任务会话解析「人工检查点」落库回调（M3-05）。
+	// 后台任务是典型的无人值守场景：命中 ask 危险命令时不再直接 deny，而是生成 checkpoint
+	// 并暂停该命令，待运营在前端审批（approve 执行 / reject 中止）。
+	// nil 时回退为直接 deny（与 M3-05 之前行为一致）。
+	NewCheckpointer func(ownerUserID uint, childSessionID string) executor.Checkpointer
 }
 
 // WorktreeHook 把 git worktree 隔离接入 taskrun 生命周期（M2-05）：
@@ -113,9 +118,14 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver) 
 		// M3-01：构造落库审计器，使 worker 子代理执行的命令写入该 owner 名下的审计日志。
 		// inv.Session.UserID 为字符串形式的用户 id（与入口 uid 一致），解析失败则回落系统（0）。
 		var auditor executor.Auditor
-		if res.NewAuditor != nil {
-			if uidNum, perr := strconv.ParseUint(uid, 10, 64); perr == nil {
+		// M3-05：后台任务无人值守，命中 ask 危险命令时生成人工检查点并暂停（而非直接 deny）。
+		var checkpointer executor.Checkpointer
+		if uidNum, perr := strconv.ParseUint(uid, 10, 64); perr == nil {
+			if res.NewAuditor != nil {
 				auditor = res.NewAuditor(uint(uidNum))
+			}
+			if res.NewCheckpointer != nil {
+				checkpointer = res.NewCheckpointer(uint(uidNum), inv.Session.ID)
 			}
 		}
 		// M2-05：若开启 worktree 隔离，把子代理的执行目录切换到独立 worktree（独立分支），
@@ -126,10 +136,11 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver) 
 			}
 		}
 		return codeagent.NewCoder(codeagent.Deps{
-			Model:     m,
-			Workdir:   wd,
-			Guardrail: guardrail,
-			Auditor:   auditor,
+			Model:        m,
+			Workdir:      wd,
+			Guardrail:    guardrail,
+			Auditor:      auditor,
+			Checkpointer: checkpointer,
 		})
 	}
 }

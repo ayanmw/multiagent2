@@ -113,9 +113,8 @@ func (p *DangerousCommandPolicy) Evaluate(command string) (Decision, string) {
 	}
 	for _, r := range p.rules {
 		if r.Decision == DecisionAsk && strings.Contains(norm, r.Match) {
-			if p.mode == ModeUnattended {
-				return DecisionDeny, r.Reason + "（无人值守模式按 deny 处置）"
-			}
+			// ask 规则在所有模式下都返回 DecisionAsk；无人值守场景下的具体处置
+			// （deny / 生成人工检查点并暂停）由 SafeExecutor 依据是否挂了 checkpointer 决定（M3-05）。
 			return DecisionAsk, r.Reason
 		}
 	}

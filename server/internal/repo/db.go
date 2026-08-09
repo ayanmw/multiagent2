@@ -48,6 +48,7 @@ func NewDB(cfg *config.Config) (*DB, error) {
 		&model.AuditLog{},
 		&model.UsageRecord{},
 		&model.BudgetPolicy{},
+		&model.Checkpoint{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to auto-migrate: %w", err)
 	}

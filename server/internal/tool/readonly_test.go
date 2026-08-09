@@ -64,7 +64,7 @@ func TestReadOnlyTools_OnlyReadAndGrep(t *testing.T) {
 // 一旦有人把 CodeAct 全量工具集当成只读集使用，构造期就会失败。
 func TestEnsureReadOnly_RejectsMutatingTool(t *testing.T) {
 	dir := t.TempDir()
-	all, err := NewCodeAct(dir, nil)
+	all, err := NewCodeAct(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("NewCodeAct: %v", err)
 	}

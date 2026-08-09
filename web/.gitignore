@@ -3,3 +3,5 @@ dist/
 dist-ssr/
 *.local
 .vite/
+# 某些 Windows 环境下 TMPDIR 未设置时，tsx/vue-tsc 会在此生成 undefined/temp 临时目录。
+undefined/

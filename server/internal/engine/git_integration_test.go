@@ -94,7 +94,7 @@ func TestEngine_CoderGitCommit_Workspace(t *testing.T) {
 	workdir := t.TempDir()
 
 	// 模拟 workspace 创建时的自动 git init（M2-01）。
-	ex, err := codectool.NewGitExecutor(workdir, nil)
+	ex, err := codectool.NewGitExecutor(workdir, nil, nil)
 	if err != nil {
 		t.Fatalf("NewGitExecutor: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestEngine_CoderGitCommit_Workspace(t *testing.T) {
 	}
 
 	// 2) 仓库已提交：git_status 干净、git_log 含提交说明（用 Git 工具复核，证明 Coder 真提交）。
-	gt, gerr := codectool.NewGitTools(workdir, nil)
+	gt, gerr := codectool.NewGitTools(workdir, nil, nil)
 	if gerr != nil {
 		t.Fatalf("NewGitTools: %v", gerr)
 	}

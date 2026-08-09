@@ -96,6 +96,11 @@ type Deps struct {
 	// OwnerUserID）注入 repo.NewDBAuditor，使 Coder 子代理执行的命令同样写入审计日志，
 	// 实现 CodeAct/Git/taskrun 三类执行入口的全量覆盖。
 	Auditor executor.Auditor
+	// Checkpointer 是无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05）。
+	// 传入后，Coder 子代理命中 ask 的命令不再直接 deny，而是生成 checkpoint 并暂停，
+	// 待前端审批（approve 执行 / reject 中止）。nil 时回退为直接 deny（与旧行为一致）。
+	// 与 Auditor 同源：请求级（chat/sse 的当前 uid）或 worker 级（taskrun 的 OwnerUserID）注入。
+	Checkpointer executor.Checkpointer
 }
 
 // validate 校验依赖完整性。
@@ -115,13 +120,13 @@ func NewCoder(d Deps) (agent.Agent, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	tools, err := codectool.NewCodeAct(d.Workdir, d.Auditor)
+	tools, err := codectool.NewCodeAct(d.Workdir, d.Auditor, d.Checkpointer)
 	if err != nil {
 		return nil, err
 	}
 	// M2-01：Coder 同时持有 Git 工具集（git_status/git_diff/git_commit/git_log/git_branch），
 	// 使其在完成代码改动后能显式提交到 workspace 的 git 仓库。
-	gitTools, gerr := codectool.NewGitTools(d.Workdir, d.Auditor)
+	gitTools, gerr := codectool.NewGitTools(d.Workdir, d.Auditor, d.Checkpointer)
 	if gerr != nil {
 		return nil, gerr
 	}

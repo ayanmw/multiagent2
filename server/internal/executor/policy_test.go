@@ -11,7 +11,7 @@ import (
 func TestSafeExecutor_DenyRootDelete(t *testing.T) {
 	h, _ := NewHostExecutor(t.TempDir())
 	aud := NewMemoryAuditor()
-	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeUnattended), aud, nil)
+	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeUnattended), aud, nil, nil)
 
 	res, err := se.Run(context.Background(), "rm -rf /")
 	if err == nil {
@@ -36,7 +36,7 @@ func TestSafeExecutor_DenyRootDelete(t *testing.T) {
 func TestSafeExecutor_SudoRootDelete(t *testing.T) {
 	h, _ := NewHostExecutor(t.TempDir())
 	aud := NewMemoryAuditor()
-	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeUnattended), aud, nil)
+	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeUnattended), aud, nil, nil)
 
 	if _, err := se.Run(context.Background(), "sudo   RM   -rf    /"); err == nil || !errors.Is(err, ErrCommandDenied) {
 		t.Fatalf("sudo rm -rf / 应被拒: %v", err)
@@ -50,7 +50,7 @@ func TestSafeExecutor_SudoRootDelete(t *testing.T) {
 func TestSafeExecutor_AskDeniedInUnattended(t *testing.T) {
 	h, _ := NewHostExecutor(t.TempDir())
 	aud := NewMemoryAuditor()
-	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeUnattended), aud, nil)
+	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeUnattended), aud, nil, nil)
 
 	// 策略层即拒绝，不依赖 git 是否可用。
 	_, err := se.Run(context.Background(), "git push --force origin main")
@@ -67,7 +67,7 @@ func TestSafeExecutor_AskAllowedInInteractive(t *testing.T) {
 	h, _ := NewHostExecutor(t.TempDir())
 	aud := NewMemoryAuditor()
 	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeInteractive), aud,
-		func(command, reason string) bool { return true })
+		func(command, reason string) bool { return true }, nil)
 
 	// rm -rf ./build 是 ask 规则，交互确认后应真正执行（无 build 目录，rm 为空操作退出 0）。
 	res, err := se.Run(context.Background(), "rm -rf ./build")
@@ -88,7 +88,7 @@ func TestSafeExecutor_AskDeniedByHandler(t *testing.T) {
 	h, _ := NewHostExecutor(t.TempDir())
 	aud := NewMemoryAuditor()
 	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeInteractive), aud,
-		func(command, reason string) bool { return false })
+		func(command, reason string) bool { return false }, nil)
 
 	_, err := se.Run(context.Background(), "rm -rf ./build")
 	if err == nil || !errors.Is(err, ErrCommandDenied) {
@@ -103,7 +103,7 @@ func TestSafeExecutor_AskDeniedByHandler(t *testing.T) {
 func TestSafeExecutor_AllowNormalCommand(t *testing.T) {
 	h, _ := NewHostExecutor(t.TempDir())
 	aud := NewMemoryAuditor()
-	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeUnattended), aud, nil)
+	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeUnattended), aud, nil, nil)
 
 	res, err := se.Run(context.Background(), "echo safe")
 	if err != nil {
@@ -121,7 +121,7 @@ func TestSafeExecutor_AllowNormalCommand(t *testing.T) {
 func TestSafeExecutor_ForceDeleteRecursiveAsk(t *testing.T) {
 	h, _ := NewHostExecutor(t.TempDir())
 	aud := NewMemoryAuditor()
-	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeUnattended), aud, nil)
+	se := NewSafeExecutor(h, NewDangerousCommandPolicy(ModeUnattended), aud, nil, nil)
 
 	_, err := se.Run(context.Background(), "rm -rf ./build")
 	if err == nil || !errors.Is(err, ErrCommandDenied) {

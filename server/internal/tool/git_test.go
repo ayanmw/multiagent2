@@ -44,7 +44,7 @@ func TestGitTools_FullChain(t *testing.T) {
 	workdir := t.TempDir()
 
 	// 经 SafeExecutor 初始化仓库（模拟 workspace 自动 git init 的执行通道）。
-	ex, err := NewGitExecutor(workdir, nil)
+	ex, err := NewGitExecutor(workdir, nil, nil)
 	if err != nil {
 		t.Fatalf("NewGitExecutor: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestGitTools_FullChain(t *testing.T) {
 		t.Fatalf("GitInit: %v", err)
 	}
 
-	tools, err := NewGitTools(workdir, nil)
+	tools, err := NewGitTools(workdir, nil, nil)
 	if err != nil {
 		t.Fatalf("NewGitTools: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestGitTools_FullChain(t *testing.T) {
 // 4 个 CodeAct + 5 个 Git 工具（M2-01），无遗漏无重复。
 func TestNewCodeActWithGit_ToolSet(t *testing.T) {
 	workdir := t.TempDir()
-	tools, err := NewCodeActWithGit(workdir, nil)
+	tools, err := NewCodeActWithGit(workdir, nil, nil)
 	if err != nil {
 		t.Fatalf("NewCodeActWithGit: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestNewCodeActWithGit_ToolSet(t *testing.T) {
 
 // TestNewGitTools_RequiresWorkdir 验证空工作目录被拒绝（与 NewCodeAct 行为一致）。
 func TestNewGitTools_RequiresWorkdir(t *testing.T) {
-	if _, err := NewGitTools("", nil); err == nil {
+	if _, err := NewGitTools("", nil, nil); err == nil {
 		t.Fatalf("空 workdir 应返回错误")
 	}
 }

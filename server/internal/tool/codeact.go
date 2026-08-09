@@ -52,12 +52,18 @@ func resolveSafePath(workdir, p string) (string, error) {
 // ShellExec 是 shell_exec 的纯逻辑实现（便于单测，不依赖框架工具包装）。
 // 通过 ex 执行命令，返回「exit_code / stdout / stderr」三段式可读结果。
 // 命令被危险策略拒绝时返回可读的拒绝说明（非 error），便于 Agent 自适应。
+// 命中 ask 策略且无人值守下生成人工检查点时，返回「⏸ 已创建人工检查点」提示（M3-05）。
 func ShellExec(ctx context.Context, ex executor.Executor, command string) (string, error) {
 	if command == "" {
 		return "", fmt.Errorf("command 不能为空")
 	}
 	res, err := ex.Run(ctx, command)
 	if err != nil {
+		var cpErr *executor.CheckpointError
+		if errors.As(err, &cpErr) {
+			// 无人值守下命中 ask 危险命令：已生成人工检查点并暂停本轮运行。
+			return "⏸ 已创建人工检查点 " + cpErr.ID + "（" + cpErr.Reason + "），等待管理员审批后再执行；本轮运行已暂停。", nil
+		}
 		if errors.Is(err, executor.ErrCommandDenied) {
 			// 危险命令：作为正常结果返回拒绝说明，而不是抛错中断 Agent。
 			return "⛔ 命令被安全策略拒绝：" + err.Error(), nil
@@ -217,11 +223,13 @@ func CodeActTools(workdir string, ex executor.Executor) []tool.Tool {
 
 // NewCodeAct 构造一组经危险命令策略包装的 CodeAct 工具（M1-06 业务入口）。
 // workdir 必须存在（调用方负责创建，api 层按 WorkspaceRoot/<uid> 自动建）；
-// 内部使用 NewSafeExecutor(HostExecutor, 危险命令策略(无人值守), auditor)，
+// 内部使用 NewSafeExecutor(HostExecutor, 危险命令策略(无人值守), auditor, nil, cp)，
 // 禁止裸用 HostExecutor（见 LEARNINGS M1-05）。
 // auditor 为审计器：nil 时回落到日志审计（LogAuditor），不阻断命令执行；
 // 业务层在请求级/worker 级传入 repo.NewDBAuditor（M3-01 执行审计落库）。
-func NewCodeAct(workdir string, auditor executor.Auditor) ([]tool.Tool, error) {
+// cp 为无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05）：传入后命中 ask 的命令
+// 不再直接 deny，而是生成 checkpoint 并暂停；nil 时回退为直接 deny（与旧行为一致）。
+func NewCodeAct(workdir string, auditor executor.Auditor, cp executor.Checkpointer) ([]tool.Tool, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
@@ -236,7 +244,8 @@ func NewCodeAct(workdir string, auditor executor.Auditor) ([]tool.Tool, error) {
 		host,
 		executor.NewDangerousCommandPolicy(executor.ModeUnattended),
 		auditor,
-		nil, // 无人值守：ask 类命令直接按 deny 处置
+		nil, // 无人值守：ask 类命令不交交互确认
+		cp,  // 无人值守 ask → 生成人工检查点（nil 时退化 deny，M3-05）
 	)
 	return CodeActTools(workdir, ex), nil
 }

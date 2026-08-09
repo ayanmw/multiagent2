@@ -12,6 +12,8 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
@@ -49,7 +51,7 @@ type streamChatRequest struct {
 // stateStore 与 enableState 驱动「工作状态外置」（M1-16），语义同 ChatHandler。
 // skillRoot/skillDataDir/skillWarmStart/skillMaxChars 驱动「技能 warm-start」（M2-03），语义同 ChatHandler。
 // toolSearchEnabled/toolSearchProvider 驱动「延迟工具箱」（M2-06），按 uid 做 owner 隔离，语义同 ChatHandler。
-func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchEnabled bool, toolSearchProvider engine.ToolSearchProvider) gin.HandlerFunc {
+func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchEnabled bool, toolSearchProvider engine.ToolSearchProvider, checkpointEnabled bool) gin.HandlerFunc {
 	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
@@ -155,11 +157,30 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 			emit("RUN_FINISHED", gin.H{"threadId": sess.SessionKey, "runId": runID})
 			return
 		}
+		// 人工检查点落库回调（M3-05）：仅在 CHECKPOINT_ENABLED 开启时挂载；语义同 chat.go。
+		var checkpointer executor.Checkpointer
+		if checkpointEnabled {
+			checkpointer = func(req executor.CheckpointRequest) (string, error) {
+				cp := &model.Checkpoint{
+					SessionID: sessionKey,
+					UserID:    uid,
+					Command:   req.Command,
+					Workdir:   req.Workdir,
+					Reason:    req.Reason,
+					Context:   req.Context,
+					Status:    model.CheckpointPending,
+				}
+				if err := repo.CreateCheckpoint(db, cp); err != nil {
+					return "", err
+				}
+				return cp.DisplayID(), nil
+			}
+		}
 		var tools []tool.Tool
 		if !enableSubAgents {
 			var tErr error
 			// M2-01：单代理模式同样装配 Git 工具集（见 chat.go ChatHandler 同款处理）。
-			tools, tErr = codectool.NewCodeActWithGit(workdir, repo.NewDBAuditor(db, uid))
+			tools, tErr = codectool.NewCodeActWithGit(workdir, repo.NewDBAuditor(db, uid), checkpointer)
 			if tErr != nil {
 				emit("RUN_ERROR", gin.H{"message": "构建代码执行工具失败: " + tErr.Error()})
 				emit("RUN_FINISHED", gin.H{"threadId": sess.SessionKey, "runId": runID})
@@ -190,6 +211,8 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 			ToolSearchUserID:   uid,
 			// M3-01：命令执行审计器，team 模式下经 Deps 下传到 Coder（单代理模式工具已直接携带）。
 			Auditor: repo.NewDBAuditor(db, uid),
+			// M3-05：人工检查点落库回调，team 模式下经 Deps 下传到 Coder（单代理模式工具已直接携带）。
+			Checkpointer: checkpointer,
 		})
 		if err != nil {
 			emit("RUN_ERROR", gin.H{"message": err.Error()})

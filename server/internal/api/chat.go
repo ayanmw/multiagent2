@@ -14,6 +14,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
@@ -51,7 +52,7 @@ type chatResponse struct {
 // toolSearchEnabled/toolSearchProvider 驱动「延迟工具箱」（M2-06）：开启时引擎挂 tool_search/call_tool
 // 双控制工具，把 MCP 服务器工具按需暴露给模型，避免全部工具声明一次性灌进上下文导致 token 膨胀。
 // provider 按当前 uid 做 owner 隔离（仅加载该用户启用的 MCP 配置）。
-func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchEnabled bool, toolSearchProvider engine.ToolSearchProvider) gin.HandlerFunc {
+func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchEnabled bool, toolSearchProvider engine.ToolSearchProvider, checkpointEnabled bool) gin.HandlerFunc {
 	enableSubAgents := team.EnableSubAgents
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
@@ -133,12 +134,32 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			c.JSON(http.StatusInternalServerError, gin.H{"error": dErr.Error()})
 			return
 		}
+		// 人工检查点落库回调（M3-05）：仅在 CHECKPOINT_ENABLED 开启时挂载；无人值守命中 ask 危险
+		// 命令时调用，把待审批命令写入 checkpoints 表（绑定本次会话与 owner）并返回展示 ID。
+		var checkpointer executor.Checkpointer
+		if checkpointEnabled {
+			checkpointer = func(req executor.CheckpointRequest) (string, error) {
+				cp := &model.Checkpoint{
+					SessionID: sessionKey,
+					UserID:    uid,
+					Command:   req.Command,
+					Workdir:   req.Workdir,
+					Reason:    req.Reason,
+					Context:   req.Context,
+					Status:    model.CheckpointPending,
+				}
+				if err := repo.CreateCheckpoint(db, cp); err != nil {
+					return "", err
+				}
+				return cp.DisplayID(), nil
+			}
+		}
 		var tools []tool.Tool
 		if !enableSubAgents {
 			var tErr error
 			// M2-01：单代理模式同样装配 Git 工具集（git_status/git_diff/git_commit/git_log/git_branch），
 			// 使其能对工作区改动进行版本管理；team 模式下则由 Coder 子代理持有（见 codeagent.NewCoder）。
-			tools, tErr = codectool.NewCodeActWithGit(workdir, repo.NewDBAuditor(db, uid))
+			tools, tErr = codectool.NewCodeActWithGit(workdir, repo.NewDBAuditor(db, uid), checkpointer)
 			if tErr != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "构建代码执行工具失败: " + tErr.Error()})
 				return
@@ -168,6 +189,8 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			ToolSearchUserID:   uid,
 			// M3-01：命令执行审计器，team 模式下经 Deps 下传到 Coder（单代理模式工具已直接携带）。
 			Auditor: repo.NewDBAuditor(db, uid),
+			// M3-05：人工检查点落库回调，team 模式下经 Deps 下传到 Coder（单代理模式工具已直接携带）。
+			Checkpointer: checkpointer,
 		})
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

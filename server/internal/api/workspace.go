@@ -77,7 +77,9 @@ func CreateWorkspaceHandler(db *gorm.DB, workspaceRoot string) gin.HandlerFunc {
 		// 使后续代码改动可由 Coder 经 git_commit 提交管理（验收要求「建 workspace→自动 init」）。
 		// best-effort：git 缺失或初始化失败不阻断 workspace 创建，仅打印告警。
 		// 经 executor.SafeExecutor 执行（与 CodeAct 同款危险命令策略），禁止裸用 os/exec。
-		if ex, gerr := codectool.NewGitExecutor(localPath, repo.NewDBAuditor(db, uid)); gerr == nil {
+		// checkpointer 传 nil（M3-05）：workspace 初始化属平台基础设施动作（git init 为 allow 类命令），
+		// 不应生成待人工审批的检查点。
+		if ex, gerr := codectool.NewGitExecutor(localPath, repo.NewDBAuditor(db, uid), nil); gerr == nil {
 			if _, ierr := codectool.GitInit(context.Background(), ex); ierr != nil {
 				log.Printf("[WARN] workspace %s 自动 git init 失败（已忽略）：%v", key, ierr)
 			}

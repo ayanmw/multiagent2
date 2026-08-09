@@ -36,12 +36,15 @@ func ensureWorkdir(workspaceRoot string, uid uint, wsLocalDir string) (string, e
 // 返回的 []tool.Tool 可直接追加进 engine.ModelConfig.Tools。
 // auditor 为审计器（nil 回落日志审计）；传入 repo.NewDBAuditor 可将命令落库审计（M3-01）。
 //
+// cp 为无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05）：
+// 传入后命中 ask 的命令生成 checkpoint 并暂停，nil 时回退为直接 deny。
+//
 // 注意（M1-08）：子代理委托模式下不再由本函数装配工具——CodeAct 工具集
 // 由 codeagent 工厂装配给 Coder 子代理，Orchestrator 自身不持有写工具。
-func buildCodeActTools(workspaceRoot string, uid uint, wsLocalDir string, auditor executor.Auditor) ([]tool.Tool, error) {
+func buildCodeActTools(workspaceRoot string, uid uint, wsLocalDir string, auditor executor.Auditor, cp executor.Checkpointer) ([]tool.Tool, error) {
 	workdir, err := ensureWorkdir(workspaceRoot, uid, wsLocalDir)
 	if err != nil {
 		return nil, err
 	}
-	return codectool.NewCodeAct(workdir, auditor)
+	return codectool.NewCodeAct(workdir, auditor, cp)
 }

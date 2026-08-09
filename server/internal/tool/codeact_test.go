@@ -26,6 +26,7 @@ func newTestExecutor(t *testing.T, workdir string) (executor.Executor, *executor
 		executor.NewDangerousCommandPolicy(executor.ModeUnattended),
 		aud,
 		nil,
+		nil,
 	)
 	return ex, aud
 }
@@ -146,7 +147,7 @@ func TestFileRead_TraversalBlocked(t *testing.T) {
 }
 
 func TestNewCodeAct_WorkdirMissing(t *testing.T) {
-	if _, err := NewCodeAct("", nil); err == nil {
+	if _, err := NewCodeAct("", nil, nil); err == nil {
 		t.Fatal("空 workdir 应报错")
 	}
 }

@@ -49,7 +49,8 @@ func GitToolNames() []string {
 // 供 Git 工具与 workspace 创建时的自动 git init 复用。workdir 必须存在且为目录。
 // auditor 为审计器：nil 时回落到日志审计（LogAuditor）；业务层传入 repo.NewDBAuditor
 // 可使 git 命令同样写入审计日志（M3-01 执行审计落库）。
-func NewGitExecutor(workdir string, auditor executor.Auditor) (executor.Executor, error) {
+// cp 为无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05），语义同 NewCodeAct。
+func NewGitExecutor(workdir string, auditor executor.Auditor, cp executor.Checkpointer) (executor.Executor, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
@@ -67,7 +68,8 @@ func NewGitExecutor(workdir string, auditor executor.Auditor) (executor.Executor
 		host,
 		executor.NewDangerousCommandPolicy(executor.ModeUnattended),
 		auditor,
-		nil, // 无人值守：ask 类命令直接按 deny 处置
+		nil, // 无人值守：ask 类命令不交交互确认
+		cp,  // 无人值守 ask → 生成人工检查点（nil 时退化 deny，M3-05）
 	), nil
 }
 
@@ -76,6 +78,7 @@ func NewGitExecutor(workdir string, auditor executor.Auditor) (executor.Executor
 // 且含空格的提交说明（如 "add hello.txt"）也能作为单一参数精确传递、缩小命令注入面。
 // git 在「有改动时 diff 退出码 1」「无改动时 commit 退出码 1」等均属正常，
 // 故这里不把非零退出码当错误——只要不是被安全策略拒绝或命令启动失败，都返回输出。
+// 命中 ask 策略且无人值守下生成人工检查点时，返回「⏸ 已创建人工检查点」提示（M3-05）。
 func runGit(ctx context.Context, ex executor.Executor, args ...string) (string, error) {
 	if ex == nil {
 		return "", fmt.Errorf("codectool: 执行器未初始化")
@@ -85,6 +88,10 @@ func runGit(ctx context.Context, ex executor.Executor, args ...string) (string, 
 	}
 	res, err := ex.RunCommand(ctx, "git", args...)
 	if err != nil {
+		var cpErr *executor.CheckpointError
+		if errors.As(err, &cpErr) {
+			return "⏸ 已创建人工检查点 " + cpErr.ID + "（" + cpErr.Reason + "），等待管理员审批后再执行；本轮运行已暂停。", nil
+		}
 		if errors.Is(err, executor.ErrCommandDenied) {
 			// 被危险命令策略拒绝：作为正常结果返回拒绝说明，便于 Agent 自适应。
 			return "⛔ 命令被安全策略拒绝：" + err.Error(), nil
@@ -240,11 +247,11 @@ func gitBranchTool(ex executor.Executor) tool.Tool {
 // workdir 必须存在（调用方负责创建，api 层按 workspace 本地目录传入），
 // 内部使用 NewGitExecutor 包装 SafeExecutor，禁止裸用 HostExecutor.Run。
 // auditor 为审计器（nil 回落日志审计）；传入 repo.NewDBAuditor 可使 git 命令落库审计（M3-01）。
-func NewGitTools(workdir string, auditor executor.Auditor) ([]tool.Tool, error) {
+func NewGitTools(workdir string, auditor executor.Auditor, cp executor.Checkpointer) ([]tool.Tool, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
-	ex, err := NewGitExecutor(workdir, auditor)
+	ex, err := NewGitExecutor(workdir, auditor, cp)
 	if err != nil {
 		return nil, err
 	}
@@ -261,12 +268,13 @@ func NewGitTools(workdir string, auditor executor.Auditor) ([]tool.Tool, error) 
 // 既有文件读写/执行能力，又能显式 git 提交与查看变更。team 模式下则改由 Coder 子代理持有
 // （见 codeagent.NewCoder），二者不要重复装配以免工具名冲突。
 // auditor 为审计器（nil 回落日志审计）；传入 repo.NewDBAuditor 可使本次会话全部命令落库审计（M3-01）。
-func NewCodeActWithGit(workdir string, auditor executor.Auditor) ([]tool.Tool, error) {
-	code, err := NewCodeAct(workdir, auditor)
+// cp 为无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05），语义同 NewCodeAct。
+func NewCodeActWithGit(workdir string, auditor executor.Auditor, cp executor.Checkpointer) ([]tool.Tool, error) {
+	code, err := NewCodeAct(workdir, auditor, cp)
 	if err != nil {
 		return nil, err
 	}
-	git, err := NewGitTools(workdir, auditor)
+	git, err := NewGitTools(workdir, auditor, cp)
 	if err != nil {
 		return nil, err
 	}

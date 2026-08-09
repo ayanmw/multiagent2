@@ -60,6 +60,10 @@ type Config struct {
 	// 平台级预算护栏总开关（M3-04）：env BUDGET_ENABLED（默认 true）。
 	// 关闭后所有预算检查直接放行（仅本地调试 / 紧急恢复用）；具体阈值由 DB 中的 BudgetPolicy 配置。
 	budgetEnabled bool // 是否开启预算护栏（env BUDGET_ENABLED，默认 true），M3-04
+	// 人工检查点开关（M3-05）：env CHECKPOINT_ENABLED（默认 true）。
+	// 关闭后无人值守命中 ask 危险命令直接 deny（与旧行为一致）；
+	// 开启时则生成 checkpoint 记录并暂停，待前端审批（approve 执行 / reject 中止）。
+	checkpointEnabled bool // 是否开启人工检查点（env CHECKPOINT_ENABLED，默认 true），M3-05
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -256,6 +260,10 @@ func Load() *Config {
 	// BUDGET_ENABLED=false 可整体关闭拦截（紧急恢复 / 纯调试，非生产环境不建议）。
 	cfg.budgetEnabled = envOrDefaultBool("BUDGET_ENABLED", true)
 
+	// 人工检查点（M3-05）：默认开启；无人值守命中 ask 危险命令转人工审批。
+	// CHECKPOINT_ENABLED=false 可整体关闭（退化回直接 deny，紧急恢复 / 纯调试用）。
+	cfg.checkpointEnabled = envOrDefaultBool("CHECKPOINT_ENABLED", true)
+
 	return cfg
 }
 
@@ -400,6 +408,14 @@ func (c *Config) ToolSearchEnabled() bool {
 // local debugging only). Thresholds are configured via DB BudgetPolicy rows.
 func (c *Config) BudgetEnabled() bool {
 	return c != nil && c.budgetEnabled
+}
+
+// CheckpointEnabled reports whether the human-in-the-loop checkpoint (M3-05) is
+// turned on. When off, ask-level dangerous commands in unattended mode are denied
+// directly (the pre-M3-05 behavior); when on, they generate a pending checkpoint
+// that an operator must approve/reject via the UI.
+func (c *Config) CheckpointEnabled() bool {
+	return c != nil && c.checkpointEnabled
 }
 
 func envOrDefault(key, fallback string) string {

@@ -63,6 +63,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '任务中心', desc: '后台任务列表、状态与 transcript' },
       },
       {
+        path: 'checkpoints',
+        name: 'checkpoints',
+        component: () => import('@/views/CheckpointsView.vue'),
+        meta: { title: '人工检查点', desc: '无人值守危险命令审批：批准执行 / 拒绝中止' },
+      },
+      {
         path: 'audit',
         name: 'audit',
         component: () => import('@/views/AuditView.vue'),

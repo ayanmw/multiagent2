@@ -136,6 +136,11 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.PUT("/budgets", middleware.RequirePermission(db.DB, "budgets", "write"), api.UpsertBudgetHandler(db.DB))
 		protected.DELETE("/budgets/:id", middleware.RequirePermission(db.DB, "budgets", "write"), api.DeleteBudgetHandler(db.DB))
 
+		// 人工检查点（M3-05 human-in-the-loop）：无人值守命中 ask 危险命令生成的待审批记录，
+		// 经前端审批（approve 执行 / reject 中止）。读需 checkpoints:read，审批写需 checkpoints:write。
+		protected.GET("/checkpoints", middleware.RequirePermission(db.DB, "checkpoints", "read"), api.ListCheckpointsHandler(db.DB))
+		protected.POST("/checkpoints/:id/resolve", middleware.RequirePermission(db.DB, "checkpoints", "write"), api.ResolveCheckpointHandler(db.DB))
+
 		// Skills 技能仓库（M2-03）：用户归属的技能管理（文件系统后端，owner 隔离）。
 		// 读操作需 skills:read，写操作（建/更新/删私有技能）需 skills:write（RBAC）。
 		// 共享技能（仓库 skills/ 目录）对所有用户可见但只读，不可经 API 改写。
@@ -171,7 +176,7 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 			MaxPlanNudges:   cfg.MaxPlanNudges(),
 			Guardrail:       cfg.GuardrailConfig(), // M1-13：护栏熔断预算（默认启用）
 		}
-		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars(), taskRunController, taskRunSession, cfg.ToolSearchEnabled(), toolSearchProvider))
+		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars(), taskRunController, taskRunSession, cfg.ToolSearchEnabled(), toolSearchProvider, cfg.CheckpointEnabled()))
 
 		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化
 		// M0.5-06：message 改由 POST body 传递（避免明文进访问日志），故注册为 POST。
@@ -179,7 +184,7 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// 未绑定时回退 WorkspaceRoot/<uid>。workspace_key 经请求体传入。
 		// M1-16：stateStore/enableState 驱动「工作状态外置」，使长任务中断后续跑能接上。
 		// M2-03：skillWarmStart 等参数驱动「技能 warm-start」注入系统上下文。
-		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars(), taskRunController, taskRunSession, cfg.ToolSearchEnabled(), toolSearchProvider))
+		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars(), taskRunController, taskRunSession, cfg.ToolSearchEnabled(), toolSearchProvider, cfg.CheckpointEnabled()))
 	}
 
 	return r
@@ -298,6 +303,33 @@ func main() {
 		// M3-01：worker 子代理命令经 DBAuditor 落库审计，按 OwnerUserID 归属，
 		// 实现 taskrun 后台子任务执行的全量审计覆盖。
 		NewAuditor: func(ownerUserID uint) executor.Auditor { return repo.NewDBAuditor(db.DB, ownerUserID) },
+		// M3-05：后台任务是真正的无人值守场景——命中 ask 级危险命令时不直接 deny，
+		// 而是把待审批命令写入 checkpoints 表（绑定 owner 与子任务会话）并暂停，
+		// 等人在前端 approve/reject 后再决定续跑或中止。CHECKPOINT_ENABLED=false 时为 nil（退回 deny）。
+		NewCheckpointer: func(ownerUserID uint, childSessionID string) executor.Checkpointer {
+			if !cfg.CheckpointEnabled() {
+				return nil
+			}
+			return func(req executor.CheckpointRequest) (string, error) {
+				sid := req.SessionID
+				if sid == "" {
+					sid = childSessionID
+				}
+				cp := &model.Checkpoint{
+					SessionID: sid,
+					UserID:    ownerUserID,
+					Command:   req.Command,
+					Workdir:   req.Workdir,
+					Reason:    req.Reason,
+					Context:   req.Context,
+					Status:    model.CheckpointPending,
+				}
+				if err := repo.CreateCheckpoint(db.DB, cp); err != nil {
+					return "", err
+				}
+				return cp.DisplayID(), nil
+			}
+		},
 	}
 	workerFactory := taskrun.BuildAgentFactory(cfg.GuardrailConfig(), workerResolver)
 	taskRunController, ctrlErr := taskrun.NewController(

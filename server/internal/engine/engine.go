@@ -92,6 +92,10 @@ type ModelConfig struct {
 	// 经 codeagent.Deps 下传 Coder 子代理，使 team 模式下代码落地命令同样写入审计日志；
 	// 单代理模式的工具由 api 层直接以 DBAuditor 构造（见 chat.go/sse.go）。
 	Auditor executor.Auditor
+	// Checkpointer 是无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05）。nil 时
+	// 命中 ask 的命令在无人值守下退化为直接 deny（与旧行为一致）。经 codeagent.Deps
+	// 下传 Coder 子代理；单代理模式的工具由 api 层直接传入 NewCodeActWithGit。
+	Checkpointer executor.Checkpointer
 }
 
 // ToolSearchProvider 在每次对话时按需构建延迟工具箱的回调（M2-06）。
@@ -192,6 +196,7 @@ func New(cfg ModelConfig) (*Engine, error) {
 			StateStore:   cfg.StateStore,
 			SkillContext: skillCtx,
 			Auditor:      cfg.Auditor,
+			Checkpointer: cfg.Checkpointer,
 		}, cfg.Team)
 		if oerr != nil {
 			return nil, oerr

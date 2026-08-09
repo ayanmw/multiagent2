@@ -73,6 +73,13 @@ const menuOptions: MenuOption[] = [
     icon: svgIcon('M3 5h18v4H3zm0 6h18v4H3zm0 6h18v2H3z'),
   },
   {
+    label: '人工检查点',
+    key: 'checkpoints',
+    icon: svgIcon(
+      'M12 2a10 10 0 100 20 10 10 0 000-20zm-1 5h2v6h-2V7zm0 8h2v2h-2v-2z',
+    ),
+  },
+  {
     label: '审计日志',
     key: 'audit',
     icon: svgIcon('M9 2h6l1 3h4v2H4V5h4l1-3zM5 8h14l-1 13H6L5 8zm5 2v9h1V10h-1zm3 0v9h1V10h-1z'),
