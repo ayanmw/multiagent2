@@ -96,6 +96,9 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.POST("/sessions", api.CreateSessionHandler(db.DB))
 		protected.GET("/sessions", api.ListSessionsHandler(db.DB))
 		protected.GET("/sessions/:id", api.GetSessionHandler(db.DB))
+		// 会话「运行状态」外置文件（PLAN/PROGRESS/LEARNINGS，M1-16），供前端查看 Agent 计划与进展。
+		protected.GET("/sessions/:id/state", api.GetSessionStateHandler(db.DB, stateStore, enableState))
+		protected.PUT("/sessions/:id", middleware.RequirePermission(db.DB, "sessions", "write"), api.RenameSessionHandler(db.DB))
 		protected.DELETE("/sessions/:id", middleware.RequirePermission(db.DB, "sessions", "write"), api.DeleteSessionHandler(db.DB))
 
 		// 斜杠命令注册表（M1-14）：前端/CLI 共用，新增命令只改后端 command.Builtin()。

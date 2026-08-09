@@ -156,6 +156,42 @@ func GetSessionHandler(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// RenameSessionHandler handles PUT /api/sessions/:id. The :id path parameter is
+// the public session_key. It updates only the session title (owner-scoped).
+func RenameSessionHandler(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid, ok := currentUserID(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+			return
+		}
+		key := c.Param("id")
+		if key == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			return
+		}
+		var req struct {
+			Title string `json:"title" binding:"required,max=256"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s, err := repo.GetSessionByKey(db, uid, key)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			return
+		}
+		if err := db.Model(&model.Session{}).Where("id = ? AND user_id = ?", s.ID, uid).
+			Update("title", req.Title).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename session"})
+			return
+		}
+		s.Title = req.Title
+		c.JSON(http.StatusOK, toSessionView(s))
+	}
+}
+
 // DeleteSessionHandler handles DELETE /api/sessions/:id (owner-scoped). It
 // requires the "sessions:write" permission (enforced by RequirePermission in
 // the router) and removes the session plus its messages.
