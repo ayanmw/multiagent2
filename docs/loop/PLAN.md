@@ -100,7 +100,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 |---|------|------|----------|------|
 | M3-01 | **执行审计落库**：`SafeExecutor` 的 `Auditor` 实现 `DBAuditor`，将每次 `Run`（命令/workdir/decision/reason/owner/时间戳）写入 `audit_logs` 表；CodeAct 工具、Git 工具、taskrun 子任务统一经 `SafeExecutor` 调用确保全量覆盖；迁移建表 | ✅ | 单测覆盖 allow/deny/ask 三类均写审计；curl 跑一条 shell → `GET /api/audit` 可见该记录（owner 隔离） | M1-05 |
 | M3-02 | **审计日志 API + 前端页**：`GET /api/audit`（分页 / 按用户 / 决策 / 时间筛选，接 `audit:read`；viewer 仅看自己）；前端 `AuditView` 表格 + 筛选 | ✅ | developer 看全员、viewer 只看自己；筛选生效；`vue-tsc` 通过 | M3-01 |
-| M3-03 | **Token/费用计量**：对话/SSE 完成后记录 token 用量（prompt/completion/total）到 `usage_records`（按 session/user/provider 归属）；优先读上游 `usage`（网关/OpenAI 响应），无则本地估算；`GET /api/usage` 聚合 | ○ | 一次对话后 `usage_records` 有行；`/api/usage` 返回累计；前端可展示 | M2 |
+| M3-03 | **Token/费用计量**：对话/SSE 完成后记录 token 用量（prompt/completion/total）到 `usage_records`（按 session/user/provider 归属）；优先读上游 `usage`（网关/OpenAI 响应），无则本地估算；`GET /api/usage` 聚合 | ✅ | 一次对话后 `usage_records` 有行；`/api/usage` 返回累计；前端可展示 | M2 |
 | M3-04 | **预算护栏（平台级）**：`BudgetPolicy`（按 user / session / automation 三级阈值，env/DB 配置）；超限暂停该 session/automation 的后续 LLM 调用并写审计 + 触发通知；`GET/PUT /api/budgets` 管理 | ○ | 设极低阈值跑对话 → 第二轮被拦并返回「预算耗尽，待恢复」；管理员提额后恢复 | M3-03 |
 | M3-05 | **人工检查点（human-in-the-loop）**：危险命令 `ask` 模式（M1-05）在无人值守下不直 deny，而是生成 `checkpoints` 记录（待审批任务 + 上下文）并暂停；`POST /api/checkpoints/:id/resolve{approve,reject,comment}` 后续跑或中止；前端审批列表 | ○ | 触发需审批危险操作 → 生成 checkpoint → 前端 approve 后执行、reject 后中止；审计留痕 | M3-01 |
 | M3-06 | **Artifact 浏览器**：前端 `ArtifactView` 浏览某 session 下全部 artifact（`PLAN/PROGRESS/LEARNINGS` + 报告/diff/构建产物），列表 + 查看 + 下载；新增后端 `GET /api/sessions/:id/artifacts`（List/Read，复用 M1-16 `artifact.Store`） | ○ | 有产物的会话能看到文件列表并查看内容；与「运行态面板」互补（面板看三核心文件，浏览器看全部） | M1-16 |

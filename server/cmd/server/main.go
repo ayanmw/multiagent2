@@ -126,6 +126,10 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// owner 隔离：developer/admin 看全员，viewer 仅看本人；读操作需 audit:read（RBAC）。
 		protected.GET("/audit", middleware.RequirePermission(db.DB, "audit", "read"), api.ListAuditLogsHandler(db.DB))
 
+		// Token/费用计量（M3-03）：对话结束后落库的 token 用量查询与聚合。
+		// owner 隔离：developer/admin 看全员，viewer 仅看本人；读操作需 usage:read（RBAC）。
+		protected.GET("/usage", middleware.RequirePermission(db.DB, "usage", "read"), api.ListUsageHandler(db.DB))
+
 		// Skills 技能仓库（M2-03）：用户归属的技能管理（文件系统后端，owner 隔离）。
 		// 读操作需 skills:read，写操作（建/更新/删私有技能）需 skills:write（RBAC）。
 		// 共享技能（仓库 skills/ 目录）对所有用户可见但只读，不可经 API 改写。

@@ -78,6 +78,11 @@ const menuOptions: MenuOption[] = [
     icon: svgIcon('M9 2h6l1 3h4v2H4V5h4l1-3zM5 8h14l-1 13H6L5 8zm5 2v9h1V10h-1zm3 0v9h1V10h-1z'),
   },
   {
+    label: '用量统计',
+    key: 'usage',
+    icon: svgIcon('M4 20V10h4v10H4zm6 0V4h4v16h-4zm6 0v-7h4v7h-4z'),
+  },
+  {
     label: '设置',
     key: 'settings',
     icon: svgIcon(

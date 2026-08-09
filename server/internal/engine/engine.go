@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -108,6 +109,10 @@ type Engine struct {
 	runner runner.Runner
 	// toolbox 是延迟工具箱（M2-06），若启用则持有本轮对话的 MCP 连接，Close 时释放。
 	toolbox *toolsearch.Toolbox
+	// lastUsage 是本轮对话累计的 token 用量（M3-03 Token/费用计量），由 Stream 的
+	// 事件桥接 goroutine 在读取事件时写回；Chat/Stream 消费完毕后经 LastUsage 读取落库。
+	usageMu   sync.Mutex
+	lastUsage model.Usage
 }
 
 // New 依据 ModelConfig 构造 Agent 引擎（openai 兼容协议）。
@@ -259,6 +264,13 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 		defer close(out)
 		defer cancel()
 		for ev := range ch {
+			// 累计 token 用量（M3-03）：上游在 Response.Usage 给出 prompt/completion/total，
+			// 通常落在终帧；以「最新非零用量」覆盖，保证取最终累计值。
+			if ev != nil && ev.Response != nil && ev.Response.Usage != nil && ev.Response.Usage.TotalTokens > 0 {
+				e.usageMu.Lock()
+				e.lastUsage = *ev.Response.Usage
+				e.usageMu.Unlock()
+			}
 			select {
 			case out <- ev:
 			case <-runCtx.Done():
@@ -267,6 +279,15 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 		}
 	}()
 	return out, nil
+}
+
+// LastUsage 返回本轮对话累计的 token 用量（M3-03）。
+// 必须在 Chat/Stream 事件流被完全消费后读取（api 层在 eng.Chat 返回、
+// 或 conv.Convert 结束后调用），此时桥接 goroutine 已写回最终值。
+func (e *Engine) LastUsage() model.Usage {
+	e.usageMu.Lock()
+	defer e.usageMu.Unlock()
+	return e.lastUsage
 }
 
 // Chat 发送一条用户消息并返回模型的最终文本回复（Stream 的累积版）。
@@ -338,4 +359,13 @@ func userIDFromContext(ctx context.Context) string {
 		return v
 	}
 	return "user"
+}
+
+// EstimateUsage 在 upstream 未返回 usage 时做粗估（M3-03 兜底）。
+// 以「字符数/4」近似 token 数（中英文混合的保守下限估算），
+// prompt+completion 相加得到 total；调用方据此标记 Estimated=true 落库。
+func EstimateUsage(prompt, completion string) model.Usage {
+	p := len([]rune(prompt)) / 4
+	c := len([]rune(completion)) / 4
+	return model.Usage{PromptTokens: p, CompletionTokens: c, TotalTokens: p + c}
 }

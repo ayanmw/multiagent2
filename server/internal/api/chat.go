@@ -165,6 +165,9 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			return
 		}
 
+		// M3-03：对话结束后记录 token 用量（按 user / session / provider / model 归属）。
+		recordEngineUsage(db, eng, uid, sess, p, m, buildPromptText(history, req.Message), reply)
+
 		// 仅在正常结束时落库助手消息（客户端中途断开不写脏数据）。
 		if perr := repo.AppendMessage(db, sess.ID, "assistant", reply); perr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入助手消息失败: " + perr.Error()})

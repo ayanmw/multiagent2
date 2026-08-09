@@ -69,6 +69,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '审计日志', desc: '命令执行审计：按用户/决策/时间筛选' },
       },
       {
+        path: 'usage',
+        name: 'usage',
+        component: () => import('@/views/UsageView.vue'),
+        meta: { title: '用量统计', desc: 'Token 计量：按用户/模型/时间聚合成本' },
+      },
+      {
         path: 'settings',
         name: 'settings',
         component: () => import('@/views/SettingsView.vue'),

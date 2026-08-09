@@ -62,11 +62,12 @@ func SeedRoles() []Role {
 				{Resource: "skills", Action: "write"},
 				{Resource: "mcp", Action: "read"},
 				{Resource: "mcp", Action: "write"},
-				{Resource: "taskruns", Action: "read"},
-				{Resource: "taskruns", Action: "write"},
-				{Resource: "audit", Action: "read"},
-			},
+			{Resource: "taskruns", Action: "read"},
+			{Resource: "taskruns", Action: "write"},
+			{Resource: "audit", Action: "read"},
+			{Resource: "usage", Action: "read"},
 		},
+	},
 		{
 			Name:        RoleViewer,
 			Description: "Read-only access",
@@ -77,9 +78,10 @@ func SeedRoles() []Role {
 				{Resource: "chat", Action: "read"},
 				{Resource: "mcp", Action: "read"},
 				{Resource: "skills", Action: "read"},
-				{Resource: "taskruns", Action: "read"},
-				{Resource: "audit", Action: "read"},
-			},
+			{Resource: "taskruns", Action: "read"},
+			{Resource: "audit", Action: "read"},
+			{Resource: "usage", Action: "read"},
 		},
-	}
+	},
+}
 }
