@@ -90,6 +90,11 @@ const menuOptions: MenuOption[] = [
     icon: svgIcon('M4 20V10h4v10H4zm6 0V4h4v16h-4zm6 0v-7h4v7h-4z'),
   },
   {
+    label: 'Artifact',
+    key: 'artifacts',
+    icon: svgIcon('M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm0 7h-5V4.5L14 9z'),
+  },
+  {
     label: '设置',
     key: 'settings',
     icon: svgIcon(

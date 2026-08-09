@@ -99,6 +99,12 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.GET("/sessions/:id", api.GetSessionHandler(db.DB))
 		// 会话「运行状态」外置文件（PLAN/PROGRESS/LEARNINGS，M1-16），供前端查看 Agent 计划与进展。
 		protected.GET("/sessions/:id/state", api.GetSessionStateHandler(db.DB, stateStore, enableState))
+		// Artifact 浏览器（M3-06）：列出 / 查看 / 下载某会话作用域下的全部产物
+		// （PLAN/PROGRESS/LEARNINGS + Agent 写下的报告/diff/构建产物）。复用 M1-16
+		// artifact.Store，owner 隔离经 resolveArtifactSession（当前用户只能看自己会话）。
+		// 列表接口无需 RBAC 权限（与 state 查看一致，仅 owner 隔离）；下载同理。
+		protected.GET("/sessions/:id/artifacts", api.ListSessionArtifactsHandler(db.DB, stateStore, enableState))
+		protected.GET("/sessions/:id/artifacts/:name", api.GetSessionArtifactHandler(db.DB, stateStore, enableState))
 		protected.PUT("/sessions/:id", middleware.RequirePermission(db.DB, "sessions", "write"), api.RenameSessionHandler(db.DB))
 		protected.DELETE("/sessions/:id", middleware.RequirePermission(db.DB, "sessions", "write"), api.DeleteSessionHandler(db.DB))
 

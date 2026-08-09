@@ -21,8 +21,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // 三种状态文件的规范名（artifact，每次 run 维护）。
@@ -49,6 +51,60 @@ type Store interface {
 	RemoveAll(key string) error
 	// Snapshot 同时读取三种状态文件，便于「续跑前先读状态」。
 	Snapshot(key string) (Snapshot, error)
+}
+
+// Entry 是单个 artifact 的元信息（M3-06 artifact 浏览器列表用）。
+// 与 List 只给文件名不同，Entry 带上体积与最后修改时间，使前端能
+// 呈现「有哪些产物、多大、什么时候写的」而无需逐个读全文。
+type Entry struct {
+	Name    string    `json:"name"`
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"mod_time"`
+}
+
+// EntryLister 是 Store 的可选扩展接口：列出带元信息的 artifact。
+// Store 接口保持不变（向后兼容），需要元信息的调用方按需类型断言；
+// 未实现该接口的后端可回退到 List + Read 自行统计。
+type EntryLister interface {
+	ListEntries(key string) ([]Entry, error)
+}
+
+// 编译期断言：两个内置后端均支持带元信息的列举。
+var (
+	_ EntryLister = (*FileStore)(nil)
+	_ EntryLister = (*MemoryStore)(nil)
+)
+
+// IsStateArtifact 报告 name 是否为三种「工作状态」核心文件之一
+// （PLAN.md / PROGRESS.md / LEARNINGS.md）。artifact 浏览器据此把
+// 核心状态文件排在前面并做视觉区分。
+func IsStateArtifact(name string) bool {
+	for _, n := range stateNames {
+		if name == n {
+			return true
+		}
+	}
+	return false
+}
+
+// SortEntries 按「核心状态文件优先，其余按文件名字典序」就地排序，
+// 使列表展示顺序稳定（PLAN → PROGRESS → LEARNINGS → 其他）。
+func SortEntries(entries []Entry) {
+	stateRank := func(name string) int {
+		for i, n := range stateNames {
+			if name == n {
+				return i
+			}
+		}
+		return len(stateNames)
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		ri, rj := stateRank(entries[i].Name), stateRank(entries[j].Name)
+		if ri != rj {
+			return ri < rj
+		}
+		return entries[i].Name < entries[j].Name
+	})
 }
 
 // Snapshot 是一次对三种状态文件的同时读取结果。
@@ -182,6 +238,38 @@ func (s *FileStore) List(key string) ([]string, error) {
 	return names, nil
 }
 
+// ListEntries 实现 EntryLister：列出该作用域下全部 artifact 及其元信息。
+// 作用域目录不存在时返回空列表（不报错），语义与 List 一致。
+func (s *FileStore) ListEntries(key string) ([]Entry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	d, err := s.dir(key)
+	if err != nil {
+		return nil, err
+	}
+	dirEntries, err := os.ReadDir(d)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]Entry, 0, len(dirEntries))
+	for _, e := range dirEntries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			// 列举期间文件被删属正常竞态，跳过而不是让整个列表失败。
+			continue
+		}
+		out = append(out, Entry{Name: e.Name(), Size: info.Size(), ModTime: info.ModTime()})
+	}
+	SortEntries(out)
+	return out, nil
+}
+
 // Remove 实现 Store。
 func (s *FileStore) Remove(key, name string) error {
 	s.mu.Lock()
@@ -248,23 +336,29 @@ func (s *FileStore) Snapshot(key string) (Snapshot, error) {
 // 内存后端（安全默认 / 测试用，不落盘）
 // ---------------------------------------------------------------------------
 
+// memFile 是内存后端的单个 artifact（内容 + 最后写入时间）。
+type memFile struct {
+	content string
+	modTime time.Time
+}
+
 // MemoryStore 是纯内存 Store 实现，进程退出即丢失，仅作为
 // 「未配置落盘根目录」时的安全默认，以及单元测试使用。
 type MemoryStore struct {
 	mu sync.RWMutex
-	m  map[string]map[string]string // key -> name -> content
+	m  map[string]map[string]memFile // key -> name -> file
 }
 
 // NewMemoryStore 构造内存存储。
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{m: make(map[string]map[string]string)}
+	return &MemoryStore{m: make(map[string]map[string]memFile)}
 }
 
 func (s *MemoryStore) write(key, name, content string) error {
 	if s.m[key] == nil {
-		s.m[key] = make(map[string]string)
+		s.m[key] = make(map[string]memFile)
 	}
-	s.m[key][name] = content
+	s.m[key][name] = memFile{content: content, modTime: time.Now()}
 	return nil
 }
 
@@ -282,8 +376,8 @@ func (s *MemoryStore) Read(key, name string) (string, bool, error) {
 	if s.m[key] == nil {
 		return "", false, nil
 	}
-	c, ok := s.m[key][name]
-	return c, ok, nil
+	f, ok := s.m[key][name]
+	return f.content, ok, nil
 }
 
 // Exists 实现 Store。
@@ -308,7 +402,23 @@ func (s *MemoryStore) List(key string) ([]string, error) {
 	for n := range s.m[key] {
 		names = append(names, n)
 	}
+	sort.Strings(names)
 	return names, nil
+}
+
+// ListEntries 实现 EntryLister（内存后端的体积按内容字节数计）。
+func (s *MemoryStore) ListEntries(key string) ([]Entry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.m[key] == nil {
+		return nil, nil
+	}
+	out := make([]Entry, 0, len(s.m[key]))
+	for n, f := range s.m[key] {
+		out = append(out, Entry{Name: n, Size: int64(len(f.content)), ModTime: f.modTime})
+	}
+	SortEntries(out)
+	return out, nil
 }
 
 // Remove 实现 Store。
@@ -398,6 +508,14 @@ func sanitizeName(n string) (string, error) {
 		return "", fmt.Errorf("artifact: 文件名非法: %q", n)
 	}
 	return b.String(), nil
+}
+
+// ValidateName 对外暴露 artifact 文件名校验（与写入时使用同一套规则），
+// 供 API 层在读取前先行判定「非法文件名」（400）与「文件不存在」（404），
+// 避免把路径穿越尝试误报成 500。
+func ValidateName(name string) error {
+	_, err := sanitizeName(name)
+	return err
 }
 
 // safePath 在目录 d 内拼出 name 的最终路径，并确保不越出 d。
