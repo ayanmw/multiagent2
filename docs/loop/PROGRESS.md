@@ -365,3 +365,12 @@
 - 下一步：PLAN 中 **M2-06（toolsearch 延迟工具箱：框架 `plugin/toolsearch`，把 M2-02 接入的 MCP server 工具 + 内置工具注册为命名空间工具箱，暴露 `tool_search`+`call_tool` 双工具按需装载，避免 context 膨胀）** 成为下一个 ○，依赖 M2-02（已 ✅）。
 
 
+
+---
+
+### 2026-08-04 05:20 | M2-06 | ✅
+- 完成内容：**延迟工具箱（lazy toolbox / toolsearch，M2 生态第六任务，对齐 PLAN 验收）**。① 新增 `server/internal/toolsearch` 包：`toolbox.go`（命名空间工具箱 `mcp__<server>__<tool>`，`Add/Merge/Get/Search/Close`，MCP 连接经 `AddCloser` 由 `Engine.Close` 统一释放）；`tools.go`（`tool_search` 检索 + `call_tool` 按需调用双控制工具，均经 `tool/function.NewFunctionTool`）；`mcp.go`（`mcpConnectionConfig` 领域模型→框架 `tool/mcp.ConnectionConfig`；`LoadMCPServerTools` 经 `mcptool.NewMCPToolSet`→`Init`→`Tools` 预取工具并按 `mcp__<name>` 命名空间注册，校验失败就地返回不连接）。② **引擎接线**：`engine.ModelConfig` 增 `ToolSearchEnabled`/`ToolSearchProvider`/`ToolSearchUserID`；`New()` 在启用且有可用工具时**只挂载双控制工具**（不把 MCP 工具声明灌进上下文，结构性保证 token 不随工具数线性膨胀），provider 报错 fail-open 安全跳过；`Engine.Close` 释放 toolbox MCP 连接。③ **配置/API/路由**：`config` 增 `TOOL_SEARCH_ENABLED`(默认 true)+`ToolSearchEnabled()`；`api.ChatHandler`/`StreamChatHandler` 注入三字段（ToolSearchUserID=uid 做 owner 隔离）；`cmd/server/buildRouter` 注入 `buildToolSearchProvider`（按 uid 调 `repo.ListMCPServers`→逐个 `LoadMCPServerTools`→Merge，单服务器失败跳过），同步 5 处测试 `buildRouter` 调用点补参。④ 未直接用框架 `plugin/toolsearch`（其是 LLM 工具选择插件，会改变每次调用行为且消耗 LLM 预算，与「默认不装载+按需调用」语义不符），改为自建延迟工具箱。
+- Commit: bac692b（已推 origin/main）
+- 验证: `go build ./...` ✓ | `go vet ./...` ✓（全包含 CGO 包，gcc 可用）；`go test -count=1 ./internal/toolsearch/... ./internal/engine/... ./internal/config/...` 全绿——`toolsearch` 7 例（命名空间拼接/检索截断/merge/close 幂等/tool_search 返回 JSON/ call_tool 执行+报错/连接配置映射/校验失败不连接/NewMCPToolSet API 契约）；`engine` 新增 `toolsearch_test.go` 2 例：`TestEngine_ToolSearch_LazyInvoke`（mock LLM 脚本化驱动 tool_search→call_tool→RESULT:5 返回，并断言被延迟的 `mcp__demo__add` 从不直接进入模型上下文——防 token 膨胀）、`TestEngine_ToolSearch_DisabledMountsNothing`（关闭时不挂载双工具、不调 provider）；`config` 全 ok。**关键验收**：默认不装载全部 MCP 工具 → 模型 tool_search 找到 → call_tool 执行 → 结果返回；context token 不随 MCP 工具数线性膨胀。已知限制：本沙箱 `internal/repo`/`api`/`cmd`（CGO sqlite）测试因 `CGO_ENABLED=0` 无 gcc 跳过，非代码问题，与本轮改动无关（已对 CGO 包做签名一致性复核）。
+- 下一步：M2 生态六个 ○ 任务（M2-01~M2-06）**全部 ✅**。PLAN.md 已无待做任务，进入「全部完成」终态——后续如需继续推进（M3 企业化：可观测/审计/配额+预算护栏+人工检查点+artifact；M4 自主化：Automation 触发器+Channel 层+跨天恢复+无人值守 Loop；M5 进化：CLI+Knowledge RAG+evolution 技能飞轮+evaluation 回归+promptiter+A2A），需先在 docs/loop/PLAN.md 增补对应里程碑任务清单。
+
