@@ -46,3 +46,13 @@ export async function listSessions(): Promise<SessionView[]> {
 export async function getSession(key: string): Promise<SessionDetail> {
   return request<SessionDetail>(`/sessions/${key}`)
 }
+
+// 删除会话（需 sessions:write 权限）。
+export async function deleteSession(key: string): Promise<void> {
+  await request(`/sessions/${key}`, { method: 'DELETE' })
+}
+
+// 重命名会话（更新标题）。
+export async function renameSession(key: string, title: string): Promise<SessionView> {
+  return request<SessionView>(`/sessions/${key}`, { method: 'PUT', body: { title } })
+}

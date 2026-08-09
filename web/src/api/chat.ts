@@ -128,3 +128,16 @@ export async function streamChat(opts: StreamOptions): Promise<void> {
   // flush 剩余缓冲（可能没有尾随空行）。
   if (buf.trim()) handleFrame(buf)
 }
+
+// 拉取某会话的「工作状态外置」文件（PLAN/PROGRESS/LEARNINGS，M1-16）。
+// 用于对话页「运行状态」面板，让前端能直接查看 Agent 的计划与进展。
+export interface SessionState {
+  exists: boolean
+  plan?: string
+  progress?: string
+  learnings?: string
+}
+
+export async function getSessionState(sessionKey: string): Promise<SessionState> {
+  return request<SessionState>(`/sessions/${encodeURIComponent(sessionKey)}/state`)
+}

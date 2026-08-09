@@ -13,14 +13,18 @@ import {
   listSessions,
   createSession,
   getSession,
+  deleteSession,
+  renameSession,
   type SessionView,
   type MessageView,
 } from '@/api/session'
 import {
   listEnabledModels,
   streamChat,
+  getSessionState,
   type EnabledModel,
   type AGUIEvent,
+  type SessionState,
 } from '@/api/chat'
 import {
   fetchCommands,
@@ -37,6 +41,16 @@ interface ChatMsg {
   content: string
   streaming?: boolean
   error?: boolean
+  // 本轮 Agent 调用过的工具（后端以 SSE 事件流推送，此前被前端丢弃，现补全展示）。
+  toolCalls?: ToolCall[]
+}
+
+// 工具调用片段：name 为工具名（如 shell/file_write/git_commit），args 为入参原文。
+interface ToolCall {
+  id: string
+  name: string
+  args: string
+  done: boolean
 }
 
 const message = useMessage()
@@ -121,6 +135,71 @@ async function loadCommands() {
     commands.value = await fetchCommands()
   } catch (e) {
     message.error(`命令列表加载失败：${(e as Error).message}`)
+  }
+}
+
+// ---- 会话「运行状态」外置文件（PLAN/PROGRESS/LEARNINGS，M1-16）查看 ----
+const showState = ref(false)
+const stateLoading = ref(false)
+const sessionState = ref<SessionState>({ exists: false })
+
+async function loadSessionState() {
+  if (!activeKey.value) {
+    message.warning('请先选择一个会话')
+    return
+  }
+  stateLoading.value = true
+  showState.value = true
+  try {
+    sessionState.value = await getSessionState(activeKey.value)
+    if (!sessionState.value.exists) {
+      message.info('该会话暂未产生可续跑的工作状态文件')
+    }
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    stateLoading.value = false
+  }
+}
+
+// ---- 会话管理：删除 / 重命名 ----
+async function handleDeleteSession(key: string) {
+  try {
+    await deleteSession(key)
+    sessions.value = sessions.value.filter((s) => s.session_key !== key)
+    if (activeKey.value === key) {
+      activeKey.value = null
+      messages.value = []
+    }
+    message.success('会话已删除')
+  } catch (e) {
+    message.error((e as Error).message)
+  }
+}
+
+async function handleRenameSession(key: string, current: string) {
+  const title = window.prompt('重命名会话', current)
+  if (title == null) return
+  const t = title.trim()
+  if (!t || t === current) return
+  try {
+    const updated = await renameSession(key, t)
+    const idx = sessions.value.findIndex((s) => s.session_key === key)
+    if (idx >= 0) sessions.value[idx] = { ...sessions.value[idx], title: updated.title }
+    message.success('已重命名')
+  } catch (e) {
+    message.error((e as Error).message)
+  }
+}
+
+// 工具入参美化：尝试按 JSON 格式化，失败则原样返回。
+function formatArgs(raw: string): string {
+  const s = raw.trim()
+  if (!s) return ''
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2)
+  } catch {
+    return s
   }
 }
 
@@ -323,6 +402,27 @@ function onEvent(ev: AGUIEvent, assistantId: string) {
       am.content += ev.delta ?? ''
       scrollToBottom()
       break
+    // 工具调用：把 Agent 实际执行的命令/文件操作等过程展示出来。
+    case 'TOOL_CALL_START': {
+      if (!am.toolCalls) am.toolCalls = []
+      am.toolCalls.push({
+        id: ev.toolCallId ?? '',
+        name: ev.toolCallName ?? 'tool',
+        args: '',
+        done: false,
+      })
+      break
+    }
+    case 'TOOL_CALL_ARGS': {
+      const tc = am.toolCalls?.find((t) => t.id === ev.toolCallId)
+      if (tc) tc.args += ev.delta ?? ''
+      break
+    }
+    case 'TOOL_CALL_END': {
+      const tc = am.toolCalls?.find((t) => t.id === ev.toolCallId)
+      if (tc) tc.done = true
+      break
+    }
     case 'RUN_ERROR':
       am.error = true
       am.content += `\n\n⚠️ ${ev.message ?? '对话出错'}`
@@ -389,14 +489,25 @@ onMounted(async () => {
             v-for="s in sessions"
             :key="s.session_key"
             @click="selectSession(s.session_key)"
-            class="px-3 py-2 cursor-pointer text-sm truncate border-l-2"
+            class="group px-3 py-2 cursor-pointer text-sm truncate border-l-2"
             :class="
               s.session_key === activeKey
                 ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300'
                 : 'border-transparent hover:bg-gray-100 dark:hover:bg-gray-700/50'
             "
           >
-            {{ s.title }}
+            <div class="flex items-center gap-1">
+              <span class="flex-1 truncate">{{ s.title }}</span>
+              <span class="hidden group-hover:flex items-center gap-1 shrink-0" @click.stop>
+                <n-button size="tiny" quaternary title="重命名" @click="handleRenameSession(s.session_key, s.title)">✎</n-button>
+                <n-popconfirm @positive-click="handleDeleteSession(s.session_key)">
+                  <template #trigger>
+                    <n-button size="tiny" quaternary type="error" title="删除">🗑</n-button>
+                  </template>
+                  确认删除该会话？此操作不可撤销。
+                </n-popconfirm>
+              </span>
+            </div>
           </li>
         </ul>
       </n-scrollbar>
@@ -439,7 +550,8 @@ onMounted(async () => {
           Provider:
           <span class="font-medium text-gray-700 dark:text-gray-200">{{ currentProviderName }}</span>
         </span>
-        <div class="ml-auto">
+        <div class="ml-auto flex items-center gap-2">
+          <n-button size="small" tertiary @click="loadSessionState">运行状态</n-button>
           <n-button size="small" tertiary @click="clearContext">清空上下文</n-button>
         </div>
       </div>
@@ -465,15 +577,29 @@ onMounted(async () => {
               "
             >
               <div v-if="m.role === 'user'" class="whitespace-pre-wrap">{{ m.content }}</div>
-              <div
-                v-else-if="m.content"
-                class="md-content"
-                v-html="renderMarkdown(m.content)"
-              ></div>
-              <div v-else class="flex items-center gap-1 text-gray-400">
-                <span class="inline-block w-2 h-2 rounded-full bg-gray-400 animate-pulse"></span>
-                正在思考…
-              </div>
+              <template v-else>
+                <!-- Agent 实际调用的工具（命令/文件操作/git 等），此前被前端静默丢弃，现补全展示 -->
+                <div v-if="m.toolCalls && m.toolCalls.length" class="flex flex-col gap-1.5 mb-2">
+                  <details
+                    v-for="tc in m.toolCalls"
+                    :key="tc.id"
+                    class="rounded bg-gray-50 dark:bg-gray-900/60 border border-gray-200 dark:border-gray-700"
+                  >
+                    <summary class="cursor-pointer px-2 py-1 text-xs flex items-center gap-1.5 select-none">
+                      <span>🔧</span>
+                      <code class="font-mono text-blue-600 dark:text-blue-300">{{ tc.name }}</code>
+                      <span v-if="!tc.done" class="text-amber-500">执行中…</span>
+                      <span v-else class="text-gray-400">✓</span>
+                    </summary>
+                    <pre class="text-[11px] leading-relaxed px-2 pb-2 overflow-auto max-h-60">{{ formatArgs(tc.args) }}</pre>
+                  </details>
+                </div>
+                <div v-if="m.content" class="md-content" v-html="renderMarkdown(m.content)"></div>
+                <div v-else class="flex items-center gap-1 text-gray-400">
+                  <span class="inline-block w-2 h-2 rounded-full bg-gray-400 animate-pulse"></span>
+                  正在思考…
+                </div>
+              </template>
               <div v-if="m.error" class="text-red-500 text-xs mt-1">
                 ⚠️ 生成出错，结果可能不完整
               </div>
@@ -533,6 +659,39 @@ onMounted(async () => {
         </div>
       </footer>
     </main>
+
+    <!-- 会话「运行状态」外置文件（PLAN/PROGRESS/LEARNINGS）查看面板 -->
+    <n-modal
+      v-model:show="showState"
+      title="运行状态（Agent 工作计划与进展）"
+      preset="card"
+      style="width: 760px; max-width: 94vw"
+    >
+      <n-empty v-if="stateLoading" description="加载中…" />
+      <n-empty v-else-if="!sessionState.exists" description="该会话暂未产生可续跑的工作状态文件" />
+      <template v-else>
+        <n-space vertical :size="12">
+          <div v-if="sessionState.plan">
+            <div class="text-sm font-semibold mb-1">📋 PLAN.md（计划 / 目标）</div>
+            <n-scrollbar style="max-height: 220px">
+              <pre class="text-xs bg-gray-50 dark:bg-gray-900 rounded p-2 whitespace-pre-wrap">{{ sessionState.plan }}</pre>
+            </n-scrollbar>
+          </div>
+          <div v-if="sessionState.progress">
+            <div class="text-sm font-semibold mb-1">📈 PROGRESS.md（进展日志）</div>
+            <n-scrollbar style="max-height: 220px">
+              <pre class="text-xs bg-gray-50 dark:bg-gray-900 rounded p-2 whitespace-pre-wrap">{{ sessionState.progress }}</pre>
+            </n-scrollbar>
+          </div>
+          <div v-if="sessionState.learnings">
+            <div class="text-sm font-semibold mb-1">💡 LEARNINGS.md（踩坑与约定）</div>
+            <n-scrollbar style="max-height: 220px">
+              <pre class="text-xs bg-gray-50 dark:bg-gray-900 rounded p-2 whitespace-pre-wrap">{{ sessionState.learnings }}</pre>
+            </n-scrollbar>
+          </div>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 

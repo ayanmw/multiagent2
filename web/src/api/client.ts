@@ -66,6 +66,13 @@ export async function request<T = unknown>(
       data && typeof data === 'object' && 'error' in data
         ? String((data as Record<string, unknown>).error)
         : `请求失败 (${res.status})`
+    // 全局 401 拦截：令牌失效/未登录时清理本地态并跳回登录页，避免各页各自报错。
+    if (res.status === 401) {
+      clearToken()
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login'
+      }
+    }
     throw new ApiError(res.status, msg)
   }
 

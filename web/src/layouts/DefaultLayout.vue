@@ -53,6 +53,26 @@ const menuOptions: MenuOption[] = [
     ),
   },
   {
+    label: '工作区',
+    key: 'workspaces',
+    icon: svgIcon('M3 3h8v8H3zm10 0h8v8h-8zM3 13h8v8H3zm10 0h8v8h-8z'),
+  },
+  {
+    label: 'MCP',
+    key: 'mcp',
+    icon: svgIcon('M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 0h6v6h-6zM4 10h6v4H4zm10-6h6v4h-6z'),
+  },
+  {
+    label: '技能',
+    key: 'skills',
+    icon: svgIcon('M12 2l2.4 7.4H22l-6 4.4 2.3 7.2-6.3-4.6L5.7 21l2.3-7.2-6-4.4h7.6z'),
+  },
+  {
+    label: '任务中心',
+    key: 'tasks',
+    icon: svgIcon('M3 5h18v4H3zm0 6h18v4H3zm0 6h18v2H3z'),
+  },
+  {
     label: '设置',
     key: 'settings',
     icon: svgIcon(
