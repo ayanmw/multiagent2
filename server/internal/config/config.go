@@ -57,6 +57,9 @@ type Config struct {
 	// 延迟工具箱（M2-06）：把 MCP 服务器工具经 tool_search/call_tool 双控制工具按需暴露给 Agent，
 	// 默认不把全部工具声明一次性灌进模型上下文，避免 token 随工具数线性膨胀。
 	toolSearchEnabled bool // 是否开启延迟工具箱（env TOOL_SEARCH_ENABLED，默认 true），M2-06
+	// 平台级预算护栏总开关（M3-04）：env BUDGET_ENABLED（默认 true）。
+	// 关闭后所有预算检查直接放行（仅本地调试 / 紧急恢复用）；具体阈值由 DB 中的 BudgetPolicy 配置。
+	budgetEnabled bool // 是否开启预算护栏（env BUDGET_ENABLED，默认 true），M3-04
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -249,6 +252,10 @@ func Load() *Config {
 	// 避免上下文随工具数线性膨胀。TOOL_SEARCH_ENABLED=false 可关闭（纯调试 / 无 MCP 配置场景）。
 	cfg.toolSearchEnabled = envOrDefaultBool("TOOL_SEARCH_ENABLED", true)
 
+	// 平台级预算护栏（M3-04）：默认开启；具体阈值由 DB 中的 BudgetPolicy 配置。
+	// BUDGET_ENABLED=false 可整体关闭拦截（紧急恢复 / 纯调试，非生产环境不建议）。
+	cfg.budgetEnabled = envOrDefaultBool("BUDGET_ENABLED", true)
+
 	return cfg
 }
 
@@ -386,6 +393,13 @@ func (c *Config) WorktreeIsolation() bool {
 // declaration into the context upfront.
 func (c *Config) ToolSearchEnabled() bool {
 	return c != nil && c.toolSearchEnabled
+}
+
+// BudgetEnabled reports whether the platform-level budget guardrail (M3-04) is
+// turned on. When off, all budget checks pass through (emergency recovery /
+// local debugging only). Thresholds are configured via DB BudgetPolicy rows.
+func (c *Config) BudgetEnabled() bool {
+	return c != nil && c.budgetEnabled
 }
 
 func envOrDefault(key, fallback string) string {

@@ -394,3 +394,11 @@
 - 验证：`go build ./...` ✓ | `go vet ./...` ✓；`go test ./internal/engine/... ./internal/api/...` 全 PASS（含 usage 9 例新测试，纯 Go sqlite）；前端 `vue-tsc --noEmit` ✓ | `vite build` ✓（产出 `UsageView` chunk）。已知环境限制：本沙箱 `CGO_ENABLED=0` 无 gcc，历史 `go-sqlite3` 用例（`TestListSessionsScopedAndOrdered`/`TestGetRoleIDByName` 等）按 AGENTS.md 豁免跳过、与本任务无关，非代码缺陷。
 - 下一步：PLAN 中 **M3-04（预算护栏，平台级）** 成为下一个 ○，依赖本任务 M3-03。
 
+
+---
+
+### 2026-08-10 01:05 | M3-04 | ✅
+- 完成内容：**预算护栏（平台级，M3 企业化第四任务，依赖 M3-03，对齐 PLAN 验收「设极低阈值跑对话 → 第二轮被拦并返回『预算耗尽，待恢复』；管理员提额后恢复」）**。① 数据模型 `server/internal/model/budget.go`：`BudgetPolicy`（Scope∈{user,session,automation} + ScopeKey 组成唯一键；MaxTokens 阈值；Window∈{daily,total}；`Validate()`）。② repo `server/internal/repo/budget.go`：`GetBudgetPolicy`/`GetEffectiveUserBudgetPolicy`（用户特定策略优先于全局默认）/ `UpsertBudgetPolicy`（按唯一键 upsert，不新增重复行）/ `ListBudgetPolicies`/`DeleteBudgetPolicy`；核心 `EvaluateBudgets(db, uid, sessionKey, automationID)` 评估 user+session+automation 三级，任一超限即 `Blocked=true`，复用 `SumUsageRecords` 按 UserID/SessionKey 在窗口内聚合 token（`BUDGET_ENABLED` 总开关默认开，false 整体放行）。③ api `server/internal/api/budget.go`：`GET/PUT/DELETE /api/budgets`（RBAC `budgets:read`/`budgets:write`）+ `writeBudgetBlockAudit`（拦截时经 `DBAuditor` 写一条 `budget:enforce` 审计，满足「写审计」）；新增 `writeSSEEvent` 包级辅助供 SSE 早期拦截复用。④ 接线：`chat.go`/`sse.go` 在 `eng.Chat`/`eng.Stream` **之前**插入预算检查（chat 返回 429「预算耗尽，待恢复」+scope/used/max；sse 发 `RUN_ERROR`+`RUN_FINISHED`），拦截发生在持久化用户消息前避免脏数据；`model/role.go` `SeedRoles()` 补 developer `budgets:read/write`、viewer `budgets:read`（admin `*` 已覆盖）；`repo/db.go` AutoMigrate 加 `&model.BudgetPolicy{}`；`cmd/server/main.go` 注册三路由；`config` 增 `BUDGET_ENABLED`(默认 true)+`BudgetEnabled()`。
+- 验证：`go build ./...` ✓ | `go vet ./...` ✓；新增单测（纯 Go `glebarez/sqlite`，免 gcc）全 PASS——`repo/budget_test.go` 7 例（`EvaluateBudgets` 用户级阻断/阈值内不拦/提额后恢复/session 级拦截/总开关关闭放行/Upsert 创建后更新不增行/用户特定策略优先于全局）+ `api/budget_test.go` 4 例（RBAC developer 可读写·viewer 只读写 403 / upsert+列表+删除 / 非法体 400 / 未认证 401）。已知环境限制：本沙箱 `CGO_ENABLED=0` 无 gcc，`internal/repo` 历史 `go-sqlite3` 用例（`TestListSessionsScopedAndOrdered`/`TestGetRoleIDByName` 等）为**既有失败、与本次改动无关**（已 `git stash` 基线复现确认）；与本任务相关的 budget 测试全绿。
+- 说明：automation 作用域策略可在 API 预置，运行时统计待 M4 接入 `automation_id`（usage_records 当前无该列）后全量启用；M3-04 运行时拦截已覆盖 user + session 两级（满足验收）。
+- 下一步：PLAN 中 **M3-05（人工检查点 human-in-the-loop）** 成为下一个 ○，依赖 M3-01。

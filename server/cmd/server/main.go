@@ -22,9 +22,9 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/api"
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/ayanmw/multiagent2/server/internal/config"
-	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/provider"
@@ -129,6 +129,12 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// Token/费用计量（M3-03）：对话结束后落库的 token 用量查询与聚合。
 		// owner 隔离：developer/admin 看全员，viewer 仅看本人；读操作需 usage:read（RBAC）。
 		protected.GET("/usage", middleware.RequirePermission(db.DB, "usage", "read"), api.ListUsageHandler(db.DB))
+
+		// 平台级预算护栏（M3-04）：管理员设定 / 查询预算策略（user/session/automation 三级阈值）。
+		// 读操作需 budgets:read，写（upsert / 删除）需 budgets:write（RBAC）。
+		protected.GET("/budgets", middleware.RequirePermission(db.DB, "budgets", "read"), api.ListBudgetsHandler(db.DB))
+		protected.PUT("/budgets", middleware.RequirePermission(db.DB, "budgets", "write"), api.UpsertBudgetHandler(db.DB))
+		protected.DELETE("/budgets/:id", middleware.RequirePermission(db.DB, "budgets", "write"), api.DeleteBudgetHandler(db.DB))
 
 		// Skills 技能仓库（M2-03）：用户归属的技能管理（文件系统后端，owner 隔离）。
 		// 读操作需 skills:read，写操作（建/更新/删私有技能）需 skills:write（RBAC）。

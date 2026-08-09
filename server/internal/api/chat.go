@@ -83,11 +83,30 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			apiKey = dec
 		}
 
-		// 解析/创建会话并持久化用户消息，用于多轮记忆（M0.5-01）。
+		// 预算护栏（M3-04）：在持久化用户消息、发起 LLM 调用前评估平台级预算，
+		// 超限则暂停该 session 后续调用并返回「预算耗尽，待恢复」，同时写审计。
 		sessionKey := req.SessionID
 		if sessionKey == "" {
 			sessionKey = repo.NewSessionKey()
 		}
+		budgetEv, berr := repo.EvaluateBudgets(db, uid, sessionKey, "")
+		if berr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "预算评估失败"})
+			return
+		}
+		if budgetEv.Blocked {
+			writeBudgetBlockAudit(db, uid, budgetEv)
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error":  "预算耗尽，待恢复",
+				"detail": "该用户/会话的平台级预算已用尽，请管理员提额后重试",
+				"scope":  budgetEv.Scope,
+				"used":   budgetEv.Used,
+				"max":    budgetEv.Max,
+			})
+			return
+		}
+
+		// 解析/创建会话并持久化用户消息，用于多轮记忆（M0.5-01）。
 		sess, serr := repo.GetOrCreateSession(db, uid, sessionKey)
 		if serr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})

@@ -93,6 +93,24 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 			apiKey = dec
 		}
 
+		// 预算护栏（M3-04）：在持久化用户消息、发起 LLM 调用前评估平台级预算，
+		// 超限则暂停该 session 后续调用并返回「预算耗尽，待恢复」SSE 事件，同时写审计。
+		budgetEv, berr := repo.EvaluateBudgets(db, uid, sessionKey, "")
+		if berr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "预算评估失败"})
+			return
+		}
+		if budgetEv.Blocked {
+			writeBudgetBlockAudit(db, uid, budgetEv)
+			c.Writer.Header().Set("Content-Type", "text/event-stream")
+			c.Writer.Header().Set("Cache-Control", "no-cache")
+			c.Writer.Header().Set("Connection", "keep-alive")
+			c.Writer.Header().Set("X-Accel-Buffering", "no")
+			writeSSEEvent(c, "RUN_ERROR", gin.H{"message": "预算耗尽，待恢复（该用户/会话的平台级预算已用尽，请管理员提额后重试）"})
+			writeSSEEvent(c, "RUN_FINISHED", gin.H{"threadId": sessionKey, "runId": "run-blocked"})
+			return
+		}
+
 		// 获取或创建会话并持久化用户消息。
 		sess, err := repo.GetOrCreateSession(db, uid, sessionKey)
 		if err != nil {
@@ -119,10 +137,7 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 
 		// emit 向客户端推送一条 AG-UI SSE 事件。
 		emit := func(evtType string, data gin.H) {
-			data["type"] = evtType
-			b, _ := json.Marshal(data)
-			_, _ = c.Writer.WriteString("data: " + string(b) + "\n\n")
-			c.Writer.Flush()
+			writeSSEEvent(c, evtType, data)
 		}
 
 		runID := "run-" + uuid.NewString()[:8]
@@ -214,6 +229,16 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 		recordEngineUsage(db, eng, uid, sess, p, m, buildPromptText(history, message), text)
 		emit("RUN_FINISHED", gin.H{"threadId": sess.SessionKey, "runId": runID})
 	}
+}
+
+// writeSSEEvent 向客户端推送一条 AG-UI SSE 事件（data: <json>\n\n 并 flush）。
+// 抽为包级函数，便于在 SSE 响应头就绪前的早期拦截（如预算护栏）复用，
+// 而不必依赖仅在响应头设置后才定义的局部 emit 闭包。
+func writeSSEEvent(c *gin.Context, evtType string, data gin.H) {
+	data["type"] = evtType
+	b, _ := json.Marshal(data)
+	_, _ = c.Writer.WriteString("data: " + string(b) + "\n\n")
+	c.Writer.Flush()
 }
 
 // aguiConverter 将 Agent 事件流转换为 AG-UI 协议 SSE 事件。
