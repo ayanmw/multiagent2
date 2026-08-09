@@ -47,7 +47,9 @@ func GitToolNames() []string {
 
 // NewGitExecutor 为工作目录构造一个经危险命令策略包装的执行器（M2-01），
 // 供 Git 工具与 workspace 创建时的自动 git init 复用。workdir 必须存在且为目录。
-func NewGitExecutor(workdir string) (executor.Executor, error) {
+// auditor 为审计器：nil 时回落到日志审计（LogAuditor）；业务层传入 repo.NewDBAuditor
+// 可使 git 命令同样写入审计日志（M3-01 执行审计落库）。
+func NewGitExecutor(workdir string, auditor executor.Auditor) (executor.Executor, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
@@ -58,10 +60,13 @@ func NewGitExecutor(workdir string) (executor.Executor, error) {
 	// 复用 CodeAct 同款危险命令策略：正常 git 子命令（status/diff/commit/log/branch/add）
 	// 不在黑名单内，只有 git push --force / git reset --hard / git checkout -- 等高风险
 	// 子命令在无人值守模式下被拒（见 executor.DefaultDangerousRules）。
+	if auditor == nil {
+		auditor = executor.NewLogAuditor(nil)
+	}
 	return executor.NewSafeExecutor(
 		host,
 		executor.NewDangerousCommandPolicy(executor.ModeUnattended),
-		executor.NewLogAuditor(nil),
+		auditor,
 		nil, // 无人值守：ask 类命令直接按 deny 处置
 	), nil
 }
@@ -234,11 +239,12 @@ func gitBranchTool(ex executor.Executor) tool.Tool {
 // NewGitTools 构造一组经危险命令策略包装的 Git 工具（M2-01）。
 // workdir 必须存在（调用方负责创建，api 层按 workspace 本地目录传入），
 // 内部使用 NewGitExecutor 包装 SafeExecutor，禁止裸用 HostExecutor.Run。
-func NewGitTools(workdir string) ([]tool.Tool, error) {
+// auditor 为审计器（nil 回落日志审计）；传入 repo.NewDBAuditor 可使 git 命令落库审计（M3-01）。
+func NewGitTools(workdir string, auditor executor.Auditor) ([]tool.Tool, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
-	ex, err := NewGitExecutor(workdir)
+	ex, err := NewGitExecutor(workdir, auditor)
 	if err != nil {
 		return nil, err
 	}
@@ -254,12 +260,13 @@ func NewGitTools(workdir string) ([]tool.Tool, error) {
 // NewCodeActWithGit 返回「CodeAct 工具集 + Git 工具集」（M2-01），用于单代理模式的根 Agent：
 // 既有文件读写/执行能力，又能显式 git 提交与查看变更。team 模式下则改由 Coder 子代理持有
 // （见 codeagent.NewCoder），二者不要重复装配以免工具名冲突。
-func NewCodeActWithGit(workdir string) ([]tool.Tool, error) {
-	code, err := NewCodeAct(workdir)
+// auditor 为审计器（nil 回落日志审计）；传入 repo.NewDBAuditor 可使本次会话全部命令落库审计（M3-01）。
+func NewCodeActWithGit(workdir string, auditor executor.Auditor) ([]tool.Tool, error) {
+	code, err := NewCodeAct(workdir, auditor)
 	if err != nil {
 		return nil, err
 	}
-	git, err := NewGitTools(workdir)
+	git, err := NewGitTools(workdir, auditor)
 	if err != nil {
 		return nil, err
 	}

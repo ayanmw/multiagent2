@@ -21,6 +21,7 @@ import (
 
 	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/skillrepo"
 	"github.com/ayanmw/multiagent2/server/internal/toolsearch"
 )
@@ -86,6 +87,10 @@ type ModelConfig struct {
 	ToolSearchProvider ToolSearchProvider
 	// ToolSearchUserID 是当前对话归属用户，供 provider 做 owner 隔离（M2-02 MCP 配置按用户隔离）。
 	ToolSearchUserID uint
+	// Auditor 是命令执行审计器（M3-01 执行审计落库）。nil 时回落日志审计（LogAuditor）。
+	// 经 codeagent.Deps 下传 Coder 子代理，使 team 模式下代码落地命令同样写入审计日志；
+	// 单代理模式的工具由 api 层直接以 DBAuditor 构造（见 chat.go/sse.go）。
+	Auditor executor.Auditor
 }
 
 // ToolSearchProvider 在每次对话时按需构建延迟工具箱的回调（M2-06）。
@@ -181,6 +186,7 @@ func New(cfg ModelConfig) (*Engine, error) {
 			Guardrail:    cfg.Guardrail,
 			StateStore:   cfg.StateStore,
 			SkillContext: skillCtx,
+			Auditor:      cfg.Auditor,
 		}, cfg.Team)
 		if oerr != nil {
 			return nil, oerr

@@ -22,6 +22,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/api"
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/ayanmw/multiagent2/server/internal/config"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
@@ -120,6 +121,10 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.GET("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "read"), api.GetMCPServerHandler(db.DB))
 		protected.PUT("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.UpdateMCPServerHandler(db.DB))
 		protected.DELETE("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.DeleteMCPServerHandler(db.DB))
+
+		// 执行审计日志（M3-01）：CodeAct/Git/taskrun 三类命令执行的审计落库查询。
+		// owner 隔离：developer/admin 看全员，viewer 仅看本人；读操作需 audit:read（RBAC）。
+		protected.GET("/audit", middleware.RequirePermission(db.DB, "audit", "read"), api.ListAuditLogsHandler(db.DB))
 
 		// Skills 技能仓库（M2-03）：用户归属的技能管理（文件系统后端，owner 隔离）。
 		// 读操作需 skills:read，写操作（建/更新/删私有技能）需 skills:write（RBAC）。
@@ -280,6 +285,9 @@ func main() {
 		// M2-05：worktree 隔离钩子。开启时每个 taskrun 子任务在独立 worktree（独立分支
 		// taskrun/<id>）内执行，完成后 merge 回主分支并清理，绝不 push 远程。
 		Worktree: &taskrun.WorktreeHook{Enabled: cfg.WorktreeIsolation(), Manager: worktree.NewManager()},
+		// M3-01：worker 子代理命令经 DBAuditor 落库审计，按 OwnerUserID 归属，
+		// 实现 taskrun 后台子任务执行的全量审计覆盖。
+		NewAuditor: func(ownerUserID uint) executor.Auditor { return repo.NewDBAuditor(db.DB, ownerUserID) },
 	}
 	workerFactory := taskrun.BuildAgentFactory(cfg.GuardrailConfig(), workerResolver)
 	taskRunController, ctrlErr := taskrun.NewController(

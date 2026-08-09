@@ -8,6 +8,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
 
@@ -33,13 +34,14 @@ func ensureWorkdir(workspaceRoot string, uid uint, wsLocalDir string) (string, e
 // buildCodeActTools 为给定用户构造一组经危险命令策略包装的 CodeAct 工具（M1-06）。
 // 目录解析规则见 ensureWorkdir；目录自动创建，工具不可越界到目录之外。
 // 返回的 []tool.Tool 可直接追加进 engine.ModelConfig.Tools。
+// auditor 为审计器（nil 回落日志审计）；传入 repo.NewDBAuditor 可将命令落库审计（M3-01）。
 //
 // 注意（M1-08）：子代理委托模式下不再由本函数装配工具——CodeAct 工具集
 // 由 codeagent 工厂装配给 Coder 子代理，Orchestrator 自身不持有写工具。
-func buildCodeActTools(workspaceRoot string, uid uint, wsLocalDir string) ([]tool.Tool, error) {
+func buildCodeActTools(workspaceRoot string, uid uint, wsLocalDir string, auditor executor.Auditor) ([]tool.Tool, error) {
 	workdir, err := ensureWorkdir(workspaceRoot, uid, wsLocalDir)
 	if err != nil {
 		return nil, err
 	}
-	return codectool.NewCodeAct(workdir)
+	return codectool.NewCodeAct(workdir, auditor)
 }

@@ -86,7 +86,7 @@ func (m *Manager) Create(ctx context.Context, repoDir, childSessionID string) (s
 		return "", fmt.Errorf("worktree: 创建 worktree 父目录失败: %w", err)
 	}
 
-	ex, err := codectool.NewGitExecutor(repoDir)
+	ex, err := codectool.NewGitExecutor(repoDir, nil)
 	if err != nil {
 		return "", err
 	}
@@ -121,7 +121,7 @@ func (m *Manager) Finalize(ctx context.Context, childSessionID, status string) s
 	delete(m.entries, childSessionID)
 	m.mu.Unlock()
 
-	ex, err := codectool.NewGitExecutor(entry.RepoDir)
+	ex, err := codectool.NewGitExecutor(entry.RepoDir, nil)
 	if err != nil {
 		return fmt.Sprintf("worktree: 构造执行器失败: %v", err)
 	}

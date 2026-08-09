@@ -144,7 +144,7 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 		if !enableSubAgents {
 			var tErr error
 			// M2-01：单代理模式同样装配 Git 工具集（见 chat.go ChatHandler 同款处理）。
-			tools, tErr = codectool.NewCodeActWithGit(workdir)
+			tools, tErr = codectool.NewCodeActWithGit(workdir, repo.NewDBAuditor(db, uid))
 			if tErr != nil {
 				emit("RUN_ERROR", gin.H{"message": "构建代码执行工具失败: " + tErr.Error()})
 				emit("RUN_FINISHED", gin.H{"threadId": sess.SessionKey, "runId": runID})
@@ -173,6 +173,8 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 			ToolSearchEnabled:  toolSearchEnabled,
 			ToolSearchProvider: toolSearchProvider,
 			ToolSearchUserID:   uid,
+			// M3-01：命令执行审计器，team 模式下经 Deps 下传到 Coder（单代理模式工具已直接携带）。
+			Auditor: repo.NewDBAuditor(db, uid),
 		})
 		if err != nil {
 			emit("RUN_ERROR", gin.H{"message": err.Error()})

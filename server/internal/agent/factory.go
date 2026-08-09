@@ -29,6 +29,7 @@ import (
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
 
@@ -90,6 +91,11 @@ type Deps struct {
 	// 仅根 Agent（Orchestrator/单代理）使用，不下发给子代理（Coder/Reviewer）——
 	// 维护 run 级上下文是编排者的职责，子代理不应被额外技能上下文干扰。
 	SkillContext string
+	// Auditor 是命令执行审计器（M3-01 执行审计落库）。nil 时回落日志审计（LogAuditor），
+	// 不阻断命令执行。业务层在请求级（chat/sse 的当前 uid）或 worker 级（taskrun 的
+	// OwnerUserID）注入 repo.NewDBAuditor，使 Coder 子代理执行的命令同样写入审计日志，
+	// 实现 CodeAct/Git/taskrun 三类执行入口的全量覆盖。
+	Auditor executor.Auditor
 }
 
 // validate 校验依赖完整性。
@@ -109,13 +115,13 @@ func NewCoder(d Deps) (agent.Agent, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	tools, err := codectool.NewCodeAct(d.Workdir)
+	tools, err := codectool.NewCodeAct(d.Workdir, d.Auditor)
 	if err != nil {
 		return nil, err
 	}
 	// M2-01：Coder 同时持有 Git 工具集（git_status/git_diff/git_commit/git_log/git_branch），
 	// 使其在完成代码改动后能显式提交到 workspace 的 git 仓库。
-	gitTools, gerr := codectool.NewGitTools(d.Workdir)
+	gitTools, gerr := codectool.NewGitTools(d.Workdir, d.Auditor)
 	if gerr != nil {
 		return nil, gerr
 	}

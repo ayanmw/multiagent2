@@ -119,7 +119,7 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			var tErr error
 			// M2-01：单代理模式同样装配 Git 工具集（git_status/git_diff/git_commit/git_log/git_branch），
 			// 使其能对工作区改动进行版本管理；team 模式下则由 Coder 子代理持有（见 codeagent.NewCoder）。
-			tools, tErr = codectool.NewCodeActWithGit(workdir)
+			tools, tErr = codectool.NewCodeActWithGit(workdir, repo.NewDBAuditor(db, uid))
 			if tErr != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "构建代码执行工具失败: " + tErr.Error()})
 				return
@@ -147,6 +147,8 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			ToolSearchEnabled:  toolSearchEnabled,
 			ToolSearchProvider: toolSearchProvider,
 			ToolSearchUserID:   uid,
+			// M3-01：命令执行审计器，team 模式下经 Deps 下传到 Coder（单代理模式工具已直接携带）。
+			Auditor: repo.NewDBAuditor(db, uid),
 		})
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

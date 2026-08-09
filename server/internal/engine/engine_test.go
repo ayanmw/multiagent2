@@ -85,7 +85,7 @@ func TestEngine_WithCodeActTools(t *testing.T) {
 	defer srv.Close()
 
 	workdir := t.TempDir()
-	tools, err := codectool.NewCodeAct(workdir)
+	tools, err := codectool.NewCodeAct(workdir, nil)
 	if err != nil {
 		t.Fatalf("NewCodeAct failed: %v", err)
 	}

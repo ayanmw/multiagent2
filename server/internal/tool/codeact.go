@@ -217,9 +217,11 @@ func CodeActTools(workdir string, ex executor.Executor) []tool.Tool {
 
 // NewCodeAct 构造一组经危险命令策略包装的 CodeAct 工具（M1-06 业务入口）。
 // workdir 必须存在（调用方负责创建，api 层按 WorkspaceRoot/<uid> 自动建）；
-// 内部使用 NewSafeExecutor(HostExecutor, 危险命令策略(无人值守), 日志审计)，
+// 内部使用 NewSafeExecutor(HostExecutor, 危险命令策略(无人值守), auditor)，
 // 禁止裸用 HostExecutor（见 LEARNINGS M1-05）。
-func NewCodeAct(workdir string) ([]tool.Tool, error) {
+// auditor 为审计器：nil 时回落到日志审计（LogAuditor），不阻断命令执行；
+// 业务层在请求级/worker 级传入 repo.NewDBAuditor（M3-01 执行审计落库）。
+func NewCodeAct(workdir string, auditor executor.Auditor) ([]tool.Tool, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
@@ -227,10 +229,13 @@ func NewCodeAct(workdir string) ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
+	if auditor == nil {
+		auditor = executor.NewLogAuditor(nil)
+	}
 	ex := executor.NewSafeExecutor(
 		host,
 		executor.NewDangerousCommandPolicy(executor.ModeUnattended),
-		executor.NewLogAuditor(nil),
+		auditor,
 		nil, // 无人值守：ask 类命令直接按 deny 处置
 	)
 	return CodeActTools(workdir, ex), nil

@@ -12,6 +12,7 @@ package taskrun
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
@@ -23,6 +24,7 @@ import (
 	taskruntool "trpc.group/trpc-go/trpc-agent-go/tool/taskrun"
 
 	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/worktree"
 )
 
@@ -41,6 +43,10 @@ type WorkerResolver struct {
 	ResolveWorkdir func(ctx context.Context, userID string) (string, error)
 	// Worktree 是可选的 worktree 隔离钩子（M2-05）。nil 表示不隔离，沿用主目录。
 	Worktree *WorktreeHook
+	// NewAuditor 按 OwnerUserID 解析本次 worker 命令执行的审计器（M3-01 执行审计落库）。
+	// 返回审计器写入 audit_logs 表的对应 owner 名下，实现 taskrun 后台子任务命令的全量审计；
+	// nil 时 worker 命令经日志审计（LogAuditor，不落库）。若未注入则 worker 使用 nil 审计器。
+	NewAuditor func(ownerUserID uint) executor.Auditor
 }
 
 // WorktreeHook 把 git worktree 隔离接入 taskrun 生命周期（M2-05）：
@@ -104,6 +110,14 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver) 
 		if err != nil {
 			return nil, fmt.Errorf("taskrun: 解析 worker 工作目录失败: %w", err)
 		}
+		// M3-01：构造落库审计器，使 worker 子代理执行的命令写入该 owner 名下的审计日志。
+		// inv.Session.UserID 为字符串形式的用户 id（与入口 uid 一致），解析失败则回落系统（0）。
+		var auditor executor.Auditor
+		if res.NewAuditor != nil {
+			if uidNum, perr := strconv.ParseUint(uid, 10, 64); perr == nil {
+				auditor = res.NewAuditor(uint(uidNum))
+			}
+		}
 		// M2-05：若开启 worktree 隔离，把子代理的执行目录切换到独立 worktree（独立分支），
 		// 使其改动不污染主分支工作区；创建失败则回退主目录（不阻断任务）。
 		if res.Worktree != nil {
@@ -115,6 +129,7 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver) 
 			Model:     m,
 			Workdir:   wd,
 			Guardrail: guardrail,
+			Auditor:   auditor,
 		})
 	}
 }

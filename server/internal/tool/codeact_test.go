@@ -146,7 +146,7 @@ func TestFileRead_TraversalBlocked(t *testing.T) {
 }
 
 func TestNewCodeAct_WorkdirMissing(t *testing.T) {
-	if _, err := NewCodeAct(""); err == nil {
+	if _, err := NewCodeAct("", nil); err == nil {
 		t.Fatal("空 workdir 应报错")
 	}
 }
