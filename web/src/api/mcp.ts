@@ -4,6 +4,9 @@ import { request } from './client'
 
 export type MCPTransport = 'stdio' | 'sse' | 'streamable'
 
+// M3-07：env / headers 含 token 等机密，后端以 AES-256-GCM 加密落库，**读接口一律
+// 不回显明文**，只给掩码信息（has_env / env_keys）。前端编辑时留空即「不修改」，
+// 需要改就整份提交新的 env / headers。
 export interface MCPServer {
   id: number
   user_id: number
@@ -11,9 +14,15 @@ export interface MCPServer {
   transport: MCPTransport
   command: string
   args: string[]
-  env: Record<string, string>
+  /** 是否已配置 env（不含值） */
+  has_env: boolean
+  /** 已配置的 env 键名（升序，不含值） */
+  env_keys: string[]
   url: string
-  headers: Record<string, string>
+  /** 是否已配置 headers（不含值） */
+  has_headers: boolean
+  /** 已配置的 headers 键名（升序，不含值） */
+  header_keys: string[]
   enabled: boolean
   description: string
   created_at: string
@@ -25,8 +34,10 @@ export interface MCPServerPayload {
   transport: MCPTransport
   command?: string
   args?: string[]
+  /** 明文提交；不传表示保持原值，传 {} 表示清空 */
   env?: Record<string, string>
   url?: string
+  /** 明文提交；不传表示保持原值，传 {} 表示清空 */
   headers?: Record<string, string>
   enabled?: boolean
   description?: string

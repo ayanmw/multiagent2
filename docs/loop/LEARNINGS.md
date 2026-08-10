@@ -258,5 +258,12 @@ server/
 - **关键解耦**：M2-02 **不装载任何 MCP 工具**，仅存配置；真实工具装载由 M2-06 toolsearch 按需调用框架 `tool/mcp`（stdio/sse/streamable）完成，届时读取本表 `mcp_servers` 配置。验收标准「无真实装载」即此意——避免管理 API 与运行时装载耦合、也避免本任务引入框架 MCP 客户端的 CGO/网络依赖。
 - transport 跨字段校验：stdio→`command` 必填、sse/streamable→`url` 必填；gin 的 `oneof` 只管单字段合法性，跨字段必填在 handler 内用 `model.MCPServer.Validate()` 兜底（创建与更新后都重校验，因 PUT 可能改 transport）。
 - 权限矩阵：developer 需 `mcp:write`（seedRoles 原有 `mcp:read`）、viewer 仅 `mcp:read`，故 viewer 调写路由 403、读路由放行。
-- env/headers 含敏感信息（token 等），M2-02 仅明文 JSON 存库（与 workspace 同级）；加密留 M3 审计/预算阶段，与 Provider AES 密钥区分对待。
+- env/headers 含敏感信息（token 等），M2-02 仅明文 JSON 存库（与 workspace 同级）；加密留 M3 审计/预算阶段，与 Provider AES 密钥区分对待。**（已于 M3-07 落地加密，见下条）**
+
+### 2026-08-10 | 安全 | MCP env/headers 加密存储与掩码回显（M3-07）
+- **瞬态明文 + 密文列**模式（可复用于任何「需还原使用」的敏感 map 字段）：`model.MCPServer.Env`/`Headers` 改为 `gorm:"-" json:"-"` 的**瞬态**字段（仅进程内存在），落库的是新列 `env_enc`/`headers_enc`（AES-256-GCM、`base64(nonce||ct)`，与 `providers.api_key_enc` 同一套 `internal/crypto` 与同一把 `config.EncryptionKey`）。`SealSecrets(key)` / `OpenSecrets(key)` 挂在 model 上，**repo 层是唯一调用方**：写路径（Create/Update）先 Seal，读路径（List/Get*）后 Open——业务层与 toolsearch 拿到的仍是明文 map，无感知。
+- **空值语义**：空/nil map 落成空串而非 `"{}"`，用以区分「未配置」与「配置了空对象」；`HasEnv()`/`HasHeaders()` 只看密文列是否为空，不需解密即可判断，适合列表视图。
+- **掩码回显**：API 视图彻底移除 `env`/`headers` 字段，改为 `has_env`/`env_keys`/`has_headers`/`header_keys`（键名升序，**只给键不给值**）。前端编辑表单不再预填密钥，语义统一为「留空不修改、填 `{}` 清空」（与 Provider api_key 的留空语义一致）。
+- **越权先于解密**：`GetMCPServerByID` 的 owner 校验必须放在 `OpenSecrets` **之前**，越权者连密文都不解开；错误密钥解密要 fail loud（返回 error），不能静默返回空 map——否则会带着缺失的鉴权头去连上游，产生难排查的 401。
+- **遗留数据迁移**：`repo.NewDB` 内 `migrateMCPSecretEncryption` 在 AutoMigrate 之后运行，用 `sqlite_master` 的建表 DDL 里是否含反引号包裹的 `` `env` ``（可精确区分新列 `env_enc`）判断遗留列是否存在，仅对「遗留列非空且密文列为空」的行就地加密并把遗留列置 NULL；全新库为 no-op、二次运行幂等。注意 SQLite/GORM 不会自动删除废弃列，遗留列会残留在表结构中（内容已清空）——彻底删列留给 M3-08 的正式迁移机制。
 

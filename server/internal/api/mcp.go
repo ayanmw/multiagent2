@@ -39,21 +39,27 @@ type mcpServerUpdateRequest struct {
 	Description *string            `json:"description"`
 }
 
-// mcpServerView 是对外返回的精简视图（env/headers 原样回显，供前端编辑与 M2-06 消费）。
+// mcpServerView 是对外返回的精简视图。
+//
+// M3-07：env/headers 属敏感字段（常含 token），一律**不回显明文**，只暴露
+// 「有没有配」与「配了哪些 key」，与 Provider 的 has_api_key 语义对齐。
+// 前端编辑时留空即代表不修改，需要改再整份提交新值。
 type mcpServerView struct {
-	ID          uint              `json:"id"`
-	UserID      uint              `json:"user_id"`
-	Name        string            `json:"name"`
-	Transport   string            `json:"transport"`
-	Command     string            `json:"command"`
-	Args        []string          `json:"args"`
-	Env         map[string]string `json:"env"`
-	URL         string            `json:"url"`
-	Headers     map[string]string `json:"headers"`
-	Enabled     bool              `json:"enabled"`
-	Description string            `json:"description"`
-	CreatedAt   string            `json:"created_at"`
-	UpdatedAt   string            `json:"updated_at"`
+	ID          uint     `json:"id"`
+	UserID      uint     `json:"user_id"`
+	Name        string   `json:"name"`
+	Transport   string   `json:"transport"`
+	Command     string   `json:"command"`
+	Args        []string `json:"args"`
+	HasEnv      bool     `json:"has_env"`
+	EnvKeys     []string `json:"env_keys"`
+	URL         string   `json:"url"`
+	HasHeaders  bool     `json:"has_headers"`
+	HeaderKeys  []string `json:"header_keys"`
+	Enabled     bool     `json:"enabled"`
+	Description string   `json:"description"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
 }
 
 func toMCPServerView(m *model.MCPServer) mcpServerView {
@@ -64,9 +70,11 @@ func toMCPServerView(m *model.MCPServer) mcpServerView {
 		Transport:   string(m.Transport),
 		Command:     m.Command,
 		Args:        m.Args,
-		Env:         m.Env,
+		HasEnv:      m.HasEnv(),
+		EnvKeys:     m.EnvKeys(),
 		URL:         m.URL,
-		Headers:     m.Headers,
+		HasHeaders:  m.HasHeaders(),
+		HeaderKeys:  m.HeaderKeys(),
 		Enabled:     m.Enabled,
 		Description: m.Description,
 		CreatedAt:   m.CreatedAt.Format(time.RFC3339),
@@ -76,7 +84,8 @@ func toMCPServerView(m *model.MCPServer) mcpServerView {
 
 // CreateMCPServerHandler 处理 POST /api/mcp（需 mcp:write）。
 // 仅做管理面：持久化配置 + 校验，不在此装载 MCP 工具。
-func CreateMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
+// encKey 为 AES-256 主密钥，env/headers 经 repo 层加密后落库（M3-07）。
+func CreateMCPServerHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -112,14 +121,14 @@ func CreateMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		// 同名冲突检测（uniqueIndex idx_user_mcp 的友好前置校验）。
-		if _, derr := repo.GetMCPServerByName(db, uid, m.Name); derr == nil {
+		if _, derr := repo.GetMCPServerByName(db, uid, m.Name, encKey); derr == nil {
 			c.JSON(http.StatusConflict, gin.H{"error": "mcp server name already exists"})
 			return
 		} else if derr != repo.ErrMCPServerNotFound {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check mcp server name"})
 			return
 		}
-		if err := repo.CreateMCPServer(db, m); err != nil {
+		if err := repo.CreateMCPServer(db, m, encKey); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create mcp server"})
 			return
 		}
@@ -128,14 +137,14 @@ func CreateMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
 }
 
 // ListMCPServersHandler 处理 GET /api/mcp（需 mcp:read），返回当前用户的全部配置。
-func ListMCPServersHandler(db *gorm.DB) gin.HandlerFunc {
+func ListMCPServersHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
 			return
 		}
-		list, err := repo.ListMCPServers(db, uid)
+		list, err := repo.ListMCPServers(db, uid, encKey)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list mcp servers"})
 			return
@@ -149,14 +158,14 @@ func ListMCPServersHandler(db *gorm.DB) gin.HandlerFunc {
 }
 
 // GetMCPServerHandler 处理 GET /api/mcp/:id（owner-scoped）。
-func GetMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
+func GetMCPServerHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
 			return
 		}
-		m, ok2 := lookupOwnedMCPServer(c, db, uid)
+		m, ok2 := lookupOwnedMCPServer(c, db, uid, encKey)
 		if !ok2 {
 			return
 		}
@@ -165,14 +174,14 @@ func GetMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
 }
 
 // UpdateMCPServerHandler 处理 PUT /api/mcp/:id（需 mcp:write，owner-scoped，部分更新）。
-func UpdateMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
+func UpdateMCPServerHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
 			return
 		}
-		m, ok2 := lookupOwnedMCPServer(c, db, uid)
+		m, ok2 := lookupOwnedMCPServer(c, db, uid, encKey)
 		if !ok2 {
 			return
 		}
@@ -198,6 +207,8 @@ func UpdateMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
 		if req.Args != nil {
 			m.Args = *req.Args
 		}
+		// env/headers 未传即保持原值（repo 读路径已解密回填，重新 Seal 后密文等价）；
+		// 传空 map 则视为「清空该字段」。
 		if req.Env != nil {
 			m.Env = *req.Env
 		}
@@ -218,7 +229,7 @@ func UpdateMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if err := repo.UpdateMCPServer(db, m); err != nil {
+		if err := repo.UpdateMCPServer(db, m, encKey); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update mcp server"})
 			return
 		}
@@ -227,14 +238,14 @@ func UpdateMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
 }
 
 // DeleteMCPServerHandler 处理 DELETE /api/mcp/:id（需 mcp:write，owner-scoped）。
-func DeleteMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
+func DeleteMCPServerHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
 			return
 		}
-		m, ok2 := lookupOwnedMCPServer(c, db, uid)
+		m, ok2 := lookupOwnedMCPServer(c, db, uid, encKey)
 		if !ok2 {
 			return
 		}
@@ -247,14 +258,14 @@ func DeleteMCPServerHandler(db *gorm.DB) gin.HandlerFunc {
 }
 
 // lookupOwnedMCPServer 解析 :id、加载并校验归属；失败已写响应，返回 (nil,false)。
-func lookupOwnedMCPServer(c *gin.Context, db *gorm.DB, uid uint) (*model.MCPServer, bool) {
+func lookupOwnedMCPServer(c *gin.Context, db *gorm.DB, uid uint, encKey []byte) (*model.MCPServer, bool) {
 	idParam := c.Param("id")
 	id, err := strconv.ParseUint(idParam, 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return nil, false
 	}
-	m, err := repo.GetMCPServerByID(db, uid, uint(id))
+	m, err := repo.GetMCPServerByID(db, uid, uint(id), encKey)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "mcp server not found"})
 		return nil, false

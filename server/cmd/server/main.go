@@ -122,11 +122,12 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// MCP 服务器管理中心（M2-02）：用户归属的 MCP 配置 CRUD（仅管理面 + 校验，
 		// 不在此装载工具；真实装载由 M2-06 toolsearch 按需调用框架 tool/mcp）。
 		// 读操作需 mcp:read，写操作需 mcp:write（RBAC）。
-		protected.GET("/mcp", middleware.RequirePermission(db.DB, "mcp", "read"), api.ListMCPServersHandler(db.DB))
-		protected.POST("/mcp", middleware.RequirePermission(db.DB, "mcp", "write"), api.CreateMCPServerHandler(db.DB))
-		protected.GET("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "read"), api.GetMCPServerHandler(db.DB))
-		protected.PUT("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.UpdateMCPServerHandler(db.DB))
-		protected.DELETE("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.DeleteMCPServerHandler(db.DB))
+		// M3-07：env/headers 以 AES-256-GCM 加密落库，故各 handler 需注入 cfg.EncryptionKey。
+		protected.GET("/mcp", middleware.RequirePermission(db.DB, "mcp", "read"), api.ListMCPServersHandler(db.DB, cfg.EncryptionKey))
+		protected.POST("/mcp", middleware.RequirePermission(db.DB, "mcp", "write"), api.CreateMCPServerHandler(db.DB, cfg.EncryptionKey))
+		protected.GET("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "read"), api.GetMCPServerHandler(db.DB, cfg.EncryptionKey))
+		protected.PUT("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.UpdateMCPServerHandler(db.DB, cfg.EncryptionKey))
+		protected.DELETE("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.DeleteMCPServerHandler(db.DB, cfg.EncryptionKey))
 
 		// 执行审计日志（M3-01）：CodeAct/Git/taskrun 三类命令执行的审计落库查询。
 		// owner 隔离：developer/admin 看全员，viewer 仅看本人；读操作需 audit:read（RBAC）。
@@ -200,9 +201,10 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 // 按当前 uid 聚合该用户「已启用」的 MCP 服务器工具箱；工具默认不暴露给模型，由 tool_search/
 // call_tool 双控制工具按需检索与调用。单个服务器连接/初始化失败安全跳过（fail-open），不阻断
 // 对话；仅当全部服务器都不可用时才返回空工具箱（引擎据此不挂载双控制工具）。
-func buildToolSearchProvider(db *repo.DB) engine.ToolSearchProvider {
+// encKey 用于解密 mcp_servers 的 env/headers 密文列（M3-07），解密后才能真实装载工具。
+func buildToolSearchProvider(db *repo.DB, encKey []byte) engine.ToolSearchProvider {
 	return func(ctx context.Context, userID uint) (*toolsearch.Toolbox, error) {
-		servers, err := repo.ListMCPServers(db.DB, userID)
+		servers, err := repo.ListMCPServers(db.DB, userID, encKey)
 		if err != nil {
 			return nil, err
 		}
@@ -350,7 +352,7 @@ func main() {
 		log.Fatalf("Failed to initialize taskrun controller: %v", ctrlErr)
 	}
 
-	r := buildRouter(db, cfg, discoverer, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db))
+	r := buildRouter(db, cfg, discoverer, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db, cfg.EncryptionKey))
 
 	// Graceful shutdown
 	go func() {

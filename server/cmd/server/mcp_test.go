@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -43,14 +44,29 @@ func TestMCP_ManagementAPI(t *testing.T) {
 		t.Fatalf("列表 total 应 1, 实际 %v", body["total"])
 	}
 
-	// --- 详情（200），env 原样回显 ---
+	// --- 详情（200）：M3-07 起 env 明文不回显，只给掩码（has_env / env_keys）---
 	code, body = dev.do("GET", "/api/mcp/"+strconv.Itoa(id), nil)
 	if code != 200 {
 		t.Fatalf("详情应 200, 实际 %d", code)
 	}
-	env, _ := body["env"].(map[string]any)
-	if env["FOO"] != "bar" {
-		t.Fatalf("详情 env 回显错误: %v", body["env"])
+	if _, leaked := body["env"]; leaked {
+		t.Fatalf("详情不应回显 env 明文: %v", body["env"])
+	}
+	if body["has_env"] != true {
+		t.Fatalf("详情 has_env 应 true: %v", body)
+	}
+	envKeys, _ := body["env_keys"].([]any)
+	if len(envKeys) != 1 || envKeys[0] != "FOO" {
+		t.Fatalf("详情 env_keys 不符: %v", body["env_keys"])
+	}
+
+	// --- 库内必须是密文（M3-07 核心验收）---
+	var envEnc string
+	if err := db.DB.Raw("SELECT env_enc FROM mcp_servers WHERE id = ?", id).Scan(&envEnc).Error; err != nil {
+		t.Fatalf("读取 env_enc: %v", err)
+	}
+	if envEnc == "" || strings.Contains(envEnc, "FOO") {
+		t.Fatalf("env 未加密落库: %q", envEnc)
 	}
 
 	// --- 更新（200）：关 enabled + 改描述 ---

@@ -69,9 +69,20 @@ function resetForm() {
   form.enabled = true
   form.description = ''
 }
+// 编辑态下已配置的密钥键名（仅键名，值永不下发），用于表单提示。
+const editingEnvKeys = ref<string[]>([])
+const editingHeaderKeys = ref<string[]>([])
+
+function secretHint(keys: string[], has: boolean) {
+  if (!has) return '当前未配置'
+  return `已配置 ${keys.length} 项（${keys.join(', ')}），值已加密不回显；留空不修改，填 {} 清空`
+}
+
 function openCreate() {
   editingId.value = null
   resetForm()
+  editingEnvKeys.value = []
+  editingHeaderKeys.value = []
   showModal.value = true
 }
 function openEdit(s: MCPServer) {
@@ -81,8 +92,11 @@ function openEdit(s: MCPServer) {
   form.command = s.command
   form.argsText = (s.args ?? []).join('\n')
   form.url = s.url
-  form.envText = s.env ? JSON.stringify(s.env, null, 2) : ''
-  form.headersText = s.headers ? JSON.stringify(s.headers, null, 2) : ''
+  // M3-07：env / headers 明文不再下发，编辑时一律留空（留空 = 不修改）。
+  form.envText = ''
+  form.headersText = ''
+  editingEnvKeys.value = s.env_keys ?? []
+  editingHeaderKeys.value = s.header_keys ?? []
   form.enabled = s.enabled
   form.description = s.description
   showModal.value = true
@@ -103,6 +117,7 @@ async function submit() {
   const args = form.argsText.split('\n').map((s) => s.trim()).filter(Boolean)
   if (args.length) payload.args = args
   if (form.url.trim()) payload.url = form.url.trim()
+  // M3-07：env / headers 留空即不提交 → 后端保持原密文；填 {} 才是清空。
   if (form.envText.trim()) {
     try {
       payload.env = JSON.parse(form.envText)
@@ -182,6 +197,23 @@ const columns: DataTableColumns<MCPServer> = [
       })
     },
   },
+  {
+    title: '密钥',
+    key: 'secrets',
+    width: 150,
+    render(row) {
+      const parts: string[] = []
+      if (row.has_env) parts.push(`env ×${(row.env_keys ?? []).length}`)
+      if (row.has_headers) parts.push(`headers ×${(row.header_keys ?? []).length}`)
+      if (!parts.length) return h(NText, { depth: 3 }, { default: () => '—' })
+      return h(NSpace, { size: 4, wrap: false }, {
+        default: () =>
+          parts.map((p) =>
+            h(NTag, { size: 'small', bordered: false, type: 'warning' }, { default: () => p }),
+          ),
+      })
+    },
+  },
   { title: '描述', key: 'description', minWidth: 140, ellipsis: { tooltip: true } },
   {
     title: '操作',
@@ -213,7 +245,9 @@ const columns: DataTableColumns<MCPServer> = [
     <div class="flex items-center mb-3">
       <div>
         <h2 class="text-lg font-semibold m-0">MCP 服务器管理</h2>
-        <n-text depth="3" class="text-sm">配置 MCP 服务器（仅管理面 + 校验，工具由对话按需装载）</n-text>
+        <n-text depth="3" class="text-sm">
+          配置 MCP 服务器（仅管理面 + 校验，工具由对话按需装载）；env / headers 加密存储，不回显明文
+        </n-text>
       </div>
       <n-button type="primary" class="ml-auto" @click="openCreate">新建 MCP</n-button>
     </div>
@@ -222,7 +256,7 @@ const columns: DataTableColumns<MCPServer> = [
       :columns="columns"
       :data="servers"
       :loading="loading"
-      :scroll-x="1000"
+      :scroll-x="1150"
       :row-key="(row: MCPServer) => row.id"
       flex-height
       class="flex-1"
@@ -255,10 +289,20 @@ const columns: DataTableColumns<MCPServer> = [
           </n-form-item>
         </template>
         <n-form-item label="环境变量 env（JSON，可选）">
-          <n-input v-model:value="form.envText" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder='{"KEY":"value"}' />
+          <n-space vertical :size="4" class="w-full">
+            <n-input v-model:value="form.envText" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder='{"KEY":"value"}' />
+            <n-text v-if="editingId !== null" depth="3" class="text-xs">
+              {{ secretHint(editingEnvKeys, editingEnvKeys.length > 0) }}
+            </n-text>
+          </n-space>
         </n-form-item>
         <n-form-item label="请求头 headers（JSON，可选）">
-          <n-input v-model:value="form.headersText" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder='{"Authorization":"Bearer ..."}' />
+          <n-space vertical :size="4" class="w-full">
+            <n-input v-model:value="form.headersText" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder='{"Authorization":"Bearer ..."}' />
+            <n-text v-if="editingId !== null" depth="3" class="text-xs">
+              {{ secretHint(editingHeaderKeys, editingHeaderKeys.length > 0) }}
+            </n-text>
+          </n-space>
         </n-form-item>
         <n-form-item label="描述">
           <n-input v-model:value="form.description" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
