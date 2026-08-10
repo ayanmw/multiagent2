@@ -71,6 +71,9 @@ type Config struct {
 	// 可观测性（M3-09）：默认开启；初始化 OpenTelemetry MeterProvider 并开放 /metrics
 	// （Prometheus 文本格式）。METRICS_ENABLED=false 可关闭（纯调试 / 不暴露指标端点）。
 	metricsEnabled bool // 是否启用可观测性指标（env METRICS_ENABLED，默认 true），M3-09
+	// Webhook 速率限制（M4-03）：外部事件入口防刷。按 token 维度、窗口内最多触发 limit 次。
+	webhookRateLimit  int           // 单个 webhook token 在窗口内的触发上限（env WEBHOOK_RATE_LIMIT，默认 10）
+	webhookRateWindow time.Duration // 速率限制窗口（env WEBHOOK_RATE_WINDOW_SECONDS，默认 60s）
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -282,6 +285,20 @@ func Load() *Config {
 	// （Prometheus 文本格式）。METRICS_ENABLED=false 可整体关闭指标端点（纯调试）。
 	cfg.metricsEnabled = envOrDefaultBool("METRICS_ENABLED", true)
 
+	// Webhook 速率限制（M4-03）：外部事件入口防刷。单个 token 在窗口内最多触发 limit 次，
+	// 超出 handler 返回 429。取值非法时回落默认并打印告警。
+	cfg.webhookRateLimit = envOrDefaultInt("WEBHOOK_RATE_LIMIT", 10)
+	if cfg.webhookRateLimit <= 0 {
+		log.Printf("[WARN] WEBHOOK_RATE_LIMIT must be positive; using default 10")
+		cfg.webhookRateLimit = 10
+	}
+	wrs := envOrDefaultInt("WEBHOOK_RATE_WINDOW_SECONDS", 60)
+	if wrs <= 0 {
+		log.Printf("[WARN] WEBHOOK_RATE_WINDOW_SECONDS must be positive; using default 60")
+		wrs = 60
+	}
+	cfg.webhookRateWindow = time.Duration(wrs) * time.Second
+
 	return cfg
 }
 
@@ -450,6 +467,24 @@ func (c *Config) DBAutoMigrate() bool {
 // calls are no-ops and /metrics returns 404.
 func (c *Config) MetricsEnabled() bool {
 	return c != nil && c.metricsEnabled
+}
+
+// WebhookRateLimit returns the per-token webhook trigger cap within the rate
+// window (M4-03). It falls back to 10 when unset or invalid.
+func (c *Config) WebhookRateLimit() int {
+	if c == nil || c.webhookRateLimit <= 0 {
+		return 10
+	}
+	return c.webhookRateLimit
+}
+
+// WebhookRateWindow returns the sliding-window duration for the webhook rate
+// limiter (M4-03). It falls back to 60 seconds when unset or invalid.
+func (c *Config) WebhookRateWindow() time.Duration {
+	if c == nil || c.webhookRateWindow <= 0 {
+		return 60 * time.Second
+	}
+	return c.webhookRateWindow
 }
 
 func envOrDefault(key, fallback string) string {

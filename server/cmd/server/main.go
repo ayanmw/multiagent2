@@ -402,7 +402,7 @@ func main() {
 		SkillDataDir:       cfg.SkillsDataDir(),
 		SkillWarmStart:     cfg.SkillWarmStart(),
 		SkillMaxChars:      cfg.SkillWarmStartMaxChars(),
-		TaskRunController:   taskRunController,
+		TaskRunController:  taskRunController,
 		TaskRunSession:     taskRunSession,
 		ToolSearchEnabled:  cfg.ToolSearchEnabled(),
 		ToolSearchProvider: buildToolSearchProvider(db, cfg.EncryptionKey),
@@ -410,6 +410,12 @@ func main() {
 	})
 	schedulerSvc := scheduler.New(db.DB, loopRunner)
 	go schedulerSvc.Start(context.Background())
+
+	// Webhook 外部事件入口（M4-03）：不挂鉴权中间件，完全靠 URL 中的 32B 令牌匹配
+	// Automation；命中后异步启动 Goal Loop（与 cron 调度器共用同一 loopRunner）。
+	// 令牌校验 + 按 token 速率限制 + 防并发重入均在 handler 内完成。
+	webhookLimiter := api.NewWebhookRateLimiter(cfg.WebhookRateLimit(), cfg.WebhookRateWindow())
+	r.POST("/api/webhooks/:token", api.NewWebhookHandler(db.DB, loopRunner, webhookLimiter).Handle)
 
 	// Graceful shutdown
 	go func() {
