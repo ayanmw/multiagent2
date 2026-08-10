@@ -78,6 +78,7 @@ func baselineModels() []any {
 		&model.UsageRecord{},
 		&model.BudgetPolicy{},
 		&model.Checkpoint{},
+		&model.Automation{},
 	}
 }
 

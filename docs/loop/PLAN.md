@@ -118,7 +118,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 
 | # | 任务 | 状态 | 验证标准 | 依赖 |
 |---|------|------|----------|------|
-| M4-01 | **Automation 数据模型与持久化**：`model.Automation`（name/owner/cron_expr 或 webhook 规则/goal_prompt/enabled/last_run/next_run），repo owner-scoped CRUD；seed 权限 `automations:write/read` | ○ | 建/查/改/删 owner 隔离；viewer 写 403 | M3 |
+| M4-01 | **Automation 数据模型与持久化**：`model.Automation`（name/owner/cron_expr 或 webhook 规则/goal_prompt/enabled/last_run/next_run），repo owner-scoped CRUD；seed 权限 `automations:write/read` | ✅ | 建/查/改/删 owner 隔离；viewer 写 403 | M3 |
 | M4-02 | **Cron 调度器**：常驻 goroutine 加载启用的 Automation，按 cron 算 `next_run` 持久化；到点创建 Goal Session（带 goal_prompt）启动 Loop；失败重试 + 写审计 | ○ | 设 `*/1 * * * *` 测试 Automation → 下一分钟自动建 session 跑 Loop → 产出结果；`next_run` 正确更新 | M4-01, M1-11, M1-16 |
 | M4-03 | **Webhook 入口**：`POST /api/webhooks/:token` 接收外部事件（GitHub Issue/PR、CI 状态等）→ 匹配 Automation webhook 规则 → 触发 Loop；token 校验 + 速率限制 | ○ | curl 打 webhook → 对应 Automation 触发 Loop；非法 token 401 | M4-01 |
 | M4-04 | **Channel 层抽象**：统一入口（Web 对话 / CLI / Webhook / 定时）全部经 `Gateway`（稳定 `session_id` + 每会话串行锁）进同一 `Runner`；抽 `Channel` 接口便于扩展 IM/邮件 | ○ | 同一 Goal 从不同 Channel 进入都走统一 Gateway 串行锁，不串会话 | M2, M4-02, M4-03 |

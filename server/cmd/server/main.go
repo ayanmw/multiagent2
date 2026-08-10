@@ -157,6 +157,14 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.GET("/checkpoints", middleware.RequirePermission(db.DB, "checkpoints", "read"), api.ListCheckpointsHandler(db.DB))
 		protected.POST("/checkpoints/:id/resolve", middleware.RequirePermission(db.DB, "checkpoints", "write"), api.ResolveCheckpointHandler(db.DB))
 
+		// Automation 自主化任务（M4-01）：用户归属的自主化任务 CRUD（数据模型 + 持久化）。
+		// 调度器（M4-02 cron）/ Webhook 入口（M4-03）后续消费本表；读需 automations:read，写需 automations:write。
+		protected.GET("/automations", middleware.RequirePermission(db.DB, "automations", "read"), api.ListAutomationsHandler(db.DB))
+		protected.POST("/automations", middleware.RequirePermission(db.DB, "automations", "write"), api.CreateAutomationHandler(db.DB))
+		protected.GET("/automations/:id", middleware.RequirePermission(db.DB, "automations", "read"), api.GetAutomationHandler(db.DB))
+		protected.PUT("/automations/:id", middleware.RequirePermission(db.DB, "automations", "write"), api.UpdateAutomationHandler(db.DB))
+		protected.DELETE("/automations/:id", middleware.RequirePermission(db.DB, "automations", "write"), api.DeleteAutomationHandler(db.DB))
+
 		// Skills 技能仓库（M2-03）：用户归属的技能管理（文件系统后端，owner 隔离）。
 		// 读操作需 skills:read，写操作（建/更新/删私有技能）需 skills:write（RBAC）。
 		// 共享技能（仓库 skills/ 目录）对所有用户可见但只读，不可经 API 改写。
