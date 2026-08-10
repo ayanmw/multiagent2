@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/ayanmw/multiagent2/server/internal/engine"
+	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
@@ -189,4 +191,7 @@ func recordEngineUsage(db *gorm.DB, eng *engine.Engine, uid uint, sess *model.Se
 		TotalTokens:      usage.TotalTokens,
 		Estimated:        estimated,
 	})
+
+	// M3-09：同步把 token 用量写入可观测性指标（供 /metrics 与运行监控概览消费）。
+	metrics.RecordTokenUsage(context.Background(), int64(usage.PromptTokens), int64(usage.CompletionTokens), int64(usage.TotalTokens))
 }

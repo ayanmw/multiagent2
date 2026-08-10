@@ -13,6 +13,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
@@ -223,8 +224,11 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 
 		// 多轮记忆（M0.5-01）：从 DB 加载历史（排除刚写入的当前 user 消息）回灌引擎。
 		history := loadChatHistory(db, sess.ID, 1)
+		llmStart := time.Now()
 		ch, rerr := eng.Stream(engine.WithUserID(c.Request.Context(), strconv.FormatUint(uint64(uid), 10)), sess.SessionKey, message, history)
 		if rerr != nil {
+			// M3-09：流式引擎初始化失败，记为一次 LLM 调用错误。
+			metrics.RecordLLMCall(c.Request.Context(), p.Name, m.Name, time.Since(llmStart), rerr)
 			emit("RUN_ERROR", gin.H{"message": rerr.Error()})
 			emit("RUN_FINISHED", gin.H{"threadId": sess.SessionKey, "runId": runID})
 			return
@@ -247,6 +251,9 @@ func StreamChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, 
 				emit("RUN_ERROR", gin.H{"message": "写入助手消息失败: " + perr.Error()})
 			}
 		}
+
+		// M3-09：流式对话结束后记录 LLM 调用数 / 时延 / 错误率。
+		metrics.RecordLLMCall(c.Request.Context(), p.Name, m.Name, time.Since(llmStart), convErr)
 
 		// M3-03：流式对话结束后记录 token 用量（按 user / session / provider / model 归属）。
 		recordEngineUsage(db, eng, uid, sess, p, m, buildPromptText(history, message), text)

@@ -15,6 +15,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
@@ -201,7 +202,10 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 		// 多轮记忆（M0.5-01）：从 DB 加载历史（排除刚写入的当前 user 消息）回灌引擎。
 		history := loadChatHistory(db, sess.ID, 1)
 
+		llmStart := time.Now()
 		reply, err := eng.Chat(engine.WithUserID(c.Request.Context(), strconv.FormatUint(uint64(uid), 10)), sessionKey, req.Message, history)
+		// M3-09：记录 LLM 调用数 / 时延 / 错误率（provider+model 维度）。
+		metrics.RecordLLMCall(c.Request.Context(), p.Name, m.Name, time.Since(llmStart), err)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "调用模型失败", "detail": err.Error()})
 			return

@@ -25,6 +25,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/provider"
@@ -50,6 +51,9 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 			"service": "go-multi-agent-v2",
 		})
 	})
+
+	// 可观测性（M3-09）：/metrics 暴露 Prometheus 文本格式指标；未启用时返回 404。
+	r.GET("/metrics", gin.WrapH(metrics.Handler()))
 
 	// Public auth routes
 	authGroup := r.Group("/api/auth")
@@ -136,6 +140,11 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// Token/费用计量（M3-03）：对话结束后落库的 token 用量查询与聚合。
 		// owner 隔离：developer/admin 看全员，viewer 仅看本人；读操作需 usage:read（RBAC）。
 		protected.GET("/usage", middleware.RequirePermission(db.DB, "usage", "read"), api.ListUsageHandler(db.DB))
+
+		// 可观测性概览（M3-09）：返回进程内 OpenTelemetry 指标聚合快照
+		// （LLM 调用/失败、工具调用/失败、token 用量），供前端「运行监控」概览卡片。
+		// 与 usage 同级保护（usage:read，RBAC）。
+		protected.GET("/monitoring/overview", middleware.RequirePermission(db.DB, "usage", "read"), api.MonitoringOverviewHandler())
 
 		// 平台级预算护栏（M3-04）：管理员设定 / 查询预算策略（user/session/automation 三级阈值）。
 		// 读操作需 budgets:read，写（upsert / 删除）需 budgets:write（RBAC）。
@@ -232,6 +241,12 @@ func buildToolSearchProvider(db *repo.DB, encKey []byte) engine.ToolSearchProvid
 func main() {
 	// Load configuration
 	cfg := config.Load()
+
+	// 可观测性（M3-09）：初始化 OpenTelemetry MeterProvider 并开放 /metrics。
+	// METRICS_ENABLED=false 时不初始化，Record* 均为空操作、/metrics 返回 404。
+	if err := metrics.Init(metrics.Config{Enabled: cfg.MetricsEnabled()}); err != nil {
+		log.Fatalf("Failed to initialize metrics: %v", err)
+	}
 
 	// Initialize database
 	db, err := repo.NewDB(cfg)

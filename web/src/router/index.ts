@@ -81,6 +81,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '用量统计', desc: 'Token 计量：按用户/模型/时间聚合成本' },
       },
       {
+        path: 'monitoring',
+        name: 'monitoring',
+        component: () => import('@/views/MonitoringView.vue'),
+        meta: { title: '运行监控', desc: '可观测性概览：LLM/工具调用数与失败率、Token 用量' },
+      },
+      {
         path: 'artifacts',
         name: 'artifacts',
         component: () => import('@/views/ArtifactView.vue'),

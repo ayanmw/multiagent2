@@ -68,6 +68,9 @@ type Config struct {
 	// DB_AUTO_MIGRATE=true 仅作**开发期 fallback**，在 migration 之后再跑一次
 	// GORM AutoMigrate，便于本地改模型时免写迁移；生产必须保持关闭。
 	dbAutoMigrate bool // 是否启用 AutoMigrate 开发 fallback（env DB_AUTO_MIGRATE，默认 false），M3-08
+	// 可观测性（M3-09）：默认开启；初始化 OpenTelemetry MeterProvider 并开放 /metrics
+	// （Prometheus 文本格式）。METRICS_ENABLED=false 可关闭（纯调试 / 不暴露指标端点）。
+	metricsEnabled bool // 是否启用可观测性指标（env METRICS_ENABLED，默认 true），M3-09
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -275,6 +278,10 @@ func Load() *Config {
 		log.Println("[WARN] DB_AUTO_MIGRATE=true: AutoMigrate dev fallback enabled; do NOT use in production.")
 	}
 
+	// 可观测性（M3-09）：默认开启；初始化 OpenTelemetry MeterProvider 并暴露 /metrics
+	// （Prometheus 文本格式）。METRICS_ENABLED=false 可整体关闭指标端点（纯调试）。
+	cfg.metricsEnabled = envOrDefaultBool("METRICS_ENABLED", true)
+
 	return cfg
 }
 
@@ -435,6 +442,14 @@ func (c *Config) CheckpointEnabled() bool {
 // left off in production.
 func (c *Config) DBAutoMigrate() bool {
 	return c != nil && c.dbAutoMigrate
+}
+
+// MetricsEnabled reports whether the observability metrics subsystem (M3-09) is
+// turned on. When on, the server initializes an OpenTelemetry MeterProvider and
+// exposes a /metrics endpoint (Prometheus text format). When off, Record*
+// calls are no-ops and /metrics returns 404.
+func (c *Config) MetricsEnabled() bool {
+	return c != nil && c.metricsEnabled
 }
 
 func envOrDefault(key, fallback string) string {

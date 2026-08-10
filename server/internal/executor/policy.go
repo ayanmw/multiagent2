@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ayanmw/multiagent2/server/internal/metrics"
 )
 
 // Policy 危险命令策略接口：对命令给出 allow/ask/deny 判定与原因。
@@ -153,11 +155,13 @@ func NewSafeExecutor(inner Executor, policy Policy, auditor Auditor, ask AskHand
 // Run 先经策略评估：allow 直接执行并审计放行；deny 拒绝并审计；
 // ask 在交互模式交回调裁决、无人值守下若挂有 checkpointer 则生成检查点并暂停、
 // 否则（无 checkpointer）直接拒绝并审计（安全默认）。
-func (s *SafeExecutor) Run(ctx context.Context, command string) (*Result, error) {
+func (s *SafeExecutor) Run(ctx context.Context, command string) (res *Result, err error) {
 	if s.policy == nil {
 		// 无策略：放行（调用方明确知情，仅用于测试/受信任环境）。
 		return s.inner.Run(ctx, command)
 	}
+	// M3-09：记录工具（代码执行）调用数与失败数（reason=allowed/denied/checkpoint/failed）。
+	defer func() { metrics.RecordToolCall(ctx, toolCallReason(err), err) }()
 	decision, reason := s.policy.Evaluate(command)
 	switch decision {
 	case DecisionAllow:
@@ -165,25 +169,31 @@ func (s *SafeExecutor) Run(ctx context.Context, command string) (*Result, error)
 			Timestamp: time.Now(), Command: command, Workdir: s.inner.Workdir(),
 			Decision: DecisionAllow, Reason: "策略放行", Allowed: true,
 		})
-		return s.inner.Run(ctx, command)
+		res, err = s.inner.Run(ctx, command)
+		return
 	case DecisionDeny:
 		s.auditor.Record(AuditEntry{
 			Timestamp: time.Now(), Command: command, Workdir: s.inner.Workdir(),
 			Decision: DecisionDeny, Reason: reason, Allowed: false,
 		})
-		return nil, fmt.Errorf("%w: %s", ErrCommandDenied, reason)
+		err = fmt.Errorf("%w: %s", ErrCommandDenied, reason)
+		return
 	case DecisionAsk:
 		outcome, cpID := s.classifyAsk(command, reason)
 		switch outcome {
 		case askAllow:
-			return s.inner.Run(ctx, command)
+			res, err = s.inner.Run(ctx, command)
+			return
 		case askCheckpoint:
-			return nil, &CheckpointError{ID: cpID, Reason: reason}
+			err = &CheckpointError{ID: cpID, Reason: reason}
+			return
 		default:
-			return nil, fmt.Errorf("%w: %s", ErrCommandDenied, reason)
+			err = fmt.Errorf("%w: %s", ErrCommandDenied, reason)
+			return
 		}
 	default:
-		return s.inner.Run(ctx, command)
+		res, err = s.inner.Run(ctx, command)
+		return
 	}
 }
 
@@ -241,7 +251,7 @@ func (s *SafeExecutor) classifyAsk(command, reason string) (askOutcome, string) 
 
 // WorkCommand 以 argv 形式执行命令（透传给底层 Executor.RunCommand），
 // 策略评估与审计逻辑与 Run 完全一致，仅把 argv 拼成命令字符串用于评估。
-func (s *SafeExecutor) RunCommand(ctx context.Context, name string, args ...string) (*Result, error) {
+func (s *SafeExecutor) RunCommand(ctx context.Context, name string, args ...string) (res *Result, err error) {
 	command := name
 	if len(args) > 0 {
 		command += " " + strings.Join(args, " ")
@@ -250,6 +260,8 @@ func (s *SafeExecutor) RunCommand(ctx context.Context, name string, args ...stri
 		// 无策略：放行（调用方明确知情，仅用于测试/受信任环境）。
 		return s.inner.RunCommand(ctx, name, args...)
 	}
+	// M3-09：记录工具（代码执行）调用数与失败数（reason=allowed/denied/checkpoint/failed）。
+	defer func() { metrics.RecordToolCall(ctx, toolCallReason(err), err) }()
 	decision, reason := s.policy.Evaluate(command)
 	switch decision {
 	case DecisionAllow:
@@ -257,27 +269,54 @@ func (s *SafeExecutor) RunCommand(ctx context.Context, name string, args ...stri
 			Timestamp: time.Now(), Command: command, Workdir: s.inner.Workdir(),
 			Decision: DecisionAllow, Reason: "策略放行", Allowed: true,
 		})
-		return s.inner.RunCommand(ctx, name, args...)
+		res, err = s.inner.RunCommand(ctx, name, args...)
+		return
 	case DecisionDeny:
 		s.auditor.Record(AuditEntry{
 			Timestamp: time.Now(), Command: command, Workdir: s.inner.Workdir(),
 			Decision: DecisionDeny, Reason: reason, Allowed: false,
 		})
-		return nil, fmt.Errorf("%w: %s", ErrCommandDenied, reason)
+		err = fmt.Errorf("%w: %s", ErrCommandDenied, reason)
+		return
 	case DecisionAsk:
 		// 与 Run 共用 ask 处置逻辑（交互确认 / 生成检查点 / 退化 deny），
 		// 但按 argv 入口形式真正执行命令。
 		outcome, cpID := s.classifyAsk(command, reason)
 		switch outcome {
 		case askAllow:
-			return s.inner.RunCommand(ctx, name, args...)
+			res, err = s.inner.RunCommand(ctx, name, args...)
+			return
 		case askCheckpoint:
-			return nil, &CheckpointError{ID: cpID, Reason: reason}
+			err = &CheckpointError{ID: cpID, Reason: reason}
+			return
 		default:
-			return nil, fmt.Errorf("%w: %s", ErrCommandDenied, reason)
+			err = fmt.Errorf("%w: %s", ErrCommandDenied, reason)
+			return
 		}
 	default:
-		return s.inner.RunCommand(ctx, name, args...)
+		res, err = s.inner.RunCommand(ctx, name, args...)
+		return
+	}
+}
+
+// toolCallReason 把一次受策略保护的执行结果归类为可观测性指标的 reason 维度（M3-09）：
+//   - allowed：正常完成（命令自身非零退出码不算失败，属有效结果）
+//   - denied：被危险命令策略拒绝（ErrCommandDenied）
+//   - checkpoint：转入人工检查点并暂停（ErrCheckpointCreated，M3-05）
+//   - failed：其余真实失败（超时、底层执行错误等）
+//
+// 注意判定顺序：CheckpointError 只 Unwrap 到 ErrCheckpointCreated、不解到
+// ErrCommandDenied（见 M3-05），故两者互斥，但仍先判 checkpoint 语义更清晰。
+func toolCallReason(err error) string {
+	switch {
+	case err == nil:
+		return "allowed"
+	case errors.Is(err, ErrCheckpointCreated):
+		return "checkpoint"
+	case errors.Is(err, ErrCommandDenied):
+		return "denied"
+	default:
+		return "failed"
 	}
 }
 

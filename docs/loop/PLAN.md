@@ -106,7 +106,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | M3-06 | **Artifact 浏览器**：前端 `ArtifactView` 浏览某 session 下全部 artifact（`PLAN/PROGRESS/LEARNINGS` + 报告/diff/构建产物），列表 + 查看 + 下载；新增后端 `GET /api/sessions/:id/artifacts`（List/Read，复用 M1-16 `artifact.Store`） | ✅ | 有产物的会话能看到文件列表并查看内容；与「运行态面板」互补（面板看三核心文件，浏览器看全部） | M1-16 |
 | M3-07 | **MCP 敏感字段加密**：`mcp_servers` 的 `env`/`headers`（含 token）改用 AES-256-GCM 加密存储（对齐 Provider `api_key_enc`），读取时解密；前端编辑明文传参、列表不回显明文 | ✅ | 库内 env 为密文；正常装载仍解密可用；越权读取拿不到明文 | M2-02 |
 | M3-08 | **手动 DB 迁移机制**：引入迁移方案（版本表 `schema_migrations` + 基线 migration，取代纯 `AutoMigrate` 仅用于开发）；首次启动执行基线，后续变更走 migration 文件；保留 `AutoMigrate` 仅作开发 fallback | ✅ | 全新库启动执行基线后表结构与当前一致；新增字段走新 migration 不靠 AutoMigrate | M0/M0.5 |
-| M3-09 | **可观测性 telemetry**：接入框架 `telemetry`（OpenTelemetry），导出指标（LLM 调用数/时延/错误率、工具调用数/失败率、token 用量）到日志或 `/metrics`（Prometheus 格式）；前端「运行监控」概览卡片 | ○ | 跑几轮对话后 `/metrics` 有指标；前端概览展示最近调用/失败率 | M3-03 |
+| M3-09 | **可观测性 telemetry**：接入框架 `telemetry`（OpenTelemetry），导出指标（LLM 调用数/时延/错误率、工具调用数/失败率、token 用量）到日志或 `/metrics`（Prometheus 格式）；前端「运行监控」概览卡片 | ✅ | 跑几轮对话后 `/metrics` 有指标；前端概览展示最近调用/失败率 | M3-03 |
 | M3-10 | **集成验证 E2E（企业化）**：登录 → 执行命令 → 审计可见 → 超预算暂停 → 人工检查点审批 → artifact 浏览 → 指标可见 全链路；补 `audit`/`usage`/`budget`/`checkpoint` 单测与 HTTP 层测试 | ○ | 全链路走通；新增测试绿 | M3-01..09 |
 
 ---
