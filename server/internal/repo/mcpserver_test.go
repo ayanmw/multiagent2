@@ -201,24 +201,35 @@ func TestMCPServer_LegacyPlaintextMigration(t *testing.T) {
 		string(envJSON)).Error; err != nil {
 		t.Fatalf("insert legacy row: %v", err)
 	}
+	// 还原「M3-08 之前的旧库」前提：那时没有版本表，每次启动都会跑一遍数据修复。
+	// M3-08 起迁移按版本只执行一次，若保留版本表则 0003/0004 会被跳过——那测的就
+	// 不是真实升级路径了。删掉版本表即等价于「一个 M3-07 时期落盘的库首次升级」。
+	if err := db.DB.Exec("DROP TABLE IF EXISTS schema_migrations").Error; err != nil {
+		t.Fatalf("drop schema_migrations: %v", err)
+	}
 	sqlDB, _ := db.DB.DB()
 	_ = sqlDB.Close()
 
-	// 2) 重新打开（触发 NewDB 内的 migrateMCPSecretEncryption）。
+	// 2) 重新打开（触发版本化迁移：0003 就地加密 → 0004 物理删除遗留明文列）。
 	db2 := newMCPServerTestDBAt(t, path)
-	var raw struct {
-		Env    *string `gorm:"column:env"`
-		EnvEnc string  `gorm:"column:env_enc"`
+
+	// 遗留明文列应被 0004 彻底删除（AutoMigrate 做不到删列，正是 M3-08 的价值）。
+	var ddl string
+	if err := db2.DB.Raw(`SELECT sql FROM sqlite_master WHERE type='table' AND name='mcp_servers'`).
+		Scan(&ddl).Error; err != nil {
+		t.Fatalf("read ddl: %v", err)
 	}
-	if err := db2.DB.Raw("SELECT env, env_enc FROM mcp_servers WHERE name = 'legacy'").
-		Scan(&raw).Error; err != nil {
+	if strings.Contains(ddl, "`env`") || strings.Contains(ddl, "`headers`") {
+		t.Fatalf("遗留明文列未被删除: %s", ddl)
+	}
+
+	var envEnc string
+	if err := db2.DB.Raw("SELECT env_enc FROM mcp_servers WHERE name = 'legacy'").
+		Scan(&envEnc).Error; err != nil {
 		t.Fatalf("raw select: %v", err)
 	}
-	if raw.Env != nil && *raw.Env != "" {
-		t.Fatalf("遗留明文列未清空: %q", *raw.Env)
-	}
-	if raw.EnvEnc == "" || strings.Contains(raw.EnvEnc, secret) {
-		t.Fatalf("迁移后密文异常: %q", raw.EnvEnc)
+	if envEnc == "" || strings.Contains(envEnc, secret) {
+		t.Fatalf("迁移后密文异常: %q", envEnc)
 	}
 
 	// 3) 迁移后仍可正常解密使用。

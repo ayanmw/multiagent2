@@ -35,42 +35,31 @@ func NewDB(cfg *config.Config) (*DB, error) {
 	}
 	sqlDB.SetMaxOpenConns(1) // SQLite only supports one writer at a time
 
-	// AutoMigrate all models
-	if err := db.AutoMigrate(
-		&model.User{},
-		&model.APIKey{},
-		&model.Provider{},
-		&model.Model{},
-		&model.Session{},
-		&model.Message{},
-		&model.Workspace{},
-		&model.MCPServer{},
-		&model.Role{},
-		&model.RolePermission{},
-		&model.AuditLog{},
-		&model.UsageRecord{},
-		&model.BudgetPolicy{},
-		&model.Checkpoint{},
-	); err != nil {
-		return nil, fmt.Errorf("failed to auto-migrate: %w", err)
+	// 结构迁移（M3-08）：版本化 migration 取代裸 AutoMigrate。
+	// `schema_migrations` 记录已应用版本，启动时只执行尚未应用的部分；
+	// 基线（0001）覆盖 M0~M3-07 全部表，历史数据修复（0002/0003）随后按序执行。
+	applied, err := RunMigrations(db, MigrationContext{EncryptionKey: cfg.EncryptionKey})
+	if err != nil {
+		return nil, fmt.Errorf("failed to run migrations: %w", err)
+	}
+	if len(applied) > 0 {
+		log.Printf("[DB] Applied %d migration(s): %s", len(applied), strings.Join(applied, ", "))
+	}
+
+	// 开发 fallback（M3-08）：DB_AUTO_MIGRATE=true 时额外跑一次 AutoMigrate，
+	// 便于本地改模型时免写 migration 迭代。生产环境务必保持关闭——AutoMigrate
+	// 只加表/加列，不能删列、改类型或回填数据，长期使用会让各环境结构漂移。
+	if cfg.DBAutoMigrate() {
+		log.Println("[WARN] DB_AUTO_MIGRATE=true: falling back to AutoMigrate; " +
+			"schema changes must still be captured as a migration before release.")
+		if err := db.AutoMigrate(baselineModels()...); err != nil {
+			return nil, fmt.Errorf("failed to auto-migrate (dev fallback): %w", err)
+		}
 	}
 
 	// Seed default roles if not present
 	if err := seedRoles(db); err != nil {
 		return nil, fmt.Errorf("failed to seed roles: %w", err)
-	}
-
-	// 迁移：旧模型曾把 session_key 设为全局单列 uniqueIndex，禁止跨用户复用同
-	// key（M0.5-03 已改为复合唯一 (user_id, session_key)）。对已有库删除遗留的
-	// 单列唯一索引，避免它继续阻断跨用户复用；复合索引由 AutoMigrate 自动补齐。
-	if err := migrateCompositeSessionKey(db); err != nil {
-		return nil, fmt.Errorf("failed to migrate session key index: %w", err)
-	}
-
-	// 迁移（M3-07）：mcp_servers 的 env/headers 早期以明文 JSON 落库，现改为
-	// AES-256-GCM 密文列 env_enc/headers_enc。对已有库把遗留明文就地加密并清空原列。
-	if err := migrateMCPSecretEncryption(db, cfg.EncryptionKey); err != nil {
-		return nil, fmt.Errorf("failed to migrate mcp secrets: %w", err)
 	}
 
 	log.Printf("[DB] Connected to SQLite3: %s", cfg.DBPath)
@@ -106,23 +95,72 @@ type legacyMCPSecretRow struct {
 	HeadersEnc string `gorm:"column:headers_enc"`
 }
 
-// migrateMCPSecretEncryption 把 mcp_servers 表遗留的明文 env/headers 列就地加密
-// 进 env_enc/headers_enc，并将原列置 NULL（M3-07）。
-//
-// 幂等安全：遗留列不存在（全新库）或已无明文残留时为 no-op；已有密文的行不覆盖。
-// 注意 GORM/SQLite 不会自动删除已废弃的列，故遗留列仍在表结构中，只是内容被清空。
-func migrateMCPSecretEncryption(db *gorm.DB, encKey []byte) error {
+// legacyMCPPlaintextColumns 探测 mcp_servers 表上是否还存在 M3-07 之前的明文列
+// env / headers。判定依据是建表 DDL 中的**反引号包裹**列名，可精确区分遗留列
+// `env` 与现行密文列 `env_enc`（GORM sqlite 的 HasColumn 用宽松 LIKE 匹配，
+// 此处不采用以免误判）。表不存在时返回 false, false。
+func legacyMCPPlaintextColumns(db *gorm.DB) (hasEnv bool, hasHeaders bool, err error) {
 	if !db.Migrator().HasTable("mcp_servers") {
-		return nil
+		return false, false, nil
 	}
 	var ddl string
 	if err := db.Raw(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'mcp_servers'`).
 		Scan(&ddl).Error; err != nil {
+		return false, false, err
+	}
+	return strings.Contains(ddl, "`env`"), strings.Contains(ddl, "`headers`"), nil
+}
+
+// dropLegacyMCPPlaintextColumns 物理删除 mcp_servers 上遗留的明文列 env/headers（M3-08）。
+//
+// M3-07 的迁移只把明文加密进 env_enc/headers_enc 并将原列置 NULL —— 因为
+// `AutoMigrate` 只能加表/加列，删不掉列，空列会长期残留在表结构中。这正是
+// M3-08 引入版本化迁移的直接动因，故由本迁移收尾（LEARNINGS 2026-08-10 已记「彻底
+// 删列留给 M3-08 的正式迁移机制」）。
+//
+// 安全性：仅在该列**确认无明文残留**（即 0003 已成功处理）时才删除，否则报错中止，
+// 避免把尚未加密的数据一并删掉。幂等：列不存在时为 no-op。
+func dropLegacyMCPPlaintextColumns(db *gorm.DB) error {
+	hasEnv, hasHeaders, err := legacyMCPPlaintextColumns(db)
+	if err != nil {
 		return err
 	}
-	// 反引号包裹可精确区分遗留列 `env` 与新列 `env_enc`。
-	hasEnv := strings.Contains(ddl, "`env`")
-	hasHeaders := strings.Contains(ddl, "`headers`")
+	cols := make([]string, 0, 2)
+	if hasEnv {
+		cols = append(cols, "env")
+	}
+	if hasHeaders {
+		cols = append(cols, "headers")
+	}
+	for _, col := range cols {
+		var remaining int64
+		if err := db.Raw(fmt.Sprintf(
+			"SELECT COUNT(*) FROM mcp_servers WHERE %s IS NOT NULL AND %s != '' AND %s != 'null'",
+			col, col, col)).Scan(&remaining).Error; err != nil {
+			return err
+		}
+		if remaining > 0 {
+			return fmt.Errorf("mcp_servers.%s 仍有 %d 行明文未加密，拒绝删列（请先确认 0003 迁移成功）", col, remaining)
+		}
+		if err := db.Migrator().DropColumn(&model.MCPServer{}, col); err != nil {
+			return fmt.Errorf("drop legacy column mcp_servers.%s: %w", col, err)
+		}
+		log.Printf("[DB] Dropped legacy plaintext column mcp_servers.%s", col)
+	}
+	return nil
+}
+
+// migrateMCPSecretEncryption 把 mcp_servers 表遗留的明文 env/headers 列就地加密
+// 进 env_enc/headers_enc，并将原列置 NULL（M3-07）。
+//
+// 幂等安全：遗留列不存在（全新库）或已无明文残留时为 no-op；已有密文的行不覆盖。
+// 本迁移只负责「搬运 + 清空」，遗留列本身由后续的 0004 迁移物理删除
+// （见 dropLegacyMCPPlaintextColumns —— AutoMigrate 无删列能力）。
+func migrateMCPSecretEncryption(db *gorm.DB, encKey []byte) error {
+	hasEnv, hasHeaders, err := legacyMCPPlaintextColumns(db)
+	if err != nil {
+		return err
+	}
 	if !hasEnv && !hasHeaders {
 		return nil
 	}

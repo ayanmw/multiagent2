@@ -64,6 +64,10 @@ type Config struct {
 	// 关闭后无人值守命中 ask 危险命令直接 deny（与旧行为一致）；
 	// 开启时则生成 checkpoint 记录并暂停，待前端审批（approve 执行 / reject 中止）。
 	checkpointEnabled bool // 是否开启人工检查点（env CHECKPOINT_ENABLED，默认 true），M3-05
+	// DB 结构迁移（M3-08）：默认走版本化 migration（repo.RunMigrations）。
+	// DB_AUTO_MIGRATE=true 仅作**开发期 fallback**，在 migration 之后再跑一次
+	// GORM AutoMigrate，便于本地改模型时免写迁移；生产必须保持关闭。
+	dbAutoMigrate bool // 是否启用 AutoMigrate 开发 fallback（env DB_AUTO_MIGRATE，默认 false），M3-08
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -264,6 +268,13 @@ func Load() *Config {
 	// CHECKPOINT_ENABLED=false 可整体关闭（退化回直接 deny，紧急恢复 / 纯调试用）。
 	cfg.checkpointEnabled = envOrDefaultBool("CHECKPOINT_ENABLED", true)
 
+	// DB 结构迁移（M3-08）：默认 false —— 启动只执行版本化 migration，
+	// 结构变更必须以 migration 落盘，避免各环境「靠 AutoMigrate 补齐」而漂移。
+	cfg.dbAutoMigrate = envOrDefaultBool("DB_AUTO_MIGRATE", false)
+	if cfg.dbAutoMigrate {
+		log.Println("[WARN] DB_AUTO_MIGRATE=true: AutoMigrate dev fallback enabled; do NOT use in production.")
+	}
+
 	return cfg
 }
 
@@ -416,6 +427,14 @@ func (c *Config) BudgetEnabled() bool {
 // that an operator must approve/reject via the UI.
 func (c *Config) CheckpointEnabled() bool {
 	return c != nil && c.checkpointEnabled
+}
+
+// DBAutoMigrate reports whether the GORM AutoMigrate development fallback is
+// enabled (M3-08). Schema is normally managed by the versioned migrations in
+// internal/repo; this switch only exists for local model iteration and must be
+// left off in production.
+func (c *Config) DBAutoMigrate() bool {
+	return c != nil && c.dbAutoMigrate
 }
 
 func envOrDefault(key, fallback string) string {
