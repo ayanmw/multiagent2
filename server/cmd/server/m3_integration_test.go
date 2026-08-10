@@ -66,7 +66,7 @@ func TestM3_Enterprise_E2E(t *testing.T) {
 	disc := provider.NewDiscoverer(cfg.EncryptionKey, time.Minute)
 	// 启用状态外置（M1-16），使 artifact 浏览器端点返回真实内容（enabled=true）。
 	stateStore := artifact.NewMemoryStore()
-	r := buildRouter(db, cfg, disc, stateStore, true, nil, nil, nil)
+	r := buildRouter(db, cfg, disc, stateStore, true, nil, nil, nil, buildGateway(db, cfg, stateStore, true, nil, nil, nil))
 	c := &e2eClient{t: t, r: r}
 
 	// 1) 注册 → 登录（默认 developer 角色，具备 audit/usage/budget/checkpoints 权限）。

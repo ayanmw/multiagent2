@@ -42,7 +42,7 @@ import (
 // toolSearchProvider 是「延迟工具箱」按需提供者（M2-06）：按当前 uid 聚合该用户启用的
 // MCP 服务器工具箱（工具默认不暴露，由 tool_search/call_tool 双控制工具按需调用）。
 // 传 nil 表示不挂载延迟工具箱（如集成测试）。
-func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, stateStore artifact.Store, enableState bool, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchProvider engine.ToolSearchProvider) *gin.Engine {
+func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, stateStore artifact.Store, enableState bool, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchProvider engine.ToolSearchProvider, gw *api.Gateway) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 
@@ -189,27 +189,17 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// 推进到 complete/blocked 才允许结束，过早的最终答复会被拦截并要求继续干活。
 		// M1-12：team 模式默认启用 Plan-Execute 循环（PLAN_EXECUTE），Orchestrator 必须
 		// 先建计划、逐项执行完毕才允许结束；二者叠加在 Orchestrator 上。
-		// M2-03：skillWarmStart 等参数驱动「技能 warm-start」，会话开始把相关 SKILL.md
-		// 注入根 Agent 系统上下文（长度受 SkillWarmStartMaxChars 上限控制）。
-		teamCfg := engine.TeamConfig{
-			EnableSubAgents: cfg.SubAgentsEnabled(),
-			EnableReviewer:  cfg.ReviewerEnabled(),
-			MaxReviewRounds: cfg.MaxReviewRounds(),
-			EnableGoal:      cfg.GoalEnabled(),
-			MaxGoalNudges:   cfg.MaxGoalNudges(),
-			EnablePlan:      cfg.PlanEnabled(),
-			MaxPlanNudges:   cfg.MaxPlanNudges(),
-			Guardrail:       cfg.GuardrailConfig(), // M1-13：护栏熔断预算（默认启用）
-		}
-		protected.POST("/chat", api.ChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars(), taskRunController, taskRunSession, cfg.ToolSearchEnabled(), toolSearchProvider, cfg.CheckpointEnabled()))
+	// M2-03：skillWarmStart 等参数驱动「技能 warm-start」，会话开始把相关 SKILL.md
+	// 注入根 Agent 系统上下文（长度受 SkillWarmStartMaxChars 上限控制）。
+	// Web 对话（/api/chat 与 SSE 端点）经统一 Gateway（M4-04）跑引擎：Gateway 持有 Team
+	// 配置与全部运行时依赖，并负责稳定 session_id + 每会话串行锁 + 统一 Runner，
+	// 使 Web/SSE/定时/Webhook 收敛到同一代码路径。
+	protected.POST("/chat", api.ChatHandler(gw))
 
-		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化
+		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化。
 		// M0.5-06：message 改由 POST body 传递（避免明文进访问日志），故注册为 POST。
-		// M1-06/07：在此端点装配 CodeAct 工具；工作目录优先取对话绑定的 workspace 目录，
-		// 未绑定时回退 WorkspaceRoot/<uid>。workspace_key 经请求体传入。
-		// M1-16：stateStore/enableState 驱动「工作状态外置」，使长任务中断后续跑能接上。
-		// M2-03：skillWarmStart 等参数驱动「技能 warm-start」注入系统上下文。
-		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(db.DB, cfg.EncryptionKey, cfg.EngineTimeout(), cfg.WorkspaceRoot, teamCfg, stateStore, enableState, cfg.SkillsRoot(), cfg.SkillsDataDir(), cfg.SkillWarmStart(), cfg.SkillWarmStartMaxChars(), taskRunController, taskRunSession, cfg.ToolSearchEnabled(), toolSearchProvider, cfg.CheckpointEnabled()))
+		// 事件流由统一 Gateway 经 gw.Stream 产出（详见 StreamChatHandler）。
+		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(gw))
 	}
 
 	return r
@@ -245,6 +235,39 @@ func buildToolSearchProvider(db *repo.DB, encKey []byte) engine.ToolSearchProvid
 		}
 		return box, nil
 	}
+}
+
+// buildGateway 根据配置与运行时依赖构造统一网关（M4-04），供 Web 对话、SSE、定时、Webhook 共享
+// 同一会话串行锁与同一套引擎构造。db 为 *repo.DB，内部取其底层 *gorm.DB 注入 GatewayConfig。
+func buildGateway(db *repo.DB, cfg *config.Config, stateStore artifact.Store, enableState bool, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchProvider engine.ToolSearchProvider) *api.Gateway {
+	teamCfg := engine.TeamConfig{
+		EnableSubAgents: cfg.SubAgentsEnabled(),
+		EnableReviewer:  cfg.ReviewerEnabled(),
+		MaxReviewRounds: cfg.MaxReviewRounds(),
+		EnableGoal:      cfg.GoalEnabled(),
+		MaxGoalNudges:   cfg.MaxGoalNudges(),
+		EnablePlan:      cfg.PlanEnabled(),
+		MaxPlanNudges:   cfg.MaxPlanNudges(),
+		Guardrail:       cfg.GuardrailConfig(), // M1-13：护栏熔断预算（默认启用）
+	}
+	return api.NewGateway(api.GatewayConfig{
+		DB:                 db.DB,
+		EncKey:             cfg.EncryptionKey,
+		EngineTimeout:      cfg.EngineTimeout(),
+		WorkspaceRoot:      cfg.WorkspaceRoot,
+		Team:               teamCfg,
+		StateStore:         stateStore,
+		EnableState:        enableState,
+		SkillRoot:          cfg.SkillsRoot(),
+		SkillDataDir:       cfg.SkillsDataDir(),
+		SkillWarmStart:     cfg.SkillWarmStart(),
+		SkillMaxChars:      cfg.SkillWarmStartMaxChars(),
+		TaskRunController:  taskRunController,
+		TaskRunSession:     taskRunSession,
+		ToolSearchEnabled:  cfg.ToolSearchEnabled(),
+		ToolSearchProvider: toolSearchProvider,
+		CheckpointEnabled:  cfg.CheckpointEnabled(),
+	})
 }
 
 func main() {
@@ -376,7 +399,11 @@ func main() {
 		log.Fatalf("Failed to initialize taskrun controller: %v", ctrlErr)
 	}
 
-	r := buildRouter(db, cfg, discoverer, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db, cfg.EncryptionKey))
+	// 统一网关（M4-04）：Web 对话 / SSE / 定时 / Webhook 全部经此 Gateway，共享同一会话
+	// 串行锁与同一套引擎构造（Team 取 Web 默认配置；自主化 Loop 通过 TeamOverride 强制
+	// 开启子代理 + 目标契约）。
+	gw := buildGateway(db, cfg, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db, cfg.EncryptionKey))
+	r := buildRouter(db, cfg, discoverer, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db, cfg.EncryptionKey), gw)
 
 	// 自主化 cron 调度器（M4-02）：常驻扫描启用的 cron 自动化，到点创建 Goal Session 跑 Loop。
 	// 团队模式强制开启子代理 + 目标契约（Goal Session 语义），复用与对话端点一致的引擎构造。
@@ -390,32 +417,17 @@ func main() {
 		MaxPlanNudges:   cfg.MaxPlanNudges(),
 		Guardrail:       cfg.GuardrailConfig(), // M1-13：护栏熔断预算（无人值守必须有兜底）
 	}
-	loopRunner := api.NewAutomationLoopRunner(api.AutomationLoopConfig{
-		DB:                 db.DB,
-		EncKey:             cfg.EncryptionKey,
-		EngineTimeout:      cfg.EngineTimeout(),
-		WorkspaceRoot:      cfg.WorkspaceRoot,
-		Team:               schedTeam,
-		StateStore:         stateStore,
-		EnableState:        enableState,
-		SkillRoot:          cfg.SkillsRoot(),
-		SkillDataDir:       cfg.SkillsDataDir(),
-		SkillWarmStart:     cfg.SkillWarmStart(),
-		SkillMaxChars:      cfg.SkillWarmStartMaxChars(),
-		TaskRunController:  taskRunController,
-		TaskRunSession:     taskRunSession,
-		ToolSearchEnabled:  cfg.ToolSearchEnabled(),
-		ToolSearchProvider: buildToolSearchProvider(db, cfg.EncryptionKey),
-		CheckpointEnabled:  cfg.CheckpointEnabled(),
-	})
-	schedulerSvc := scheduler.New(db.DB, loopRunner)
+	// 两个 runner 共享同一 Gateway（同一会话串行锁），分别标记触发来源（cron / webhook）。
+	cronRunner := api.NewAutomationLoopRunner(gw, schedTeam, api.ChannelCron)
+	webhookRunner := api.NewAutomationLoopRunner(gw, schedTeam, api.ChannelWebhook)
+	schedulerSvc := scheduler.New(db.DB, cronRunner)
 	go schedulerSvc.Start(context.Background())
 
 	// Webhook 外部事件入口（M4-03）：不挂鉴权中间件，完全靠 URL 中的 32B 令牌匹配
-	// Automation；命中后异步启动 Goal Loop（与 cron 调度器共用同一 loopRunner）。
+	// Automation；命中后异步启动 Goal Loop（与 cron 调度器共用同一 Gateway）。
 	// 令牌校验 + 按 token 速率限制 + 防并发重入均在 handler 内完成。
 	webhookLimiter := api.NewWebhookRateLimiter(cfg.WebhookRateLimit(), cfg.WebhookRateWindow())
-	r.POST("/api/webhooks/:token", api.NewWebhookHandler(db.DB, loopRunner, webhookLimiter).Handle)
+	r.POST("/api/webhooks/:token", api.NewWebhookHandler(db.DB, webhookRunner, webhookLimiter).Handle)
 
 	// Graceful shutdown
 	go func() {

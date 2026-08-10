@@ -1,0 +1,323 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"time"
+
+	framework "trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
+
+	"github.com/ayanmw/multiagent2/server/internal/artifact"
+	"github.com/ayanmw/multiagent2/server/internal/crypto"
+	"github.com/ayanmw/multiagent2/server/internal/engine"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/metrics"
+	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/repo"
+	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+)
+
+// Channel 是所有外部对话入口的抽象来源（M4-04 Channel 层）。
+// 内置常量覆盖当前四种入口；未来 IM/邮件网关只需实现本接口并调用 Gateway.Run/Stream，
+// 即可复用统一的会话串行锁与同一套 Runner，无需各自重写「解析模型→建引擎→跑 Loop」逻辑。
+type Channel interface {
+	Kind() string
+}
+
+// ChannelKind 是内置 Channel 的轻量实现（仅携带稳定标识字符串）。
+type ChannelKind string
+
+func (c ChannelKind) Kind() string { return string(c) }
+
+const (
+	ChannelWeb     ChannelKind = "web"     // 浏览器对话（/api/chat 与 SSE 端点）
+	ChannelCLI     ChannelKind = "cli"     // 命令行（M5-01 预留）
+	ChannelWebhook ChannelKind = "webhook" // 外部事件触发（M4-03）
+	ChannelCron    ChannelKind = "cron"    // 定时调度触发（M4-02）
+	ChannelIM      ChannelKind = "im"      // 预留：IM/邮件网关
+)
+
+// GatewayConfig 是 Gateway 运行所需的全部依赖（与 ChatHandler/StreamChatHandler/engineLoopRunner 对齐）。
+// 构造一次后由 Web 对话、SSE、定时、Webhook 等所有 Channel 共享，从而保证「同一会话串行锁」跨 Channel 生效。
+type GatewayConfig struct {
+	DB                 *gorm.DB
+	EncKey             []byte
+	EngineTimeout      time.Duration
+	WorkspaceRoot      string
+	Team               engine.TeamConfig
+	StateStore         artifact.Store
+	EnableState        bool
+	SkillRoot          string
+	SkillDataDir       string
+	SkillWarmStart     bool
+	SkillMaxChars      int
+	TaskRunController  taskrunruntime.Controller
+	TaskRunSession     session.Service
+	ToolSearchEnabled  bool
+	ToolSearchProvider engine.ToolSearchProvider
+	CheckpointEnabled  bool
+}
+
+// Gateway 是所有对话/自主 Loop 的统一入口（M4-04）。
+// 职责：① 稳定 session_id 分配（空则生成）；② 每会话串行锁（同一 session 内请求串行，
+// 防并发串话/状态混乱）；③ 统一构建引擎并跑同一 Runner（Web/SSE/定时/Webhook 收敛到同一代码路径）。
+type Gateway struct {
+	cfg   GatewayConfig
+	mu    sync.Mutex
+	locks map[string]*sessionLock
+}
+
+type sessionLock struct {
+	mu  sync.Mutex
+	ref int
+}
+
+// NewGateway 构造统一网关。
+func NewGateway(cfg GatewayConfig) *Gateway {
+	return &Gateway{cfg: cfg, locks: make(map[string]*sessionLock)}
+}
+
+// DB 暴露底层数据库句柄（供 Channel handler 做预算检查等前置逻辑）。
+func (g *Gateway) DB() *gorm.DB { return g.cfg.DB }
+
+// EncKey 暴露加密主密钥（供 Channel handler 按需解密）。
+func (g *Gateway) EncKey() []byte { return g.cfg.EncKey }
+
+// EvaluateBudget 在发起 LLM 调用前评估平台级预算护栏（M3-04），供各 Channel 复用同一检查逻辑。
+func (g *Gateway) EvaluateBudget(uid uint, sessionKey string) (repo.BudgetEvaluation, error) {
+	return repo.EvaluateBudgets(g.cfg.DB, uid, sessionKey, "")
+}
+
+// allocateSessionKey 稳定分配 session_id：已有则沿用，否则生成新的。
+func (g *Gateway) allocateSessionKey(key string) string {
+	if key == "" {
+		return repo.NewSessionKey()
+	}
+	return key
+}
+
+// lockSession 取或建某 session 的串行锁并加锁；unlockSession 解锁并在引用归零时清理。
+func (g *Gateway) lockSession(key string) {
+	g.mu.Lock()
+	sl, ok := g.locks[key]
+	if !ok {
+		sl = &sessionLock{}
+		g.locks[key] = sl
+	}
+	sl.ref++
+	g.mu.Unlock()
+	sl.mu.Lock()
+}
+
+func (g *Gateway) unlockSession(key string) {
+	g.mu.Lock()
+	sl := g.locks[key]
+	if sl != nil {
+		sl.ref--
+		if sl.ref <= 0 {
+			delete(g.locks, key)
+		}
+	}
+	g.mu.Unlock()
+	if sl != nil {
+		sl.mu.Unlock()
+	}
+}
+
+// Request 是进入 Gateway 的统一对话请求（所有 Channel 共用）。
+type Request struct {
+	Channel      Channel // 来源标识（Web/CLI/Webhook/Cron/IM）
+	UserID       uint
+	SessionKey   string // 为空时 Gateway 分配稳定 session_id
+	Message      string
+	ModelID      uint   // 0 = 默认启用模型
+	WorkspaceKey string
+	TeamOverride *engine.TeamConfig // 非空时覆盖 Gateway 默认 Team（如自主化强制开启目标契约）
+}
+
+// Result 是 Gateway 处理后的统一结果。
+type Result struct {
+	SessionKey string
+	Reply      string
+	ModelID    uint
+	ModelName  string
+	Session    *model.Session
+}
+
+type preparedRun struct {
+	sess       *model.Session
+	sessionKey string
+	m          *model.Model
+	p          *model.Provider
+	workdir    string
+	eng        *engine.Engine
+	history    []framework.Message
+}
+
+// prepareRun 统一完成「解析模型 → 解密 → 建会话/写 user 消息 → 解析工作目录 → 构建引擎 → 加载历史」
+// 的共享前置流程，供 Run/Stream 复用（同一 Runner 落点）。sessionKey 必须已稳定分配。
+func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string) (*preparedRun, error) {
+	uid := req.UserID
+	m, p, err := resolveChatModel(g.cfg.DB, uid, req.ModelID)
+	if err != nil {
+		return nil, err
+	}
+	apiKey := ""
+	if p.APIKeyEnc != "" {
+		dec, derr := crypto.Decrypt(p.APIKeyEnc, g.cfg.EncKey)
+		if derr != nil {
+			return nil, fmt.Errorf("解密 provider key 失败")
+		}
+		apiKey = dec
+	}
+	sess, serr := repo.GetOrCreateSession(g.cfg.DB, uid, sessionKey)
+	if serr != nil {
+		return nil, fmt.Errorf("创建会话失败")
+	}
+	if aerr := repo.AppendMessage(g.cfg.DB, sess.ID, "user", req.Message); aerr != nil {
+		return nil, fmt.Errorf("写入用户消息失败")
+	}
+	wsLocalDir, werr := resolveWorkspaceLocalDir(g.cfg.DB, uid, req.WorkspaceKey, sess)
+	if werr != nil {
+		return nil, fmt.Errorf("workspace not found")
+	}
+	workdir, dErr := ensureWorkdir(g.cfg.WorkspaceRoot, uid, wsLocalDir)
+	if dErr != nil {
+		return nil, dErr
+	}
+
+	team := g.cfg.Team
+	if req.TeamOverride != nil {
+		team = *req.TeamOverride
+	}
+
+	// 人工检查点落库回调（M3-05）：无人值守命中 ask 危险命令时生成 checkpoint 并暂停。
+	var checkpointer executor.Checkpointer
+	if g.cfg.CheckpointEnabled {
+		checkpointer = func(cpr executor.CheckpointRequest) (string, error) {
+			cp := &model.Checkpoint{
+				SessionID: sessionKey,
+				UserID:    uid,
+				Command:   cpr.Command,
+				Workdir:   cpr.Workdir,
+				Reason:    cpr.Reason,
+				Context:   cpr.Context,
+				Status:    model.CheckpointPending,
+			}
+			if cerr := repo.CreateCheckpoint(g.cfg.DB, cp); cerr != nil {
+				return "", cerr
+			}
+			return cp.DisplayID(), nil
+		}
+	}
+	var tools []tool.Tool
+	if !team.EnableSubAgents {
+		t, tErr := codectool.NewCodeActWithGit(workdir, repo.NewDBAuditor(g.cfg.DB, uid), checkpointer)
+		if tErr != nil {
+			return nil, fmt.Errorf("构建代码执行工具失败: %w", tErr)
+		}
+		tools = t
+	}
+	eng, eErr := engine.New(engine.ModelConfig{
+		ModelID:            m.ModelID,
+		BaseURL:            p.BaseURL,
+		APIKey:             apiKey,
+		Protocol:           string(p.Protocol),
+		Timeout:            g.cfg.EngineTimeout,
+		Tools:              tools,
+		Team:               team,
+		Workdir:            workdir,
+		EnableState:        g.cfg.EnableState,
+		StateStore:         g.cfg.StateStore,
+		SkillWarmStart:     g.cfg.SkillWarmStart,
+		SkillRoots:         []string{g.cfg.SkillRoot, filepath.Join(g.cfg.SkillDataDir, strconv.FormatUint(uint64(uid), 10))},
+		SkillKeywords:      nil,
+		SkillMaxChars:      g.cfg.SkillMaxChars,
+		TaskRunController:  g.cfg.TaskRunController,
+		TaskRunSession:     g.cfg.TaskRunSession,
+		ToolSearchEnabled:  g.cfg.ToolSearchEnabled,
+		ToolSearchProvider: g.cfg.ToolSearchProvider,
+		ToolSearchUserID:   uid,
+		Auditor:            repo.NewDBAuditor(g.cfg.DB, uid),
+		Checkpointer:       checkpointer,
+	})
+	if eErr != nil {
+		return nil, eErr
+	}
+	history := loadChatHistory(g.cfg.DB, sess.ID, 1)
+	return &preparedRun{sess: sess, sessionKey: sessionKey, m: m, p: p, workdir: workdir, eng: eng, history: history}, nil
+}
+
+// Run 串行执行一次非流式对话（绑定 sessionKey 串行锁）。返回统一结果或引擎错误。
+func (g *Gateway) Run(ctx context.Context, req Request) (*Result, error) {
+	sessionKey := g.allocateSessionKey(req.SessionKey)
+	g.lockSession(sessionKey)
+	defer g.unlockSession(sessionKey)
+	return g.run(ctx, req, sessionKey)
+}
+
+func (g *Gateway) run(ctx context.Context, req Request, sessionKey string) (*Result, error) {
+	pr, err := g.prepareRun(ctx, req, sessionKey)
+	if err != nil {
+		return nil, err
+	}
+	defer pr.eng.Close()
+	llmStart := time.Now()
+	reply, err := pr.eng.Chat(engine.WithUserID(ctx, strconv.FormatUint(uint64(req.UserID), 10)), sessionKey, req.Message, pr.history)
+	// M3-09：记录 LLM 调用数 / 时延 / 错误率（provider+model 维度）。
+	metrics.RecordLLMCall(ctx, pr.p.Name, pr.m.Name, time.Since(llmStart), err)
+	if err != nil {
+		return nil, err
+	}
+	g.finalize(req, pr, reply)
+	return &Result{SessionKey: sessionKey, Reply: reply, ModelID: pr.m.ID, ModelName: pr.m.Name, Session: pr.sess}, nil
+}
+
+// Stream 串行执行一次流式对话，通过 emit 推送 AG-UI 事件（绑定 sessionKey 串行锁）。
+// 流式初始化失败时返回非 nil err（调用方应补发 RUN_ERROR）；转换期错误已在 emit 内上报，err 为 nil。
+func (g *Gateway) Stream(ctx context.Context, req Request, emit func(string, gin.H)) (*Result, error) {
+	sessionKey := g.allocateSessionKey(req.SessionKey)
+	g.lockSession(sessionKey)
+	defer g.unlockSession(sessionKey)
+	return g.stream(ctx, req, sessionKey, emit)
+}
+
+func (g *Gateway) stream(ctx context.Context, req Request, sessionKey string, emit func(string, gin.H)) (*Result, error) {
+	pr, err := g.prepareRun(ctx, req, sessionKey)
+	if err != nil {
+		return nil, err
+	}
+	defer pr.eng.Close()
+	llmStart := time.Now()
+	ch, rerr := pr.eng.Stream(engine.WithUserID(ctx, strconv.FormatUint(uint64(req.UserID), 10)), sessionKey, req.Message, pr.history)
+	if rerr != nil {
+		metrics.RecordLLMCall(ctx, pr.p.Name, pr.m.Name, time.Since(llmStart), rerr)
+		return nil, rerr
+	}
+	conv := newAGUIConverter()
+	text, convErr := conv.Convert(ch, emit)
+	// 仅在正常结束或护栏熔断（partial 结果）时落库助手消息（M1-13 运行级兜底）。
+	if convErr == nil || conv.circuitBroken {
+		g.finalize(req, pr, text)
+	}
+	metrics.RecordLLMCall(ctx, pr.p.Name, pr.m.Name, time.Since(llmStart), convErr)
+	return &Result{SessionKey: sessionKey, Reply: text, ModelID: pr.m.ID, ModelName: pr.m.Name, Session: pr.sess}, convErr
+}
+
+// finalize 在对话正常结束或护栏熔断（partial）后记录 token 用量并落库助手消息。
+func (g *Gateway) finalize(req Request, pr *preparedRun, reply string) {
+	// M3-03：记录 token 用量（按 user / session / provider / model 归属）。
+	recordEngineUsage(g.cfg.DB, pr.eng, req.UserID, pr.sess, pr.p, pr.m, buildPromptText(pr.history, req.Message), reply)
+	// 仅在正常结束时落库助手消息（客户端中途断开不写脏数据，由调用方控制）。
+	if perr := repo.AppendMessage(g.cfg.DB, pr.sess.ID, "assistant", reply); perr != nil {
+		fmt.Printf("[GATEWAY] 写入助手消息失败: %v\n", perr)
+	}
+}

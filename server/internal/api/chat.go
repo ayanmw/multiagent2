@@ -3,22 +3,9 @@ package api
 import (
 	"errors"
 	"net/http"
-	"path/filepath"
-	"strconv"
-	"time"
 
-	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
-	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
-
-	"github.com/ayanmw/multiagent2/server/internal/artifact"
-	"github.com/ayanmw/multiagent2/server/internal/crypto"
-	"github.com/ayanmw/multiagent2/server/internal/engine"
-	"github.com/ayanmw/multiagent2/server/internal/executor"
-	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
-	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -40,21 +27,9 @@ type chatResponse struct {
 }
 
 // ChatHandler handles POST /api/chat.
-// 它从 DB 解析出已启用的 Model + Provider，解密 APIKey，构造 engine.Engine 并调用 LLM 得到回复。
-// engineTimeout 为单次对话流式超时（由配置 ENGINE_TIMEOUT_SECONDS 注入，M0.5-05）。
-// workspaceRoot 为用户工作区根目录（M1-06 CodeAct 工具的执行根，按 <root>/<uid> 隔离）。
-// team 为 CodeTeam 编排配置（M1-08/M1-09）：EnableSubAgents=true 时启用子代理委托
-// （Orchestrator→Coder，CodeAct 工具集装配给 Coder，Orchestrator 自身不持有写工具）；
-// 叠加 EnableReviewer=true 时再加入只读 Reviewer，形成「实现→审阅→修复」回环。
-// stateStore 与 enableState 驱动「工作状态外置」（M1-16）：enableState 且 store 非空时，
-// 根 Agent 挂 StateEnforcer，把 PLAN/PROGRESS/LEARNINGS 落盘以支持中断续跑。
-// skillRoot/skillDataDir/skillWarmStart/skillMaxChars 驱动「技能 warm-start」（M2-03）：
-// 会话开始时把 [共享根, 用户私有根] 交给技能仓库扫描，相关 SKILL.md 注入根 Agent 系统上下文。
-// toolSearchEnabled/toolSearchProvider 驱动「延迟工具箱」（M2-06）：开启时引擎挂 tool_search/call_tool
-// 双控制工具，把 MCP 服务器工具按需暴露给模型，避免全部工具声明一次性灌进上下文导致 token 膨胀。
-// provider 按当前 uid 做 owner 隔离（仅加载该用户启用的 MCP 配置）。
-func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, workspaceRoot string, team engine.TeamConfig, stateStore artifact.Store, enableState bool, skillRoot string, skillDataDir string, skillWarmStart bool, skillMaxChars int, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchEnabled bool, toolSearchProvider engine.ToolSearchProvider, checkpointEnabled bool) gin.HandlerFunc {
-	enableSubAgents := team.EnableSubAgents
+// 经统一 Gateway（M4-04）跑非流式对话：Gateway 负责「稳定 session_id + 每会话串行锁 +
+// 构建引擎 + 多轮记忆 + 用量计量 + 落库」。本 handler 仅做鉴权、参数解析、预算护栏前置与响应封装。
+func ChatHandler(gw *Gateway) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -67,37 +42,20 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			return
 		}
 
-		// 解析本次对话要使用的模型与 Provider。
-		m, p, err := resolveChatModel(db, uid, req.ModelID)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-
-		// 解密 Provider 的 APIKey（AES-GCM）。
-		apiKey := ""
-		if p.APIKeyEnc != "" {
-			dec, derr := crypto.Decrypt(p.APIKeyEnc, encKey)
-			if derr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "解密 provider key 失败"})
-				return
-			}
-			apiKey = dec
-		}
-
-		// 预算护栏（M3-04）：在持久化用户消息、发起 LLM 调用前评估平台级预算，
-		// 超限则暂停该 session 后续调用并返回「预算耗尽，待恢复」，同时写审计。
+		// 稳定分配 session_id（空则生成），用于预算检查与统一网关。
 		sessionKey := req.SessionID
 		if sessionKey == "" {
 			sessionKey = repo.NewSessionKey()
 		}
-		budgetEv, berr := repo.EvaluateBudgets(db, uid, sessionKey, "")
+
+		// 预算护栏（M3-04）：在发起 LLM 调用前评估平台级预算，超限返回「预算耗尽，待恢复」。
+		budgetEv, berr := gw.EvaluateBudget(uid, sessionKey)
 		if berr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "预算评估失败"})
 			return
 		}
 		if budgetEv.Blocked {
-			writeBudgetBlockAudit(db, uid, budgetEv)
+			writeBudgetBlockAudit(gw.DB(), uid, budgetEv)
 			c.JSON(http.StatusTooManyRequests, gin.H{
 				"error":  "预算耗尽，待恢复",
 				"detail": "该用户/会话的平台级预算已用尽，请管理员提额后重试",
@@ -108,123 +66,24 @@ func ChatHandler(db *gorm.DB, encKey []byte, engineTimeout time.Duration, worksp
 			return
 		}
 
-		// 解析/创建会话并持久化用户消息，用于多轮记忆（M0.5-01）。
-		sess, serr := repo.GetOrCreateSession(db, uid, sessionKey)
-		if serr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
-			return
-		}
-		if aerr := repo.AppendMessage(db, sess.ID, "user", req.Message); aerr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入用户消息失败"})
-			return
-		}
-
-		// 解析对话绑定的工作目录（M1-07）：若指定 workspace_key 则切到该 workspace 目录，
-		// 否则复用已绑定目录，皆无则回退默认 WorkspaceRoot/<uid>。
-		wsLocalDir, werr := resolveWorkspaceLocalDir(db, uid, req.WorkspaceKey, sess)
-		if werr != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
-			return
-		}
-
-		// 构造引擎并对话。M1-06：为当前用户装配 CodeAct 工具（shell_exec/file_read/file_write/file_edit），
-		// 工作目录为本次解析出的 workspace 目录（或默认 WorkspaceRoot/<uid>），命令经危险命令策略包装。
-		// M1-08：子代理委托模式下改由 Coder 子代理持有这批工具，此处不再装配到根 Agent。
-		workdir, dErr := ensureWorkdir(workspaceRoot, uid, wsLocalDir)
-		if dErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": dErr.Error()})
-			return
-		}
-		// 人工检查点落库回调（M3-05）：仅在 CHECKPOINT_ENABLED 开启时挂载；无人值守命中 ask 危险
-		// 命令时调用，把待审批命令写入 checkpoints 表（绑定本次会话与 owner）并返回展示 ID。
-		var checkpointer executor.Checkpointer
-		if checkpointEnabled {
-			checkpointer = func(req executor.CheckpointRequest) (string, error) {
-				cp := &model.Checkpoint{
-					SessionID: sessionKey,
-					UserID:    uid,
-					Command:   req.Command,
-					Workdir:   req.Workdir,
-					Reason:    req.Reason,
-					Context:   req.Context,
-					Status:    model.CheckpointPending,
-				}
-				if err := repo.CreateCheckpoint(db, cp); err != nil {
-					return "", err
-				}
-				return cp.DisplayID(), nil
-			}
-		}
-		var tools []tool.Tool
-		if !enableSubAgents {
-			var tErr error
-			// M2-01：单代理模式同样装配 Git 工具集（git_status/git_diff/git_commit/git_log/git_branch），
-			// 使其能对工作区改动进行版本管理；team 模式下则由 Coder 子代理持有（见 codeagent.NewCoder）。
-			tools, tErr = codectool.NewCodeActWithGit(workdir, repo.NewDBAuditor(db, uid), checkpointer)
-			if tErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "构建代码执行工具失败: " + tErr.Error()})
-				return
-			}
-		}
-		eng, err := engine.New(engine.ModelConfig{
-			ModelID:        m.ModelID,
-			BaseURL:        p.BaseURL,
-			APIKey:         apiKey,
-			Protocol:       string(p.Protocol),
-			Timeout:        engineTimeout,
-			Tools:          tools,
-			Team:           team,
-			Workdir:        workdir,
-			EnableState:    enableState,
-			StateStore:     stateStore,
-			SkillWarmStart: skillWarmStart,
-			SkillRoots:     []string{skillRoot, filepath.Join(skillDataDir, strconv.FormatUint(uint64(uid), 10))},
-			SkillKeywords:  nil,
-			SkillMaxChars:  skillMaxChars,
-			// M2-04：注入后台任务控制器与持久化 session（transcript）。
-			TaskRunController: taskRunController,
-			TaskRunSession:    taskRunSession,
-			// M2-06：延迟工具箱（tool_search/call_tool 双控制工具），按 uid 做 owner 隔离。
-			ToolSearchEnabled:  toolSearchEnabled,
-			ToolSearchProvider: toolSearchProvider,
-			ToolSearchUserID:   uid,
-			// M3-01：命令执行审计器，team 模式下经 Deps 下传到 Coder（单代理模式工具已直接携带）。
-			Auditor: repo.NewDBAuditor(db, uid),
-			// M3-05：人工检查点落库回调，team 模式下经 Deps 下传到 Coder（单代理模式工具已直接携带）。
-			Checkpointer: checkpointer,
+		res, err := gw.Run(c.Request.Context(), Request{
+			Channel:      ChannelWeb,
+			UserID:       uid,
+			SessionKey:   sessionKey,
+			Message:      req.Message,
+			ModelID:      req.ModelID,
+			WorkspaceKey: req.WorkspaceKey,
 		})
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		defer eng.Close()
-
-		// 多轮记忆（M0.5-01）：从 DB 加载历史（排除刚写入的当前 user 消息）回灌引擎。
-		history := loadChatHistory(db, sess.ID, 1)
-
-		llmStart := time.Now()
-		reply, err := eng.Chat(engine.WithUserID(c.Request.Context(), strconv.FormatUint(uint64(uid), 10)), sessionKey, req.Message, history)
-		// M3-09：记录 LLM 调用数 / 时延 / 错误率（provider+model 维度）。
-		metrics.RecordLLMCall(c.Request.Context(), p.Name, m.Name, time.Since(llmStart), err)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "调用模型失败", "detail": err.Error()})
 			return
 		}
 
-		// M3-03：对话结束后记录 token 用量（按 user / session / provider / model 归属）。
-		recordEngineUsage(db, eng, uid, sess, p, m, buildPromptText(history, req.Message), reply)
-
-		// 仅在正常结束时落库助手消息（客户端中途断开不写脏数据）。
-		if perr := repo.AppendMessage(db, sess.ID, "assistant", reply); perr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入助手消息失败: " + perr.Error()})
-			return
-		}
-
 		c.JSON(http.StatusOK, chatResponse{
-			Reply:     reply,
-			SessionID: sessionKey,
-			ModelID:   m.ID,
-			ModelName: m.Name,
+			Reply:     res.Reply,
+			SessionID: res.SessionKey,
+			ModelID:   res.ModelID,
+			ModelName: res.ModelName,
 		})
 	}
 }

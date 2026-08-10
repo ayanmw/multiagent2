@@ -246,7 +246,7 @@ func TestM0_Integration_E2E(t *testing.T) {
 		}
 	}()
 	disc := provider.NewDiscoverer(cfg.EncryptionKey, time.Minute)
-	r := buildRouter(db, cfg, disc, nil, false, nil, nil, nil)
+	r := buildRouter(db, cfg, disc, nil, false, nil, nil, nil, buildGateway(db, cfg, nil, false, nil, nil, nil))
 
 	c := &e2eClient{t: t, r: r}
 
@@ -437,7 +437,7 @@ func TestM0_5_Regression(t *testing.T) {
 		}
 	}()
 	disc := provider.NewDiscoverer(cfg.EncryptionKey, time.Minute)
-	r := buildRouter(db, cfg, disc, nil, false, nil, nil, nil)
+	r := buildRouter(db, cfg, disc, nil, false, nil, nil, nil, buildGateway(db, cfg, nil, false, nil, nil, nil))
 
 	// ===== 场景 A：多轮记忆（M0.5-01）=====
 	// developer 注册并跑通「建 Provider → 启用模型 → 两轮对话引用同一实体」全链路。
