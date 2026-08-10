@@ -30,6 +30,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/provider"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
+	"github.com/ayanmw/multiagent2/server/internal/scheduler"
 	"github.com/ayanmw/multiagent2/server/internal/sessionstore"
 	"github.com/ayanmw/multiagent2/server/internal/taskrun"
 	"github.com/ayanmw/multiagent2/server/internal/toolsearch"
@@ -376,6 +377,39 @@ func main() {
 	}
 
 	r := buildRouter(db, cfg, discoverer, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db, cfg.EncryptionKey))
+
+	// 自主化 cron 调度器（M4-02）：常驻扫描启用的 cron 自动化，到点创建 Goal Session 跑 Loop。
+	// 团队模式强制开启子代理 + 目标契约（Goal Session 语义），复用与对话端点一致的引擎构造。
+	schedTeam := engine.TeamConfig{
+		EnableSubAgents: true,
+		EnableReviewer:  cfg.ReviewerEnabled(),
+		MaxReviewRounds: cfg.MaxReviewRounds(),
+		EnableGoal:      true,
+		MaxGoalNudges:   cfg.MaxGoalNudges(),
+		EnablePlan:      cfg.PlanEnabled(),
+		MaxPlanNudges:   cfg.MaxPlanNudges(),
+		Guardrail:       cfg.GuardrailConfig(), // M1-13：护栏熔断预算（无人值守必须有兜底）
+	}
+	loopRunner := api.NewAutomationLoopRunner(api.AutomationLoopConfig{
+		DB:                 db.DB,
+		EncKey:             cfg.EncryptionKey,
+		EngineTimeout:      cfg.EngineTimeout(),
+		WorkspaceRoot:      cfg.WorkspaceRoot,
+		Team:               schedTeam,
+		StateStore:         stateStore,
+		EnableState:        enableState,
+		SkillRoot:          cfg.SkillsRoot(),
+		SkillDataDir:       cfg.SkillsDataDir(),
+		SkillWarmStart:     cfg.SkillWarmStart(),
+		SkillMaxChars:      cfg.SkillWarmStartMaxChars(),
+		TaskRunController:   taskRunController,
+		TaskRunSession:     taskRunSession,
+		ToolSearchEnabled:  cfg.ToolSearchEnabled(),
+		ToolSearchProvider: buildToolSearchProvider(db, cfg.EncryptionKey),
+		CheckpointEnabled:  cfg.CheckpointEnabled(),
+	})
+	schedulerSvc := scheduler.New(db.DB, loopRunner)
+	go schedulerSvc.Start(context.Background())
 
 	// Graceful shutdown
 	go func() {

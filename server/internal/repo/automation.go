@@ -76,6 +76,17 @@ func UpdateAutomation(db *gorm.DB, a *model.Automation) error {
 	return db.Save(a).Error
 }
 
+// ListEnabledCronAutomations 返回所有「启用 + cron 触发器」的自动化（调度器扫描用，M4-02）。
+// 按创建时间正序，保证同 round 内稳定顺序。
+func ListEnabledCronAutomations(db *gorm.DB) ([]model.Automation, error) {
+	var list []model.Automation
+	if err := db.Where("enabled = ? AND trigger_type = ?", true, model.AutomationTriggerCron).
+		Order("created_at asc").Find(&list).Error; err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
 // DeleteAutomation 按主键删除。
 func DeleteAutomation(db *gorm.DB, id uint) error {
 	return db.Delete(&model.Automation{}, id).Error
