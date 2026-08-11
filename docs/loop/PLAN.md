@@ -126,7 +126,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | M4-06 | **无人值守 Loop 运行模式**：配置 `Mode=Unattended`（SafeExecutor deny 默认 + 预算护栏 + 检查点排队）；长任务自动推进到 `complete/blocked` 才停，无需人盯 | ✅ | 多步 Goal 在无人值守下自动跑完并产出 PR/报告；中途危险操作进检查点队列待批 | M3-04, M3-05, M4-04 |
 | M4-07 | **通知/结果回发（outbound）**：Loop 完成/暂停/需检查点时经 outbound 路由通知（站内信表 `notifications` + Webhook 回调占位 + 邮件占位）；前端通知中心 | ✅ | Loop 完成 → 通知中心出现一条；webhook 目标收到回调（可用 mock） | M4-02 |
 | M4-08 | **自动化管理前端**：`AutomationView` 列表/创建（cron 表达式 / 事件规则 / goal prompt）/启用停用/运行历史；检查点审批列表（复用 M3-05） | ✅ | 前端可建 cron Automation 并看到下次运行时间；运行历史可查 | M4-01, M4-07 |
-| M4-09 | **集成验证 E2E（自主化）**：建定时 Automation → 到点自动跑 Loop → 产出 PR/报告 → 跨重启恢复 → 完成通知 全链路；补 cron/webhook/恢复单测 | ○ | 全链路走通；测试绿 | M4-01..08 |
+| M4-09 | **集成验证 E2E（自主化）**：建定时 Automation → 到点自动跑 Loop → 产出 PR/报告 → 跨重启恢复 → 完成通知 全链路；补 cron/webhook/恢复单测 | ✅ | 全链路走通；测试绿 | M4-01..08 |
 
 ---
 
