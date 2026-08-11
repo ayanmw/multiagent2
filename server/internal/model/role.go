@@ -72,6 +72,8 @@ func SeedRoles() []Role {
 				{Resource: "checkpoints", Action: "write"},
 				{Resource: "automations", Action: "read"},
 				{Resource: "automations", Action: "write"},
+				{Resource: "notifications", Action: "read"},
+				{Resource: "notifications", Action: "write"},
 			},
 		},
 		{
@@ -90,6 +92,7 @@ func SeedRoles() []Role {
 				{Resource: "budgets", Action: "read"},
 				{Resource: "checkpoints", Action: "read"},
 				{Resource: "automations", Action: "read"},
+				{Resource: "notifications", Action: "read"},
 			},
 		},
 	}

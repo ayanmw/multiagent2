@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/notify"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -285,5 +286,38 @@ func TestScheduler_RecordsRunFailed(t *testing.T) {
 	}
 	if runs[0].Error == "" {
 		t.Fatal("失败记录应保留错误信息")
+	}
+}
+
+// TestScheduler_NotifiesOnSuccess 验证成功后经 Notifier 写入一条站内信（M4-07）。
+func TestScheduler_NotifiesOnSuccess(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.AutoMigrate(&model.Notification{}); err != nil {
+		t.Fatalf("migrate notifications: %v", err)
+	}
+	base := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
+	a := &model.Automation{
+		UserID: 1, Name: "notify-success", TriggerType: model.AutomationTriggerCron,
+		CronExpr: "*/1 * * * *", GoalPrompt: "do something", Enabled: true,
+		NextRun: ptrTime(base.Add(-time.Minute)),
+	}
+	if err := repo.CreateAutomation(db, a); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockRunner{}
+	s := New(db, mock)
+	s.Now = func() time.Time { return base }
+	s.MaxRetries = 0
+	s.Notifier = notify.NewService(db, "", nil)
+	ran := s.TickSync(context.Background())
+	if ran != 1 {
+		t.Fatalf("应触发 1 个，ran=%d", ran)
+	}
+	var cnt int64
+	if err := db.Model(&model.Notification{}).Where("user_id = ? AND type = ?", 1, model.NotificationTypeSuccess).Count(&cnt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cnt != 1 {
+		t.Fatalf("期望 1 条成功通知，实际 %d", cnt)
 	}
 }

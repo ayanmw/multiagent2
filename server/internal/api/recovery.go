@@ -6,6 +6,7 @@ import (
 
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/notify"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"gorm.io/gorm"
 )
@@ -90,9 +91,19 @@ func RecoverUnfinishedRuns(ctx context.Context, db *gorm.DB, runner RecoveryRunn
 			logger.Printf("[RECOVER] 标记运行 %d done 失败: %v", run.ID, merr)
 		}
 		logger.Printf("[RECOVER] 运行 %d（session=%s, automation=%d）已续跑完成", run.ID, run.SessionKey, run.AutomationID)
+		// M4-07：跨天恢复成功续跑完成 → 站内信通知（best-effort）。
+		if notifier != nil {
+			_ = notifier.Notify(ctx, notify.NewSuccess(run.UserID, run.AutomationID, a.Name, run.SessionKey, "中断任务已跨重启恢复完成"))
+		}
 	}
 	return recovered
 }
+
+// notifier 是可选的恢复结果通知出口（M4-07）。由 main.go 注入；测试传 nil。
+var notifier notify.Notifier
+
+// SetRecoveryNotifier 注入恢复续跑结果的通知出口（生产 main.go 调用）。
+func SetRecoveryNotifier(n notify.Notifier) { notifier = n }
 
 // recoveryMessage 包裹自动化的目标提示词，明确告知这是「中断后恢复」，
 // 引导模型先读状态再续跑（StateEnforcer 会进一步把 PLAN/PROGRESS/LEARNINGS 回灌进上下文）。

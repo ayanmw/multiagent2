@@ -20,6 +20,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/notify"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 	"github.com/gin-gonic/gin"
@@ -70,6 +71,8 @@ type GatewayConfig struct {
 	// 自主化 Channel（cron/webhook/recover）由 Gateway 强制覆盖为无人值守，保证
 	// 无人盯守下 ask 危险命令落到检查点队列、预算护栏全程生效。
 	ExecutorMode executor.Mode
+	// Notifier 是运行结果/检查点通知出口（M4-07，可空：nil 时不发通知）。
+	Notifier notify.Notifier
 }
 
 // Gateway 是所有对话/自主 Loop 的统一入口（M4-04）。
@@ -266,6 +269,11 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 			}
 			if cerr := repo.CreateCheckpoint(g.cfg.DB, cp); cerr != nil {
 				return "", cerr
+			}
+			// M4-07：无人值守命中 ask 危险命令生成检查点后，向归属用户发一条「待审批」通知
+			// （best-effort，不阻断主流程；nil notifier 时静默跳过）。
+			if g.cfg.Notifier != nil {
+				_ = g.cfg.Notifier.Notify(ctx, notify.NewCheckpoint(uid, 0, "(自主 Loop)", cp.DisplayID(), cpr.Command))
 			}
 			return cp.DisplayID(), nil
 		}

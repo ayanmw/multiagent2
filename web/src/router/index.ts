@@ -93,6 +93,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: 'Artifact 浏览器', desc: '浏览会话下全部产物：PLAN/PROGRESS/LEARNINGS + 报告/diff/构建产物' },
       },
       {
+        path: 'notifications',
+        name: 'notifications',
+        component: () => import('@/views/NotificationView.vue'),
+        meta: { title: '通知中心', desc: '主动 Loop 的运行结果回发：完成 / 失败 / 需人工检查点' },
+      },
+      {
         path: 'settings',
         name: 'settings',
         component: () => import('@/views/SettingsView.vue'),

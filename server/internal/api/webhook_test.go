@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/notify"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // newWebhookTestDB 构造共享内存 SQLite（MaxOpenConns=1 保证 in-memory 单连接），
@@ -260,4 +262,44 @@ func TestWebhookHandler_ConcurrentGuard(t *testing.T) {
 	}
 	// 释放阻塞，让第 1 次 goroutine 收尾。
 	close(block)
+}
+
+// TestWebhookHandler_NotifiesOnSuccess 验证成功 Loop 后写入一条成功站内信（M4-07）。
+func TestWebhookHandler_NotifiesOnSuccess(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
+	if err := db.AutoMigrate(&model.Automation{}, &model.Session{}, &model.Role{}, &model.RolePermission{}, &model.AuditLog{}, &model.Notification{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	a := createWebhookAutomation(t, db, "tok-notify", true)
+	mock := &mockLoopRunner{done: make(chan struct{})}
+	limiter := NewWebhookRateLimiter(10, time.Minute)
+	h := NewWebhookHandler(db, mock, limiter).WithNotifier(notify.NewService(db, "", nil))
+	r := newWebhookRouter(h)
+
+	req, _ := http.NewRequest(http.MethodPost, "/api/webhooks/tok-notify", bytes.NewBufferString(`{"event":"push"}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("期望 202，得到 %d", w.Code)
+	}
+	select {
+	case <-mock.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("超时：Loop 未被调用")
+	}
+	// 等待异步 runLoop 写完通知。
+	time.Sleep(100 * time.Millisecond)
+	var cnt int64
+	if err := db.Model(&model.Notification{}).Where("user_id = ? AND type = ?", a.UserID, model.NotificationTypeSuccess).Count(&cnt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cnt != 1 {
+		t.Fatalf("期望 1 条成功通知，实际 %d", cnt)
+	}
 }

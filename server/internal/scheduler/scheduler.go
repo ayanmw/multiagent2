@@ -20,6 +20,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/cron"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/notify"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"gorm.io/gorm"
 )
@@ -42,6 +43,7 @@ type Scheduler struct {
 	RetryBackoff time.Duration  // 重试间隔（每次重试前等待），默认 0（测试可设）
 	RetryDelay   time.Duration  // 运行失败后下次重试的延迟（写入 next_run），默认 1 分钟
 	Now          func() time.Time // 时间源（测试注入），默认 time.Now
+	Notifier     notify.Notifier  // 运行结果通知出口（M4-07，可空：nil 时不发通知）
 
 	running sync.Map // automation id -> true，防止同一自动化并发重入
 	logger  *log.Logger
@@ -194,6 +196,8 @@ func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 				s.logger.Printf("[SCHED] automation %d 标记运行 done 失败: %v", a.ID, merr)
 			}
 		}
+		// M4-07：成功完成 → 站内信通知（best-effort，不阻断主流程）。
+		s.notify(context.Background(), notify.NewSuccess(a.UserID, a.ID, a.Name, sessionKey, "自动化已执行完成"))
 	} else {
 		// M4-05：运行失败 → 标记 failed（供诊断与避免误判为「待恢复」）。
 		if run != nil && run.ID != 0 {
@@ -201,8 +205,19 @@ func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 				s.logger.Printf("[SCHED] automation %d 标记运行 failed 失败: %v", a.ID, merr)
 			}
 		}
+		// M4-07：失败 → 站内信通知（best-effort）。
+		s.notify(context.Background(), notify.NewFailure(a.UserID, a.ID, a.Name, runErr.Error()))
 	}
 	s.advanceNext(a, runErr == nil)
+}
+
+// notify 经统一通知出口发送站内信（M4-07）。notifier 为空时静默跳过；
+// 任意通知副作用失败已由 Notifier 内部吞掉，这里不关心返回值。
+func (s *Scheduler) notify(ctx context.Context, n *model.Notification) {
+	if s.Notifier == nil || n == nil {
+		return
+	}
+	_ = s.Notifier.Notify(ctx, n)
 }
 
 // advanceNext 运行结束后更新 next_run：成功按 cron 推到下次；失败按 RetryDelay 快速重试。

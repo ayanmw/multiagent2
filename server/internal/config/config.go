@@ -88,6 +88,9 @@ type Config struct {
 	// 跨天恢复重试上限（M4-05）：单次进程重启对同一「未收敛运行」最多尝试续跑的次数，
 	// 超过后标记 failed 不再续跑，避免永远无法收敛的 Loop 在每次重启时无限续跑。
 	recoveryMaxAttempts int // 恢复重试上限（env RECOVERY_MAX_ATTEMPTS，默认 3）
+	// 出站 webhook 通知回调地址（M4-07）：自主化 Loop 结果除站内信外，额外 POST 一份 JSON
+	// 事件到该地址（占位，可对接外部系统）。为空则跳过（仅站内信）。
+	webhookNotifyURL string // 出站通知回调地址（env WEBHOOK_NOTIFY_URL，默认空=关闭）
 	// 运行时模式（M4-06）：env RUN_MODE，默认 unattended。无人值守下危险命令 deny 默认、
 	// 命中 ask 生成人工检查点排队、预算护栏全程生效，使 24h 自主 Loop 无需人盯；
 	// attended 仅用于有人实时值守的调试会话（危险命令 ask 直接 deny）。
@@ -329,6 +332,9 @@ func Load() *Config {
 		cfg.recoveryMaxAttempts = DefaultRecoveryMaxAttempts
 	}
 
+	// 出站 webhook 通知回调地址（M4-07）：为空表示只发站内信，不发外部回调。
+	cfg.webhookNotifyURL = envOrDefault("WEBHOOK_NOTIFY_URL", "")
+
 	// 运行时模式（M4-06）：默认 unattended（24h 自主平台的安全默认）。
 	cfg.runMode = envOrDefault("RUN_MODE", RunModeUnattended)
 	if cfg.runMode != RunModeUnattended && cfg.runMode != RunModeAttended {
@@ -542,6 +548,16 @@ func (c *Config) RunModeString() string {
 		return RunModeUnattended
 	}
 	return c.runMode
+}
+
+// WebhookNotifyURL returns the outbound webhook notification callback URL (M4-07).
+// Empty means the outbound callback is disabled and only the in-app notification
+// (notifications table) is written.
+func (c *Config) WebhookNotifyURL() string {
+	if c == nil {
+		return ""
+	}
+	return c.webhookNotifyURL
 }
 
 // IsUnattended reports whether the server runs in unattended mode (M4-06).

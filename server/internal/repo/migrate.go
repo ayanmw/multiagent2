@@ -80,6 +80,7 @@ func baselineModels() []any {
 		&model.Checkpoint{},
 		&model.Automation{},
 		&model.AutomationRun{},
+		&model.Notification{},
 	}
 }
 
@@ -132,6 +133,15 @@ func Migrations() []Migration {
 			// 唯一真相源（目标契约收敛状态原本只活在内存储存，重启即丢失）。
 			Up: func(db *gorm.DB, _ MigrationContext) error {
 				return db.AutoMigrate(&model.AutomationRun{})
+			},
+		},
+		{
+			Version: "0006",
+			Name:    "add_notifications",
+			// M4-07：新增 notifications 表（站内信），作为「通知/结果回发」的落点。
+			// 自主化 Loop（cron/webhook/recover）完成/失败/需检查点时写入，前端通知中心消费。
+			Up: func(db *gorm.DB, _ MigrationContext) error {
+				return db.AutoMigrate(&model.Notification{})
 			},
 		},
 	}

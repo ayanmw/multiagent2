@@ -28,6 +28,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
 	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/notify"
 	"github.com/ayanmw/multiagent2/server/internal/provider"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/ayanmw/multiagent2/server/internal/scheduler"
@@ -165,6 +166,12 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.GET("/automations/:id", middleware.RequirePermission(db.DB, "automations", "read"), api.GetAutomationHandler(db.DB))
 		protected.PUT("/automations/:id", middleware.RequirePermission(db.DB, "automations", "write"), api.UpdateAutomationHandler(db.DB))
 		protected.DELETE("/automations/:id", middleware.RequirePermission(db.DB, "automations", "write"), api.DeleteAutomationHandler(db.DB))
+
+		// 通知中心（M4-07）：自主化 Loop 完成/失败/需检查点时写入的站内信。
+		// 读列表需 notifications:read，标记已读写需 notifications:write（owner 隔离）。
+		protected.GET("/notifications", middleware.RequirePermission(db.DB, "notifications", "read"), api.ListNotificationsHandler(db.DB))
+		protected.POST("/notifications/:id/read", middleware.RequirePermission(db.DB, "notifications", "write"), api.MarkNotificationReadHandler(db.DB))
+		protected.POST("/notifications/read-all", middleware.RequirePermission(db.DB, "notifications", "write"), api.MarkAllNotificationsReadHandler(db.DB))
 
 		// Skills 技能仓库（M2-03）：用户归属的技能管理（文件系统后端，owner 隔离）。
 		// 读操作需 skills:read，写操作（建/更新/删私有技能）需 skills:write（RBAC）。
@@ -421,7 +428,13 @@ func main() {
 	// 两个 runner 共享同一 Gateway（同一会话串行锁），分别标记触发来源（cron / webhook）。
 	cronRunner := api.NewAutomationLoopRunner(gw, schedTeam, api.ChannelCron)
 	webhookRunner := api.NewAutomationLoopRunner(gw, schedTeam, api.ChannelWebhook)
+
+	// 通知/结果回发出口（M4-07）：站内信落库 + 可选出站 webhook 回调（WEBHOOK_NOTIFY_URL 为空则跳过）。
+	// 与 scheduler/webhook/recovery 三处自主入口解耦，便于单测注入 mock。
+	notifier := notify.NewService(db.DB, cfg.WebhookNotifyURL(), log.Default())
+
 	schedulerSvc := scheduler.New(db.DB, cronRunner)
+	schedulerSvc.Notifier = notifier
 	go schedulerSvc.Start(context.Background())
 
 	// 跨天恢复（M4-05）：进程启动后扫描「未收敛 Goal Session」（automation_runs.status=running）
@@ -429,13 +442,14 @@ func main() {
 	// 同一 Gateway（同一会话串行锁）以目标契约 TeamOverride 重建上下文续跑。与 M2-04 持久化
 	// session 协同（历史消息与子任务 transcript 跨重启保留）。后台执行，不阻塞启动；
 	// 恢复只针对「旧的中断会话」，不会与调度器新建的会话（新 session_key）冲突。
+	api.SetRecoveryNotifier(notifier)
 	go api.RecoverUnfinishedRuns(context.Background(), db.DB, gw, schedTeam, cfg.RecoveryMaxAttempts(), log.Default())
 
 	// Webhook 外部事件入口（M4-03）：不挂鉴权中间件，完全靠 URL 中的 32B 令牌匹配
 	// Automation；命中后异步启动 Goal Loop（与 cron 调度器共用同一 Gateway）。
 	// 令牌校验 + 按 token 速率限制 + 防并发重入均在 handler 内完成。
 	webhookLimiter := api.NewWebhookRateLimiter(cfg.WebhookRateLimit(), cfg.WebhookRateWindow())
-	r.POST("/api/webhooks/:token", api.NewWebhookHandler(db.DB, webhookRunner, webhookLimiter).Handle)
+	r.POST("/api/webhooks/:token", api.NewWebhookHandler(db.DB, webhookRunner, webhookLimiter).WithNotifier(notifier).Handle)
 
 	// Graceful shutdown
 	go func() {

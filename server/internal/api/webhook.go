@@ -10,6 +10,7 @@ import (
 
 	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/notify"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -68,16 +69,24 @@ func (l *WebhookRateLimiter) Allow(token string) bool {
 // 路由 POST /api/webhooks/:token 不挂鉴权中间件，完全靠 URL 中的 32B 令牌匹配 Automation；
 // 命中后异步启动 Goal Loop（与 cron 调度器共用同一套 Loop 运行器），并写审计 + 更新 LastRun。
 type WebhookHandler struct {
-	db      *gorm.DB
-	runner  automationLoopRunner
-	limiter *WebhookRateLimiter
-	running sync.Map // automation id -> true，防止同一自动化并发重入
+	db       *gorm.DB
+	runner   automationLoopRunner
+	limiter  *WebhookRateLimiter
+	notifier notify.Notifier // 运行结果通知出口（M4-07，可空）
+	running  sync.Map        // automation id -> true，防止同一自动化并发重入
 }
 
 // NewWebhookHandler 构造 webhook 处理链。runner 为生产用 AutomationLoopRunner（复用 cron 同款），
-// limiter 为按 token 的速率限制器。
+// limiter 为按 token 的速率限制器，notifier 为可选通知出口（nil 时不发通知）。
 func NewWebhookHandler(db *gorm.DB, runner automationLoopRunner, limiter *WebhookRateLimiter) *WebhookHandler {
 	return &WebhookHandler{db: db, runner: runner, limiter: limiter}
+}
+
+// WithNotifier 注入运行结果通知出口（M4-07），返回自身便于链式构造。
+// 生产 main.go 调用；单测保持不注入（nil 安全）。
+func (h *WebhookHandler) WithNotifier(n notify.Notifier) *WebhookHandler {
+	h.notifier = n
+	return h
 }
 
 // Handle 是 Gin handler：先速率限制 → 令牌匹配 automation → 建会话 → 202 立即返回 → 异步跑 Loop。
@@ -191,4 +200,8 @@ func (h *WebhookHandler) runLoop(a *model.Automation, sessionKey, clientIP strin
 		Allowed:   true,
 		Note:      "webhook",
 	})
+	// M4-07：成功完成 → 站内信通知（best-effort，不阻断主流程）。
+	if h.notifier != nil {
+		_ = h.notifier.Notify(context.Background(), notify.NewSuccess(a.UserID, a.ID, a.Name, sessionKey, "自动化已执行完成"))
+	}
 }
