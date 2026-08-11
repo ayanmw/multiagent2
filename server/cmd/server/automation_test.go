@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"strconv"
 	"testing"
+
+	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/repo"
 )
 
 // TestAutomation_CRUD 覆盖 M4-01 验收：developer 全生命周期 CRUD + owner 隔离 +
@@ -164,5 +167,73 @@ func TestAutomation_CRUD(t *testing.T) {
 	code, _ = dev.do("GET", "/api/automations/"+strconv.Itoa(id), nil)
 	if code != http.StatusNotFound {
 		t.Fatalf("删除后详情应 404, 实际 %d", code)
+	}
+}
+
+// TestAutomation_RunsHistory 覆盖 M4-08 验收：运行历史端点按 automation 归属列出
+// running/done/failed 记录，且不会混入其他 automation 的运行（owner + automation 双重过滤）。
+func TestAutomation_RunsHistory(t *testing.T) {
+	r, db := newRBACRouter(t)
+
+	dev := &e2eClient{t: t, r: r}
+	code, reg := dev.do("POST", "/api/auth/register", map[string]any{
+		"username": "autodev2", "email": "autodev2@example.com", "password": "secret123",
+	})
+	if code != 201 {
+		t.Fatalf("developer 注册失败: %d %v", code, reg)
+	}
+	dev.tok = reg["token"].(string)
+	devUser, ok := reg["user"].(map[string]any)
+	if !ok {
+		t.Fatalf("注册响应缺少 user: %v", reg)
+	}
+	devUID := uint(devUser["id"].(float64))
+
+	// 创建 cron Automation。
+	code, body := dev.do("POST", "/api/automations", map[string]any{
+		"name":         "hourly-loop",
+		"trigger_type": "cron",
+		"cron_expr":    "*/1 * * * *",
+		"goal_prompt":  "推送进度",
+	})
+	if code != 201 {
+		t.Fatalf("创建 Automation 应 201, 实际 %d, body=%v", code, body)
+	}
+	id := int(body["id"].(float64))
+
+	// 写入 3 条运行：2 条属于本 automation，1 条属于其他 automation（不应出现）。
+	if err := repo.CreateAutomationRun(db.DB, &model.AutomationRun{
+		AutomationID: uint(id), UserID: devUID, SessionKey: "sess-run-a", Channel: "cron", Status: "done",
+	}); err != nil {
+		t.Fatalf("写运行记录失败: %v", err)
+	}
+	if err := repo.CreateAutomationRun(db.DB, &model.AutomationRun{
+		AutomationID: uint(id), UserID: devUID, SessionKey: "sess-run-b", Channel: "webhook", Status: "running",
+	}); err != nil {
+		t.Fatalf("写运行记录失败: %v", err)
+	}
+	if err := repo.CreateAutomationRun(db.DB, &model.AutomationRun{
+		AutomationID: 99999, UserID: devUID, SessionKey: "sess-run-x", Channel: "cron", Status: "done",
+	}); err != nil {
+		t.Fatalf("写运行记录失败: %v", err)
+	}
+
+	// 查询运行历史 → 应只返回本 automation 的 2 条。
+	code, list := dev.do("GET", "/api/automations/"+strconv.Itoa(id)+"/runs", nil)
+	if code != http.StatusOK {
+		t.Fatalf("查询运行历史应 200, 实际 %d, body=%v", code, list)
+	}
+	runs, _ := list["runs"].([]any)
+	if len(runs) != 2 {
+		t.Fatalf("运行历史应含 2 条, 实际 %d: %v", len(runs), list)
+	}
+	for _, rr := range runs {
+		m := rr.(map[string]any)
+		if int(m["automation_id"].(float64)) != id {
+			t.Fatalf("运行记录混入了其他 automation: %v", m)
+		}
+	}
+	if int(list["total"].(float64)) != 2 {
+		t.Fatalf("total 应为 2, 实际 %v", list["total"])
 	}
 }

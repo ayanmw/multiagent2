@@ -166,6 +166,8 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.GET("/automations/:id", middleware.RequirePermission(db.DB, "automations", "read"), api.GetAutomationHandler(db.DB))
 		protected.PUT("/automations/:id", middleware.RequirePermission(db.DB, "automations", "write"), api.UpdateAutomationHandler(db.DB))
 		protected.DELETE("/automations/:id", middleware.RequirePermission(db.DB, "automations", "write"), api.DeleteAutomationHandler(db.DB))
+		// 运行历史（M4-08）：按 automation 归属列出 running/done/failed 记录，最近排前。
+		protected.GET("/automations/:id/runs", middleware.RequirePermission(db.DB, "automations", "read"), api.ListAutomationRunsHandler(db.DB))
 
 		// 通知中心（M4-07）：自主化 Loop 完成/失败/需检查点时写入的站内信。
 		// 读列表需 notifications:read，标记已读写需 notifications:write（owner 隔离）。

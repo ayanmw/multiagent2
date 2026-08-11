@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -240,6 +241,70 @@ func DeleteAutomationHandler(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		c.Status(http.StatusNoContent)
+	}
+}
+
+// automationRunView 是对外返回的自动化运行记录视图（M4-08 运行历史）。
+type automationRunView struct {
+	ID           uint   `json:"id"`
+	AutomationID uint   `json:"automation_id"`
+	SessionKey   string `json:"session_key"`
+	Channel      string `json:"channel"`
+	Status       string `json:"status"`
+	Error        string `json:"error"`
+	Attempts     int    `json:"attempts"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+func toAutomationRunView(r *model.AutomationRun) automationRunView {
+	return automationRunView{
+		ID:           r.ID,
+		AutomationID: r.AutomationID,
+		SessionKey:   r.SessionKey,
+		Channel:      r.Channel,
+		Status:       r.Status,
+		Error:        r.Error,
+		Attempts:     r.Attempts,
+		CreatedAt:    r.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:    r.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+// ListAutomationRunsHandler 处理 GET /api/automations/:id/runs（需 automations:read，owner-scoped）。
+// 返回该自动化（当前用户归属）的运行历史（running/done/failed），最近运行排前。
+func ListAutomationRunsHandler(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid, ok := currentUserID(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+			return
+		}
+		a, ok2 := lookupOwnedAutomation(c, db, uid)
+		if !ok2 {
+			return
+		}
+		runs, err := repo.ListAutomationRuns(db, uid)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list automation runs"})
+			return
+		}
+		views := make([]automationRunView, 0, len(runs))
+		for i := range runs {
+			if runs[i].AutomationID != a.ID {
+				continue
+			}
+			views = append(views, toAutomationRunView(&runs[i]))
+		}
+		// 最近运行排前（同创建时间稳定保持原序）。
+		sort.SliceStable(views, func(i, j int) bool {
+			return views[i].CreatedAt > views[j].CreatedAt
+		})
+		c.JSON(http.StatusOK, gin.H{
+			"runs":          views,
+			"total":         len(views),
+			"automation_id": a.ID,
+		})
 	}
 }
 

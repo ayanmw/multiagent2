@@ -113,6 +113,11 @@ const menuOptions: MenuOption[] = [
     key: 'notifications',
     icon: svgIcon('M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5S10.5 3.17 10.5 4v.68C7.63 5.36 6 7.93 6 11v5l-2 2v1h16v-1l-2-2z'),
   },
+  {
+    label: '自动化',
+    key: 'automations',
+    icon: svgIcon('M12 2l1 7h7l-5.5 4 2 7L12 15l-4.5 5 2-7L4 9h7z'),
+  },
 ]
 
 // 主题切换按钮图标：深色显示「太阳」(切回浅色)，浅色显示「月亮」(切到深色)。

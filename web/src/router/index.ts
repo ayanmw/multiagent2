@@ -104,6 +104,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/SettingsView.vue'),
         meta: { title: '设置', desc: 'API Key、角色权限与运行模式' },
       },
+      {
+        path: 'automations',
+        name: 'automations',
+        component: () => import('@/views/AutomationView.vue'),
+        meta: { title: '自动化管理', desc: '定时 / 事件触发的自主 Loop 任务：创建、启用停用、运行历史与检查点审批' },
+      },
     ],
   },
   // 兜底：未知路径回到首页（由守卫决定是否需要登录）。
