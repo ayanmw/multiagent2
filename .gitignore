@@ -39,3 +39,7 @@ tool/**/workbuddy-llm-api
 **/*.exe
 *.exe~
 *.log
+
+# CLI 构建产物（M5-01 gmctl）
+tool/cli/gmctl
+tool/cli/gmctl.exe
