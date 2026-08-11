@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/sessionstore"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 	"github.com/ayanmw/multiagent2/server/internal/worktree"
@@ -23,7 +24,7 @@ func initRepo(t *testing.T, dir string) {
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# main\n"), 0o644); err != nil {
 		t.Fatalf("write readme: %v", err)
 	}
-	ex, err := codectool.NewGitExecutor(dir, nil, nil)
+	ex, err := codectool.NewGitExecutor(dir, nil, nil, executor.ModeUnattended)
 	if err != nil {
 		t.Fatalf("git executor: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestWorktreeHook_CreateAndFinalize(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wt, "hook.txt"), []byte("ok\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	wtEx, _ := codectool.NewGitExecutor(wt, nil, nil)
+	wtEx, _ := codectool.NewGitExecutor(wt, nil, nil, executor.ModeUnattended)
 	if _, err := codectool.GitCommit(ctx, wtEx, "add hook.txt"); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -126,7 +127,7 @@ func TestWorktreeHook_CreateAndFinalize(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repoDir, "hook.txt")); err != nil {
 		t.Fatalf("completed 后主仓库缺少 hook.txt: %v", err)
 	}
-	ex, _ := codectool.NewGitExecutor(repoDir, nil, nil)
+	ex, _ := codectool.NewGitExecutor(repoDir, nil, nil, executor.ModeUnattended)
 	branches, _ := codectool.GitBranch(ctx, ex, "", false)
 	if strings.Contains(branches, "taskrun/") {
 		t.Fatalf("临时分支未清理: %s", branches)

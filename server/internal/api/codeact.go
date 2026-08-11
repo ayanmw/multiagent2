@@ -41,10 +41,13 @@ func ensureWorkdir(workspaceRoot string, uid uint, wsLocalDir string) (string, e
 //
 // 注意（M1-08）：子代理委托模式下不再由本函数装配工具——CodeAct 工具集
 // 由 codeagent 工厂装配给 Coder 子代理，Orchestrator 自身不持有写工具。
-func buildCodeActTools(workspaceRoot string, uid uint, wsLocalDir string, auditor executor.Auditor, cp executor.Checkpointer) ([]tool.Tool, error) {
+//
+// mode 为执行器运行模式（M4-06）：Unattended 时 ask→检查点/deny（自主 Loop 安全默认）；
+// Interactive 时 ask→deny（有人值守调试会话）；非法值由 codectool 回落 Unattended。
+func buildCodeActTools(workspaceRoot string, uid uint, wsLocalDir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) ([]tool.Tool, error) {
 	workdir, err := ensureWorkdir(workspaceRoot, uid, wsLocalDir)
 	if err != nil {
 		return nil, err
 	}
-	return codectool.NewCodeAct(workdir, auditor, cp)
+	return codectool.NewCodeAct(workdir, auditor, cp, mode)
 }

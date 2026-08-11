@@ -267,6 +267,7 @@ func buildGateway(db *repo.DB, cfg *config.Config, stateStore artifact.Store, en
 		ToolSearchEnabled:  cfg.ToolSearchEnabled(),
 		ToolSearchProvider: toolSearchProvider,
 		CheckpointEnabled:  cfg.CheckpointEnabled(),
+		ExecutorMode:       cfg.ExecutorMode(), // M4-06：执行器运行模式（默认 unattended）
 	})
 }
 
@@ -386,7 +387,7 @@ func main() {
 			}
 		},
 	}
-	workerFactory := taskrun.BuildAgentFactory(cfg.GuardrailConfig(), workerResolver)
+	workerFactory := taskrun.BuildAgentFactory(cfg.GuardrailConfig(), workerResolver, executor.ModeUnattended)
 	taskRunController, ctrlErr := taskrun.NewController(
 		context.Background(),
 		codeagent.RoleCoder,

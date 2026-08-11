@@ -50,7 +50,9 @@ func GitToolNames() []string {
 // auditor 为审计器：nil 时回落到日志审计（LogAuditor）；业务层传入 repo.NewDBAuditor
 // 可使 git 命令同样写入审计日志（M3-01 执行审计落库）。
 // cp 为无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05），语义同 NewCodeAct。
-func NewGitExecutor(workdir string, auditor executor.Auditor, cp executor.Checkpointer) (executor.Executor, error) {
+// mode 为执行器运行模式（M4-06）：Unattended 时 ask→检查点/deny；Interactive 时 ask→deny；
+// 非法值回落 Unattended。
+func NewGitExecutor(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) (executor.Executor, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
@@ -66,7 +68,7 @@ func NewGitExecutor(workdir string, auditor executor.Auditor, cp executor.Checkp
 	}
 	return executor.NewSafeExecutor(
 		host,
-		executor.NewDangerousCommandPolicy(executor.ModeUnattended),
+		executor.NewDangerousCommandPolicy(normalizeExecutorMode(mode)),
 		auditor,
 		nil, // 无人值守：ask 类命令不交交互确认
 		cp,  // 无人值守 ask → 生成人工检查点（nil 时退化 deny，M3-05）
@@ -247,11 +249,12 @@ func gitBranchTool(ex executor.Executor) tool.Tool {
 // workdir 必须存在（调用方负责创建，api 层按 workspace 本地目录传入），
 // 内部使用 NewGitExecutor 包装 SafeExecutor，禁止裸用 HostExecutor.Run。
 // auditor 为审计器（nil 回落日志审计）；传入 repo.NewDBAuditor 可使 git 命令落库审计（M3-01）。
-func NewGitTools(workdir string, auditor executor.Auditor, cp executor.Checkpointer) ([]tool.Tool, error) {
+// mode 为执行器运行模式（M4-06），语义同 NewGitExecutor。
+func NewGitTools(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) ([]tool.Tool, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
-	ex, err := NewGitExecutor(workdir, auditor, cp)
+	ex, err := NewGitExecutor(workdir, auditor, cp, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -269,12 +272,13 @@ func NewGitTools(workdir string, auditor executor.Auditor, cp executor.Checkpoin
 // （见 codeagent.NewCoder），二者不要重复装配以免工具名冲突。
 // auditor 为审计器（nil 回落日志审计）；传入 repo.NewDBAuditor 可使本次会话全部命令落库审计（M3-01）。
 // cp 为无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05），语义同 NewCodeAct。
-func NewCodeActWithGit(workdir string, auditor executor.Auditor, cp executor.Checkpointer) ([]tool.Tool, error) {
-	code, err := NewCodeAct(workdir, auditor, cp)
+// mode 为执行器运行模式（M4-06），语义同 NewCodeAct/NewGitTools。
+func NewCodeActWithGit(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) ([]tool.Tool, error) {
+	code, err := NewCodeAct(workdir, auditor, cp, mode)
 	if err != nil {
 		return nil, err
 	}
-	git, err := NewGitTools(workdir, auditor, cp)
+	git, err := NewGitTools(workdir, auditor, cp, mode)
 	if err != nil {
 		return nil, err
 	}

@@ -12,6 +12,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
 
@@ -85,7 +86,7 @@ func TestEngine_WithCodeActTools(t *testing.T) {
 	defer srv.Close()
 
 	workdir := t.TempDir()
-	tools, err := codectool.NewCodeAct(workdir, nil, nil)
+	tools, err := codectool.NewCodeAct(workdir, nil, nil, executor.ModeUnattended)
 	if err != nil {
 		t.Fatalf("NewCodeAct failed: %v", err)
 	}

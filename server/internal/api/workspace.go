@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
@@ -79,7 +80,7 @@ func CreateWorkspaceHandler(db *gorm.DB, workspaceRoot string) gin.HandlerFunc {
 		// 经 executor.SafeExecutor 执行（与 CodeAct 同款危险命令策略），禁止裸用 os/exec。
 		// checkpointer 传 nil（M3-05）：workspace 初始化属平台基础设施动作（git init 为 allow 类命令），
 		// 不应生成待人工审批的检查点。
-		if ex, gerr := codectool.NewGitExecutor(localPath, repo.NewDBAuditor(db, uid), nil); gerr == nil {
+		if ex, gerr := codectool.NewGitExecutor(localPath, repo.NewDBAuditor(db, uid), nil, executor.ModeUnattended); gerr == nil {
 			if _, ierr := codectool.GitInit(context.Background(), ex); ierr != nil {
 				log.Printf("[WARN] workspace %s 自动 git init 失败（已忽略）：%v", key, ierr)
 			}

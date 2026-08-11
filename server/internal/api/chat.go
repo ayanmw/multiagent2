@@ -48,24 +48,9 @@ func ChatHandler(gw *Gateway) gin.HandlerFunc {
 			sessionKey = repo.NewSessionKey()
 		}
 
-		// 预算护栏（M3-04）：在发起 LLM 调用前评估平台级预算，超限返回「预算耗尽，待恢复」。
-		budgetEv, berr := gw.EvaluateBudget(uid, sessionKey)
-		if berr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "预算评估失败"})
-			return
-		}
-		if budgetEv.Blocked {
-			writeBudgetBlockAudit(gw.DB(), uid, budgetEv)
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error":  "预算耗尽，待恢复",
-				"detail": "该用户/会话的平台级预算已用尽，请管理员提额后重试",
-				"scope":  budgetEv.Scope,
-				"used":   budgetEv.Used,
-				"max":    budgetEv.Max,
-			})
-			return
-		}
-
+		// 预算护栏（M3-04 / M4-06）已集中到 Gateway.prepareRun：发起 LLM 调用前统一评估，
+		// Web/SSE/定时/Webhook/恢复 Loop 全部 Channel 共用同一拦截；此处仅在返回后识别
+		// 预算耗尽错误并转换为 429 响应（审计已由 Gateway 写入）。
 		res, err := gw.Run(c.Request.Context(), Request{
 			Channel:      ChannelWeb,
 			UserID:       uid,
@@ -75,6 +60,17 @@ func ChatHandler(gw *Gateway) gin.HandlerFunc {
 			WorkspaceKey: req.WorkspaceKey,
 		})
 		if err != nil {
+			var be *BudgetExhaustedError
+			if errors.As(err, &be) {
+				c.JSON(http.StatusTooManyRequests, gin.H{
+					"error":  "预算耗尽，待恢复",
+					"detail": "该用户/会话的平台级预算已用尽，请管理员提额后重试",
+					"scope":  be.Eval.Scope,
+					"used":   be.Eval.Used,
+					"max":    be.Eval.Max,
+				})
+				return
+			}
 			c.JSON(http.StatusBadGateway, gin.H{"error": "调用模型失败", "detail": err.Error()})
 			return
 		}

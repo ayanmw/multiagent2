@@ -101,6 +101,11 @@ type Deps struct {
 	// 待前端审批（approve 执行 / reject 中止）。nil 时回退为直接 deny（与旧行为一致）。
 	// 与 Auditor 同源：请求级（chat/sse 的当前 uid）或 worker 级（taskrun 的 OwnerUserID）注入。
 	Checkpointer executor.Checkpointer
+	// ExecutorMode 是执行器运行模式（M4-06）：无人值守（Unattended）下 ask 危险命令
+	// 生成人工检查点排队、预算护栏全程生效、危险命令 deny 默认，使 24h 自主 Loop
+	// 无需人盯；Interactive 下 ask 直接 deny（有人值守调试会话，无同步确认通道）。
+	// 非法/零值由 codectool.normalizeExecutorMode 回落 Unattended（安全默认）。
+	ExecutorMode executor.Mode
 }
 
 // validate 校验依赖完整性。
@@ -120,13 +125,13 @@ func NewCoder(d Deps) (agent.Agent, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	tools, err := codectool.NewCodeAct(d.Workdir, d.Auditor, d.Checkpointer)
+	tools, err := codectool.NewCodeAct(d.Workdir, d.Auditor, d.Checkpointer, d.ExecutorMode)
 	if err != nil {
 		return nil, err
 	}
 	// M2-01：Coder 同时持有 Git 工具集（git_status/git_diff/git_commit/git_log/git_branch），
 	// 使其在完成代码改动后能显式提交到 workspace 的 git 仓库。
-	gitTools, gerr := codectool.NewGitTools(d.Workdir, d.Auditor, d.Checkpointer)
+	gitTools, gerr := codectool.NewGitTools(d.Workdir, d.Auditor, d.Checkpointer, d.ExecutorMode)
 	if gerr != nil {
 		return nil, gerr
 	}

@@ -221,15 +221,26 @@ func CodeActTools(workdir string, ex executor.Executor) []tool.Tool {
 	}
 }
 
+// normalizeExecutorMode 把入参 executor.Mode 归一到合法值；非法/零值回落 Unattended
+// （无人值守是 24h 自主平台的安全默认，见 M4-06）。
+func normalizeExecutorMode(mode executor.Mode) executor.Mode {
+	if mode == executor.ModeUnattended || mode == executor.ModeInteractive {
+		return mode
+	}
+	return executor.ModeUnattended
+}
+
 // NewCodeAct 构造一组经危险命令策略包装的 CodeAct 工具（M1-06 业务入口）。
 // workdir 必须存在（调用方负责创建，api 层按 WorkspaceRoot/<uid> 自动建）；
-// 内部使用 NewSafeExecutor(HostExecutor, 危险命令策略(无人值守), auditor, nil, cp)，
+// 内部使用 NewSafeExecutor(HostExecutor, 危险命令策略(mode), auditor, nil, cp)，
 // 禁止裸用 HostExecutor（见 LEARNINGS M1-05）。
 // auditor 为审计器：nil 时回落到日志审计（LogAuditor），不阻断命令执行；
 // 业务层在请求级/worker 级传入 repo.NewDBAuditor（M3-01 执行审计落库）。
 // cp 为无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05）：传入后命中 ask 的命令
 // 不再直接 deny，而是生成 checkpoint 并暂停；nil 时回退为直接 deny（与旧行为一致）。
-func NewCodeAct(workdir string, auditor executor.Auditor, cp executor.Checkpointer) ([]tool.Tool, error) {
+// mode 为执行器运行模式（M4-06）：Unattended 时 ask→检查点/deny（自主 Loop 安全默认）；
+// Interactive 时 ask→deny（有人值守调试会话）；非法值回落 Unattended。
+func NewCodeAct(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) ([]tool.Tool, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
@@ -242,7 +253,7 @@ func NewCodeAct(workdir string, auditor executor.Auditor, cp executor.Checkpoint
 	}
 	ex := executor.NewSafeExecutor(
 		host,
-		executor.NewDangerousCommandPolicy(executor.ModeUnattended),
+		executor.NewDangerousCommandPolicy(normalizeExecutorMode(mode)),
 		auditor,
 		nil, // 无人值守：ask 类命令不交交互确认
 		cp,  // 无人值守 ask → 生成人工检查点（nil 时退化 deny，M3-05）

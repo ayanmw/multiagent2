@@ -88,7 +88,10 @@ func (h *WorktreeHook) OnRunUpdate(ctx context.Context, run taskrunruntime.Run) 
 // OwnerUserID，经闭包解析模型 + 工作目录后构建 Coder 子代理。
 // 注意：worker Runner 的 AgentFactory 签名不含 UserID，因此从
 // agent.InvocationFromContext(ctx).Session.UserID 取（= OwnerUserID）。
-func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver) runner.AgentFactory {
+// executorMode 为 worker 子代理的执行器运行模式（M4-06）：后台任务本质上是无人值守场景，
+// 调用方应传入 executor.ModeUnattended（ask 危险命令生成人工检查点排队），保证 24h 自主
+// Loop 派生的子任务同样受护栏约束、命中 ask 时落检查点而非卡死或盲目放行。
+func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver, executorMode executor.Mode) runner.AgentFactory {
 	resolveModel := res.ResolveModel
 	resolveWorkdir := res.ResolveWorkdir
 	if resolveModel == nil {
@@ -141,6 +144,7 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver) 
 			Guardrail:    guardrail,
 			Auditor:      auditor,
 			Checkpointer: checkpointer,
+			ExecutorMode: executorMode,
 		})
 	}
 }

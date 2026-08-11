@@ -9,6 +9,7 @@ import (
 	"time"
 
 	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/skillrepo"
 )
 
@@ -22,6 +23,16 @@ const (
 	AgentModeSingle = "single"
 	// AgentModeTeam：子代理委托模式，根 Agent 为 Orchestrator，代码落地委托 Coder 子代理。
 	AgentModeTeam = "team"
+)
+
+// 运行时模式（env RUN_MODE，M4-06 无人值守 Loop 运行模式）。
+const (
+	// RunModeUnattended 无人值守：危险命令 deny 默认 + 命中 ask 生成人工检查点排队 +
+	// 预算护栏全程生效，使 24h 自主 Loop 无需人盯。这是 24h 自主平台的安全默认。
+	RunModeUnattended = "unattended"
+	// RunModeAttended 有人值守（可选）：用于有人实时值守的调试会话，危险命令 ask 直接 deny
+	// （无同步确认通道，回落 deny）。自主化 cron/webhook/恢复 Loop 不受此影响（强制无人值守）。
+	RunModeAttended = "attended"
 )
 
 // Config holds the application configuration.
@@ -77,6 +88,10 @@ type Config struct {
 	// 跨天恢复重试上限（M4-05）：单次进程重启对同一「未收敛运行」最多尝试续跑的次数，
 	// 超过后标记 failed 不再续跑，避免永远无法收敛的 Loop 在每次重启时无限续跑。
 	recoveryMaxAttempts int // 恢复重试上限（env RECOVERY_MAX_ATTEMPTS，默认 3）
+	// 运行时模式（M4-06）：env RUN_MODE，默认 unattended。无人值守下危险命令 deny 默认、
+	// 命中 ask 生成人工检查点排队、预算护栏全程生效，使 24h 自主 Loop 无需人盯；
+	// attended 仅用于有人实时值守的调试会话（危险命令 ask 直接 deny）。
+	runMode string
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -314,6 +329,13 @@ func Load() *Config {
 		cfg.recoveryMaxAttempts = DefaultRecoveryMaxAttempts
 	}
 
+	// 运行时模式（M4-06）：默认 unattended（24h 自主平台的安全默认）。
+	cfg.runMode = envOrDefault("RUN_MODE", RunModeUnattended)
+	if cfg.runMode != RunModeUnattended && cfg.runMode != RunModeAttended {
+		log.Printf("[WARN] RUN_MODE=%q 非法，使用默认 %q", cfg.runMode, RunModeUnattended)
+		cfg.runMode = RunModeUnattended
+	}
+
 	return cfg
 }
 
@@ -511,6 +533,34 @@ func (c *Config) RecoveryMaxAttempts() int {
 		return 3
 	}
 	return c.recoveryMaxAttempts
+}
+
+// RunModeString returns the configured runtime mode string (M4-06).
+// It falls back to RunModeUnattended when the config is nil.
+func (c *Config) RunModeString() string {
+	if c == nil {
+		return RunModeUnattended
+	}
+	return c.runMode
+}
+
+// IsUnattended reports whether the server runs in unattended mode (M4-06).
+// This is the default (and the safe default for a 24h autonomous platform):
+// dangerous commands default to deny, ask-level commands become queued
+// checkpoints, and budget guardrails stay active. Only an explicit
+// RUN_MODE=attended switches this off (for attended debugging sessions).
+func (c *Config) IsUnattended() bool {
+	return c == nil || c.runMode != RunModeAttended
+}
+
+// ExecutorMode maps the runtime mode to an executor.Mode (M4-06): unattended
+// → ModeUnattended (ask → checkpoint/deny), attended → ModeInteractive (ask →
+// deny, since there is no synchronous confirmation channel in the API flow).
+func (c *Config) ExecutorMode() executor.Mode {
+	if c.IsUnattended() {
+		return executor.ModeUnattended
+	}
+	return executor.ModeInteractive
 }
 
 func envOrDefault(key, fallback string) string {

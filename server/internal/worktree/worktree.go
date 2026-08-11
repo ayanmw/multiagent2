@@ -88,7 +88,7 @@ func (m *Manager) Create(ctx context.Context, repoDir, childSessionID string) (s
 
 	// auditor / checkpointer 均传 nil（M3-05）：worktree 管理属平台基础设施动作，
 	// 其 git 子命令不应生成待人工审批的检查点，否则会阻塞后台任务的隔离目录创建。
-	ex, err := codectool.NewGitExecutor(repoDir, nil, nil)
+	ex, err := codectool.NewGitExecutor(repoDir, nil, nil, executor.ModeUnattended)
 	if err != nil {
 		return "", err
 	}
@@ -124,7 +124,7 @@ func (m *Manager) Finalize(ctx context.Context, childSessionID, status string) s
 	m.mu.Unlock()
 
 	// 同 Create：平台基础设施动作，不挂 checkpointer（M3-05）。
-	ex, err := codectool.NewGitExecutor(entry.RepoDir, nil, nil)
+	ex, err := codectool.NewGitExecutor(entry.RepoDir, nil, nil, executor.ModeUnattended)
 	if err != nil {
 		return fmt.Sprintf("worktree: 构造执行器失败: %v", err)
 	}

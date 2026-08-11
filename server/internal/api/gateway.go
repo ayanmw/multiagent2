@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -65,6 +66,10 @@ type GatewayConfig struct {
 	ToolSearchEnabled  bool
 	ToolSearchProvider engine.ToolSearchProvider
 	CheckpointEnabled  bool
+	// ExecutorMode 是执行器运行模式（M4-06）：默认跟随 RUN_MODE 配置（unattended）。
+	// 自主化 Channel（cron/webhook/recover）由 Gateway 强制覆盖为无人值守，保证
+	// 无人盯守下 ask 危险命令落到检查点队列、预算护栏全程生效。
+	ExecutorMode executor.Mode
 }
 
 // Gateway 是所有对话/自主 Loop 的统一入口（M4-04）。
@@ -95,6 +100,36 @@ func (g *Gateway) EncKey() []byte { return g.cfg.EncKey }
 // EvaluateBudget 在发起 LLM 调用前评估平台级预算护栏（M3-04），供各 Channel 复用同一检查逻辑。
 func (g *Gateway) EvaluateBudget(uid uint, sessionKey string) (repo.BudgetEvaluation, error) {
 	return repo.EvaluateBudgets(g.cfg.DB, uid, sessionKey, "")
+}
+
+// ErrBudgetExhausted 是「平台级预算耗尽拦截」的哨兵错误（M3-04 / M4-06）。
+// 由 Gateway.prepareRun 在发起 LLM 调用前集中评估，使 Web/SSE/定时/Webhook/恢复
+// 全部 Channel 共用同一护栏；自主化无人值守 Loop 也不会绕过护栏烧预算。
+var ErrBudgetExhausted = errors.New("budget exhausted")
+
+// BudgetExhaustedError 携带预算评估明细的错误类型，便于 Channel handler 构造
+// 429 / SSE RUN_ERROR 响应（含 scope/used/max 信息）。
+type BudgetExhaustedError struct {
+	Eval repo.BudgetEvaluation
+}
+
+func (e *BudgetExhaustedError) Error() string   { return "预算耗尽，待恢复" }
+func (e *BudgetExhaustedError) Unwrap() error    { return ErrBudgetExhausted }
+
+// resolveExecutorMode 解析本次运行的执行器模式（M4-06）：自主化 Channel
+// （cron/webhook/recover）强制无人值守 —— 这些入口无人实时值守，ask 危险命令必须
+// 落到人工检查点队列排队，绝不允许交互确认（无人确认即卡死）；Web/CLI 等有人值守
+// Channel 跟随 RUN_MODE 配置（默认 unattended，安全默认）。
+func (g *Gateway) resolveExecutorMode(ch Channel) executor.Mode {
+	if ch == nil {
+		return g.cfg.ExecutorMode
+	}
+	switch ch.Kind() {
+	case ChannelCron.Kind(), ChannelWebhook.Kind(), ChannelRecover.Kind():
+		return executor.ModeUnattended
+	default:
+		return g.cfg.ExecutorMode
+	}
 }
 
 // allocateSessionKey 稳定分配 session_id：已有则沿用，否则生成新的。
@@ -167,6 +202,22 @@ type preparedRun struct {
 // 的共享前置流程，供 Run/Stream 复用（同一 Runner 落点）。sessionKey 必须已稳定分配。
 func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string) (*preparedRun, error) {
 	uid := req.UserID
+
+	// 预算护栏（M3-04 / M4-06）：在发起 LLM 调用前集中评估平台级预算，超时直接拦截。
+	// 集中在此处使 Web/SSE/定时/Webhook/恢复 Loop 全部 Channel 共用同一护栏，
+	// 自主化无人值守 Loop 也不会绕过护栏烧预算。拦截时写审计便于管理员追溯。
+	budgetEv, berr := repo.EvaluateBudgets(g.cfg.DB, uid, sessionKey, "")
+	if berr != nil {
+		return nil, fmt.Errorf("预算评估失败: %w", berr)
+	}
+	if budgetEv.Blocked {
+		writeBudgetBlockAudit(g.cfg.DB, uid, budgetEv)
+		return nil, &BudgetExhaustedError{Eval: budgetEv}
+	}
+
+	// 本次运行的执行器模式（M4-06）：自主化 Channel 强制无人值守，其余跟随 RUN_MODE 配置。
+	exMode := g.resolveExecutorMode(req.Channel)
+
 	m, p, err := resolveChatModel(g.cfg.DB, uid, req.ModelID)
 	if err != nil {
 		return nil, err
@@ -221,7 +272,7 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 	}
 	var tools []tool.Tool
 	if !team.EnableSubAgents {
-		t, tErr := codectool.NewCodeActWithGit(workdir, repo.NewDBAuditor(g.cfg.DB, uid), checkpointer)
+		t, tErr := codectool.NewCodeActWithGit(workdir, repo.NewDBAuditor(g.cfg.DB, uid), checkpointer, exMode)
 		if tErr != nil {
 			return nil, fmt.Errorf("构建代码执行工具失败: %w", tErr)
 		}
@@ -249,6 +300,7 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 		ToolSearchUserID:   uid,
 		Auditor:            repo.NewDBAuditor(g.cfg.DB, uid),
 		Checkpointer:       checkpointer,
+		ExecutorMode:       exMode,
 	})
 	if eErr != nil {
 		return nil, eErr

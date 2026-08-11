@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 )
 
 // seedReadOnlyWorkspace 在临时目录里铺一份小型「代码库」，供 grep / 只读工具测试使用。
@@ -64,7 +66,7 @@ func TestReadOnlyTools_OnlyReadAndGrep(t *testing.T) {
 // 一旦有人把 CodeAct 全量工具集当成只读集使用，构造期就会失败。
 func TestEnsureReadOnly_RejectsMutatingTool(t *testing.T) {
 	dir := t.TempDir()
-	all, err := NewCodeAct(dir, nil, nil)
+	all, err := NewCodeAct(dir, nil, nil, executor.ModeUnattended)
 	if err != nil {
 		t.Fatalf("NewCodeAct: %v", err)
 	}

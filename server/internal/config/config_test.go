@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 )
 
 func TestEngineTimeoutDefault(t *testing.T) {
@@ -81,5 +83,57 @@ func TestEnvOrDefaultBool(t *testing.T) {
 	os.Setenv("TEAM_REVIEWER_TEST", "not-a-bool")
 	if got := envOrDefaultBool("TEAM_REVIEWER_TEST", true); !got {
 		t.Fatal("非法值应回退默认值 true")
+	}
+}
+
+// TestRunModeDefaults 验证 M4-06 默认运行模式为无人值守（24h 自主平台的安全默认）：
+// nil 配置与未显式切换时，RunModeString=unattended、IsUnattended=true、ExecutorMode=Unattended。
+func TestRunModeDefaults(t *testing.T) {
+	// nil 配置：全部回落无人值守安全默认。
+	var nilCfg *Config
+	if nilCfg.RunModeString() != RunModeUnattended {
+		t.Fatalf("nil 配置 RunModeString 期望 %q，实际 %q", RunModeUnattended, nilCfg.RunModeString())
+	}
+	if !nilCfg.IsUnattended() {
+		t.Fatal("nil 配置应为无人值守")
+	}
+	if nilCfg.ExecutorMode() != executor.ModeUnattended {
+		t.Fatalf("nil 配置 ExecutorMode 期望 %v，实际 %v", executor.ModeUnattended, nilCfg.ExecutorMode())
+	}
+
+	// 显式为空 runMode（模拟 Load 未赋值前的零值）：RunModeString 返回原始空串，
+	// 但 IsUnattended/ExecutorMode 归一化到无人值守安全默认（Load 也会把空值补为 unattended）。
+	empty := &Config{}
+	if empty.RunModeString() != "" {
+		t.Fatalf("空 Config 的 RunModeString 应返回原始空串，实际 %q", empty.RunModeString())
+	}
+	if !empty.IsUnattended() {
+		t.Fatal("空 runMode 应归一化为无人值守")
+	}
+	if empty.ExecutorMode() != executor.ModeUnattended {
+		t.Fatalf("空 runMode ExecutorMode 期望 %v，实际 %v", executor.ModeUnattended, empty.ExecutorMode())
+	}
+}
+
+// TestRunModeAttended 验证显式 RUN_MODE=attended 时切换为有人值守模式。
+func TestRunModeAttended(t *testing.T) {
+	attended := &Config{runMode: RunModeAttended}
+	if attended.IsUnattended() {
+		t.Fatal("RUN_MODE=attended 时应为有人值守")
+	}
+	if attended.ExecutorMode() != executor.ModeInteractive {
+		t.Fatalf("attended ExecutorMode 期望 %v，实际 %v", executor.ModeInteractive, attended.ExecutorMode())
+	}
+}
+
+// TestRunModeInvalidFallsBack 验证非法 RUN_MODE 回落无人值守（绝不因误配把线上
+// 24h 自主循环切到非预期的 attended 行为）。
+func TestRunModeInvalidFallsBack(t *testing.T) {
+	bad := &Config{runMode: "bogus-mode"}
+	if !bad.IsUnattended() {
+		t.Fatal("非法 RUN_MODE 应回落无人值守")
+	}
+	if bad.ExecutorMode() != executor.ModeUnattended {
+		t.Fatalf("非法 RUN_MODE ExecutorMode 期望 %v，实际 %v", executor.ModeUnattended, bad.ExecutorMode())
 	}
 }

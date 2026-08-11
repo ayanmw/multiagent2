@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ayanmw/multiagent2/server/internal/config"
+	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -32,7 +33,7 @@ func newAPITestDB(t *testing.T) *repo.DB {
 // 给定 wsLocalDir 后，shell_exec 写入的文件应落在该目录下（M1-07 验收核心）。
 func TestBuildCodeActTools_WorkspaceDir(t *testing.T) {
 	dir := t.TempDir()
-	tools, err := buildCodeActTools("", 0, dir, nil, nil)
+	tools, err := buildCodeActTools("", 0, dir, nil, nil, executor.ModeUnattended)
 	if err != nil {
 		t.Fatalf("buildCodeActTools: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestBuildCodeActTools_WorkspaceDir(t *testing.T) {
 // TestBuildCodeActTools_DefaultFallback 验证 wsLocalDir 为空时回退到默认用户目录。
 func TestBuildCodeActTools_DefaultFallback(t *testing.T) {
 	root := t.TempDir()
-	tools, err := buildCodeActTools(root, 42, "", nil, nil)
+	tools, err := buildCodeActTools(root, 42, "", nil, nil, executor.ModeUnattended)
 	if err != nil {
 		t.Fatalf("buildCodeActTools: %v", err)
 	}

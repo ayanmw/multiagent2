@@ -20,7 +20,7 @@ func initRepo(t *testing.T, dir string) {
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# main\n"), 0o644); err != nil {
 		t.Fatalf("write readme: %v", err)
 	}
-	ex, err := codectool.NewGitExecutor(dir, nil, nil)
+	ex, err := codectool.NewGitExecutor(dir, nil, nil, executor.ModeUnattended)
 	if err != nil {
 		t.Fatalf("git executor: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestManager_CreateAndMerge(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wt, "hello.txt"), []byte("from worktree\n"), 0o644); err != nil {
 		t.Fatalf("write in worktree: %v", err)
 	}
-	wtEx, err := codectool.NewGitExecutor(wt, nil, nil)
+	wtEx, err := codectool.NewGitExecutor(wt, nil, nil, executor.ModeUnattended)
 	if err != nil {
 		t.Fatalf("wt executor: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestManager_CreateAndMerge(t *testing.T) {
 	}
 
 	// 临时分支应已被删除。
-	ex, _ := codectool.NewGitExecutor(repoDir, nil, nil)
+	ex, _ := codectool.NewGitExecutor(repoDir, nil, nil, executor.ModeUnattended)
 	branches, err := runGit(ctx, ex, "-C", repoDir, "branch", "--list")
 	if err != nil {
 		t.Fatalf("list branches: %v", err)
@@ -131,7 +131,7 @@ func TestManager_FinalizeFailureKeepsBranch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wt, "half.txt"), []byte("partial\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	wtEx, _ := codectool.NewGitExecutor(wt, nil, nil)
+	wtEx, _ := codectool.NewGitExecutor(wt, nil, nil, executor.ModeUnattended)
 	if _, err := codectool.GitCommit(ctx, wtEx, "partial work"); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestManager_FinalizeFailureKeepsBranch(t *testing.T) {
 		t.Fatal("失败任务不应 merge 进主分支")
 	}
 	// 临时分支应保留供复核。
-	ex, _ := codectool.NewGitExecutor(repoDir, nil, nil)
+	ex, _ := codectool.NewGitExecutor(repoDir, nil, nil, executor.ModeUnattended)
 	branches, err := runGit(ctx, ex, "-C", repoDir, "branch", "--list")
 	if err != nil {
 		t.Fatalf("list branches: %v", err)

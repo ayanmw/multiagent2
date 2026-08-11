@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -51,22 +52,9 @@ func StreamChatHandler(gw *Gateway) gin.HandlerFunc {
 		}
 		modelID := req.ModelID
 
-		// 预算护栏（M3-04）：超限则发 SSE 事件后返回。
-		budgetEv, berr := gw.EvaluateBudget(uid, sessionKey)
-		if berr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "预算评估失败"})
-			return
-		}
-		if budgetEv.Blocked {
-			writeBudgetBlockAudit(gw.DB(), uid, budgetEv)
-			c.Writer.Header().Set("Content-Type", "text/event-stream")
-			c.Writer.Header().Set("Cache-Control", "no-cache")
-			c.Writer.Header().Set("Connection", "keep-alive")
-			c.Writer.Header().Set("X-Accel-Buffering", "no")
-			writeSSEEvent(c, "RUN_ERROR", gin.H{"message": "预算耗尽，待恢复（该用户/会话的平台级预算已用尽，请管理员提额后重试）"})
-			writeSSEEvent(c, "RUN_FINISHED", gin.H{"threadId": sessionKey, "runId": "run-blocked"})
-			return
-		}
+		// 预算护栏（M3-04 / M4-06）已集中到 Gateway.prepareRun：发起 LLM 调用前统一评估，
+		// 全部 Channel 共用同一拦截。此处仅在 gw.Stream 返回后识别预算耗尽错误，
+		// 转换为 SSE RUN_ERROR + RUN_FINISHED（审计已由 Gateway 写入）。
 
 		// 准备 SSE 响应头。
 		c.Writer.Header().Set("Content-Type", "text/event-stream")
@@ -97,6 +85,13 @@ func StreamChatHandler(gw *Gateway) gin.HandlerFunc {
 			WorkspaceKey: req.WorkspaceKey,
 		}, emit)
 		if runErr != nil {
+			var be *BudgetExhaustedError
+			if errors.As(runErr, &be) {
+				// 预算耗尽：转换为明确的 RUN_ERROR + RUN_FINISHED（审计已由 Gateway 写入）。
+				emit("RUN_ERROR", gin.H{"message": "预算耗尽，待恢复（该用户/会话的平台级预算已用尽，请管理员提额后重试）"})
+				emit("RUN_FINISHED", gin.H{"threadId": sessionKey, "runId": "run-blocked"})
+				return
+			}
 			// 流式初始化失败（转换期错误已在 emit 内上报），此处补发 RUN_ERROR。
 			emit("RUN_ERROR", gin.H{"message": runErr.Error()})
 		}
