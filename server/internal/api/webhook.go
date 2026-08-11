@@ -135,6 +135,20 @@ func (h *WebhookHandler) Handle(c *gin.Context) {
 func (h *WebhookHandler) runLoop(a *model.Automation, sessionKey, clientIP string, eventSize int) {
 	defer h.running.Delete(a.ID)
 	now := time.Now()
+
+	// M4-05：记录本次自动化运行（status=running），供进程重启后「跨天恢复」扫描续跑。
+	// 建表失败（如测试库未迁移）时仅告警，不阻断本次运行（恢复能力降级）。
+	run := &model.AutomationRun{
+		AutomationID: a.ID,
+		UserID:       a.UserID,
+		SessionKey:   sessionKey,
+		Channel:      string(ChannelWebhook),
+		Status:       model.RunStatusRunning,
+	}
+	if cerr := repo.CreateAutomationRun(h.db, run); cerr != nil {
+		fmt.Printf("[WEBHOOK] automation %d 创建运行记录失败(恢复不可追踪): %v\n", a.ID, cerr)
+	}
+
 	err := h.runner.Run(context.Background(), a, sessionKey)
 
 	a.LastRun = &now
@@ -145,6 +159,12 @@ func (h *WebhookHandler) runLoop(a *model.Automation, sessionKey, clientIP strin
 
 	auditor := repo.NewDBAuditor(h.db, a.UserID)
 	if err != nil {
+		// M4-05：运行失败 → 标记 failed。
+		if run != nil && run.ID != 0 {
+			if merr := repo.MarkAutomationRunStatus(h.db, run.ID, model.RunStatusFailed, err.Error(), run.Attempts); merr != nil {
+				fmt.Printf("[WEBHOOK] automation %d 标记运行 failed 失败: %v\n", a.ID, merr)
+			}
+		}
 		auditor.Record(executor.AuditEntry{
 			Timestamp: now,
 			Command:   "webhook:" + a.Name,
@@ -155,6 +175,12 @@ func (h *WebhookHandler) runLoop(a *model.Automation, sessionKey, clientIP strin
 			Note:      "webhook",
 		})
 		return
+	}
+	// M4-05：Loop 收敛结束 → 标记运行 done。
+	if run != nil && run.ID != 0 {
+		if merr := repo.MarkAutomationRunStatus(h.db, run.ID, model.RunStatusDone, "", run.Attempts); merr != nil {
+			fmt.Printf("[WEBHOOK] automation %d 标记运行 done 失败: %v\n", a.ID, merr)
+		}
 	}
 	auditor.Record(executor.AuditEntry{
 		Timestamp: now,

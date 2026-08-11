@@ -423,6 +423,13 @@ func main() {
 	schedulerSvc := scheduler.New(db.DB, cronRunner)
 	go schedulerSvc.Start(context.Background())
 
+	// 跨天恢复（M4-05）：进程启动后扫描「未收敛 Goal Session」（automation_runs.status=running）
+	// 并续跑——重发恢复提示 + 经 StateEnforcer 回灌 PLAN/PROGRESS/LEARNINGS，复用与 cron/webhook
+	// 同一 Gateway（同一会话串行锁）以目标契约 TeamOverride 重建上下文续跑。与 M2-04 持久化
+	// session 协同（历史消息与子任务 transcript 跨重启保留）。后台执行，不阻塞启动；
+	// 恢复只针对「旧的中断会话」，不会与调度器新建的会话（新 session_key）冲突。
+	go api.RecoverUnfinishedRuns(context.Background(), db.DB, gw, schedTeam, cfg.RecoveryMaxAttempts(), log.Default())
+
 	// Webhook 外部事件入口（M4-03）：不挂鉴权中间件，完全靠 URL 中的 32B 令牌匹配
 	// Automation；命中后异步启动 Goal Loop（与 cron 调度器共用同一 Gateway）。
 	// 令牌校验 + 按 token 速率限制 + 防并发重入均在 handler 内完成。

@@ -155,6 +155,19 @@ func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 		return
 	}
 
+	// M4-05：记录本次自动化运行（status=running），供进程重启后「跨天恢复」扫描续跑。
+	// 建表失败（如测试库未迁移）时仅告警，不阻断本次运行（恢复能力降级）。
+	run := &model.AutomationRun{
+		AutomationID: a.ID,
+		UserID:       a.UserID,
+		SessionKey:   sessionKey,
+		Channel:      model.RunChannelCron,
+		Status:       model.RunStatusRunning,
+	}
+	if cerr := repo.CreateAutomationRun(s.DB, run); cerr != nil {
+		s.logger.Printf("[SCHED] automation %d 创建运行记录失败(恢复不可追踪): %v", a.ID, cerr)
+	}
+
 	// 失败重试：最多 MaxRetries 次（共 MaxRetries+1 次尝试）。
 	var runErr error
 	for attempt := 0; attempt <= s.MaxRetries; attempt++ {
@@ -175,6 +188,19 @@ func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 	now := s.Now()
 	if runErr == nil {
 		a.LastRun = &now
+		// M4-05：Loop 收敛结束（或被 fail-open 放行）→ 标记运行 done。
+		if run != nil && run.ID != 0 {
+			if merr := repo.MarkAutomationRunStatus(s.DB, run.ID, model.RunStatusDone, "", run.Attempts); merr != nil {
+				s.logger.Printf("[SCHED] automation %d 标记运行 done 失败: %v", a.ID, merr)
+			}
+		}
+	} else {
+		// M4-05：运行失败 → 标记 failed（供诊断与避免误判为「待恢复」）。
+		if run != nil && run.ID != 0 {
+			if merr := repo.MarkAutomationRunStatus(s.DB, run.ID, model.RunStatusFailed, runErr.Error(), run.Attempts); merr != nil {
+				s.logger.Printf("[SCHED] automation %d 标记运行 failed 失败: %v", a.ID, merr)
+			}
+		}
 	}
 	s.advanceNext(a, runErr == nil)
 }

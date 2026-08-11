@@ -74,6 +74,9 @@ type Config struct {
 	// Webhook 速率限制（M4-03）：外部事件入口防刷。按 token 维度、窗口内最多触发 limit 次。
 	webhookRateLimit  int           // 单个 webhook token 在窗口内的触发上限（env WEBHOOK_RATE_LIMIT，默认 10）
 	webhookRateWindow time.Duration // 速率限制窗口（env WEBHOOK_RATE_WINDOW_SECONDS，默认 60s）
+	// 跨天恢复重试上限（M4-05）：单次进程重启对同一「未收敛运行」最多尝试续跑的次数，
+	// 超过后标记 failed 不再续跑，避免永远无法收敛的 Loop 在每次重启时无限续跑。
+	recoveryMaxAttempts int // 恢复重试上限（env RECOVERY_MAX_ATTEMPTS，默认 3）
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -86,6 +89,11 @@ const DefaultGoalMaxNudges = 3
 // DefaultMaxPlanNudges 是 Plan-Execute 循环默认的最大拦截次数（M1-12）。
 // 超出后 fail-open 放行，避免模型不配合时把整轮 Run 卡死。
 const DefaultMaxPlanNudges = 3
+
+// DefaultRecoveryMaxAttempts 是单次跨重启恢复对同一「未收敛运行」的最大续跑尝试次数
+// （M4-05）。超过后标记 failed 不再续跑，避免永远无法收敛的 Loop 在每次重启时无限续跑。
+// 此处定义一份本地默认，避免 config 包反向依赖 api 包（api 已另有同名常量，二者互不冲突）。
+const DefaultRecoveryMaxAttempts = 3
 
 // 护栏熔断默认预算（M1-13）直接复用 codeagent 包定义，避免两处漂移：
 // 业务层默认以 codeagent.Default* 为准，config 仅做 env 注入入口。
@@ -299,6 +307,13 @@ func Load() *Config {
 	}
 	cfg.webhookRateWindow = time.Duration(wrs) * time.Second
 
+	// 跨天恢复重试上限（M4-05）：默认 3；取值非法时回落默认并打印告警。
+	cfg.recoveryMaxAttempts = envOrDefaultInt("RECOVERY_MAX_ATTEMPTS", DefaultRecoveryMaxAttempts)
+	if cfg.recoveryMaxAttempts <= 0 {
+		log.Printf("[WARN] RECOVERY_MAX_ATTEMPTS must be positive; using default %d", DefaultRecoveryMaxAttempts)
+		cfg.recoveryMaxAttempts = DefaultRecoveryMaxAttempts
+	}
+
 	return cfg
 }
 
@@ -485,6 +500,17 @@ func (c *Config) WebhookRateWindow() time.Duration {
 		return 60 * time.Second
 	}
 	return c.webhookRateWindow
+}
+
+// RecoveryMaxAttempts returns the per-restart retry budget for resuming an
+// unfinished automation run during cross-day recovery (M4-05). It falls back to
+// 3 when unset or invalid. Runs that keep failing past this budget are marked
+// failed so a never-converging loop is not resumed on every restart.
+func (c *Config) RecoveryMaxAttempts() int {
+	if c == nil || c.recoveryMaxAttempts <= 0 {
+		return 3
+	}
+	return c.recoveryMaxAttempts
 }
 
 func envOrDefault(key, fallback string) string {

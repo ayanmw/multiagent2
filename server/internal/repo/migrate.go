@@ -79,6 +79,7 @@ func baselineModels() []any {
 		&model.BudgetPolicy{},
 		&model.Checkpoint{},
 		&model.Automation{},
+		&model.AutomationRun{},
 	}
 }
 
@@ -121,6 +122,16 @@ func Migrations() []Migration {
 			// 必须排在 0003 之后：先加密搬运，再删源列。
 			Up: func(db *gorm.DB, _ MigrationContext) error {
 				return dropLegacyMCPPlaintextColumns(db)
+			},
+		},
+		{
+			Version: "0005",
+			Name:    "add_automation_runs",
+			// M4-05：新增 automation_runs 表，记录每次自动化 Loop 运行的生命周期
+			// （running/done/failed + attempts + channel），作为「跨重启恢复」的
+			// 唯一真相源（目标契约收敛状态原本只活在内存储存，重启即丢失）。
+			Up: func(db *gorm.DB, _ MigrationContext) error {
+				return db.AutoMigrate(&model.AutomationRun{})
 			},
 		},
 	}

@@ -43,6 +43,7 @@ const (
 	ChannelWebhook ChannelKind = "webhook" // 外部事件触发（M4-03）
 	ChannelCron    ChannelKind = "cron"    // 定时调度触发（M4-02）
 	ChannelIM      ChannelKind = "im"      // 预留：IM/邮件网关
+	ChannelRecover ChannelKind = "recover" // 进程重启后的跨天恢复续跑（M4-05）
 )
 
 // GatewayConfig 是 Gateway 运行所需的全部依赖（与 ChatHandler/StreamChatHandler/engineLoopRunner 对齐）。

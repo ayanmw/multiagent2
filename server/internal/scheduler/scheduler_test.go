@@ -26,7 +26,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 	if sqlDB, err := db.DB(); err == nil {
 		sqlDB.SetMaxOpenConns(1)
 	}
-	if err := db.AutoMigrate(&model.Automation{}, &model.Session{}, &model.Message{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.Automation{}, &model.Session{}, &model.Message{}, &model.AuditLog{}, &model.AutomationRun{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	return db
@@ -204,5 +204,86 @@ func TestScheduler_SkipsNotDue(t *testing.T) {
 	}
 	if mock.count() != 0 {
 		t.Fatalf("runner 不应被调用, 实际 %d", mock.count())
+	}
+}
+
+// TestScheduler_RecordsRunDone 验证 M4-05：运行成功收敛后写入 automation_runs(done)，
+// 供进程重启后「跨天恢复」扫描判定已结束（不误判为待恢复）。
+func TestScheduler_RecordsRunDone(t *testing.T) {
+	db := newTestDB(t)
+	base := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
+	a := &model.Automation{
+		UserID: 1, Name: "ok-loop", TriggerType: model.AutomationTriggerCron,
+		CronExpr: "*/1 * * * *", GoalPrompt: "g", Enabled: true,
+		NextRun: ptrTime(base.Add(-time.Minute)),
+	}
+	if err := repo.CreateAutomation(db, a); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockRunner{} // 成功
+	s := New(db, mock)
+	s.Now = func() time.Time { return base }
+	s.MaxRetries = 0
+	if ran := s.TickSync(context.Background()); ran != 1 {
+		t.Fatalf("应触发 1 个，ran=%d", ran)
+	}
+	// 注意：scheduler 测试库为 cache=shared 内存库，跨测试共享，故按本 automation 主键过滤，
+	// 而非按 user_id 统计（会混入其他测试的残留运行记录）。
+	var runs []model.AutomationRun
+	if err := db.Where("automation_id = ?", a.ID).Find(&runs).Error; err != nil {
+		t.Fatalf("查询运行记录: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("应写入 1 条运行记录，实际 %d", len(runs))
+	}
+	if runs[0].Status != model.RunStatusDone {
+		t.Fatalf("成功应标记 done，实际 %q", runs[0].Status)
+	}
+	if runs[0].Channel != model.RunChannelCron {
+		t.Fatalf("应由 cron 渠道触发，实际 %q", runs[0].Channel)
+	}
+	// 不应残留 running（否则会被恢复扫描误续跑）。
+	unfinished, err := repo.ListUnfinishedAutomationRuns(db)
+	if err != nil {
+		t.Fatalf("ListUnfinished: %v", err)
+	}
+	if len(unfinished) != 0 {
+		t.Fatalf("成功运行不应残留 running，剩余 %d", len(unfinished))
+	}
+}
+
+// TestScheduler_RecordsRunFailed 验证 M4-05：运行失败写入 automation_runs(failed)，
+// 避免恢复扫描将其当作「未收敛」在每次重启时无限续跑。
+func TestScheduler_RecordsRunFailed(t *testing.T) {
+	db := newTestDB(t)
+	base := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
+	a := &model.Automation{
+		UserID: 1, Name: "fail-loop", TriggerType: model.AutomationTriggerCron,
+		CronExpr: "*/1 * * * *", GoalPrompt: "g", Enabled: true,
+		NextRun: ptrTime(base.Add(-time.Minute)),
+	}
+	if err := repo.CreateAutomation(db, a); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockRunner{err: errors.New("boom")}
+	s := New(db, mock)
+	s.Now = func() time.Time { return base }
+	s.MaxRetries = 0
+	if ran := s.TickSync(context.Background()); ran != 1 {
+		t.Fatalf("失败也应触发 1 个，ran=%d", ran)
+	}
+	// 按本 automation 主键过滤（cache=shared 内存库跨测试共享，避免统计其他测试残留）。
+	var runs []model.AutomationRun
+	if err := db.Where("automation_id = ?", a.ID).Find(&runs).Error; err != nil {
+		t.Fatalf("查询运行记录: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("应写入 1 条运行记录，实际 %d", len(runs))
+	}
+	if runs[0].Status != model.RunStatusFailed {
+		t.Fatalf("失败应标记 failed，实际 %q", runs[0].Status)
+	}
+	if runs[0].Error == "" {
+		t.Fatal("失败记录应保留错误信息")
 	}
 }

@@ -122,7 +122,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | M4-02 | **Cron 调度器**：常驻 goroutine 加载启用的 Automation，按 cron 算 `next_run` 持久化；到点创建 Goal Session（带 goal_prompt）启动 Loop；失败重试 + 写审计 | ✅ | 设 `*/1 * * * *` 测试 Automation → 下一分钟自动建 session 跑 Loop → 产出结果；`next_run` 正确更新 | M4-01, M1-11, M1-16 |
 | M4-03 | **Webhook 入口**：`POST /api/webhooks/:token` 接收外部事件（GitHub Issue/PR、CI 状态等）→ 匹配 Automation webhook 规则 → 触发 Loop；token 校验 + 速率限制 | ✅ | curl 打 webhook → 对应 Automation 触发 Loop；非法 token 401 | M4-01 |
 | M4-04 | **Channel 层抽象**：统一入口（Web 对话 / CLI / Webhook / 定时）全部经 `Gateway`（稳定 `session_id` + 每会话串行锁）进同一 `Runner`；抽 `Channel` 接口便于扩展 IM/邮件 | ✅ | 同一 Goal 从不同 Channel 进入都走统一 Gateway 串行锁，不串会话 | M2, M4-02, M4-03 |
-| M4-05 | **跨天恢复**：进程重启/中断后，扫描「未收敛 Goal Session」（artifact 状态非 complete/blocked）→ 读 PLAN/PROGRESS/LEARNINGS → 重建上下文续跑；与 M2-04 持久化 session 协同 | ○ | 跑长 Loop 中途 kill 后端 → 重启 → 恢复任务自动续跑且接续已有进展（不重头） | M1-16, M2-04 |
+| M4-05 | **跨天恢复**：进程重启/中断后，扫描「未收敛 Goal Session」（artifact 状态非 complete/blocked）→ 读 PLAN/PROGRESS/LEARNINGS → 重建上下文续跑；与 M2-04 持久化 session 协同 | ✅ | 跑长 Loop 中途 kill 后端 → 重启 → 恢复任务自动续跑且接续已有进展（不重头） | M1-16, M2-04 |
 | M4-06 | **无人值守 Loop 运行模式**：配置 `Mode=Unattended`（SafeExecutor deny 默认 + 预算护栏 + 检查点排队）；长任务自动推进到 `complete/blocked` 才停，无需人盯 | ○ | 多步 Goal 在无人值守下自动跑完并产出 PR/报告；中途危险操作进检查点队列待批 | M3-04, M3-05, M4-04 |
 | M4-07 | **通知/结果回发（outbound）**：Loop 完成/暂停/需检查点时经 outbound 路由通知（站内信表 `notifications` + Webhook 回调占位 + 邮件占位）；前端通知中心 | ○ | Loop 完成 → 通知中心出现一条；webhook 目标收到回调（可用 mock） | M4-02 |
 | M4-08 | **自动化管理前端**：`AutomationView` 列表/创建（cron 表达式 / 事件规则 / goal prompt）/启用停用/运行历史；检查点审批列表（复用 M3-05） | ○ | 前端可建 cron Automation 并看到下次运行时间；运行历史可查 | M4-01, M4-07 |
