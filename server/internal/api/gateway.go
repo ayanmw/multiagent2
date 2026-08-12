@@ -289,6 +289,9 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 		}
 		tools = t
 	}
+	// M5-06：读取该用户的可优化指令覆盖（默认名为 "default" 的单代理指令）。
+	// 空字符串表示未配置 → 引擎回退内置 defaultInstruction，向后兼容。
+	instrOverride, _ := repo.GetInstructionContent(g.cfg.DB, uid, model.DefaultInstructionName)
 	eng, eErr := engine.New(engine.ModelConfig{
 		ModelID:            m.ModelID,
 		BaseURL:            p.BaseURL,
@@ -313,6 +316,7 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 		Auditor:            repo.NewDBAuditor(g.cfg.DB, uid),
 		Checkpointer:       checkpointer,
 		ExecutorMode:       exMode,
+		InstructionOverride: instrOverride,
 	})
 	if eErr != nil {
 		return nil, eErr

@@ -556,3 +556,8 @@
 - 验收达成：「建评估集 → 跑回归 → 出分数报告；模型/Prompt 改动前后分数可对比」。后端 `TestEvalDatasetCRUD`/`TestEvalCaseCRUD`/`TestEvalRunFlow` 覆盖 owner 隔离/级联/异步聚合；grader/service 共 10 例单测 PASS（纯 Go glebarez sqlite 免 gcc）。
 - 验证：CGO_ENABLED=0 `go build ./...` ✅ | `go vet ./...` ✅；`go test ./internal/eval/... ./internal/api/...` ✅；前端 `vue-tsc --noEmit` ✅ | `vite build` ✅（EvaluationView chunk 12.74 kB）；CLI `go build/vet` ✅。无密钥/本地路径/作者用户名泄漏。
 - 下一步：M5-06（promptiter 优化，依赖本任务）。
+
+## 2026-08-12 17:32 | M5-06 ✅
+- promptiter 优化（GEPA 反射式 Prompt/技能优化，M5 第六任务，依赖 M5-05）：后端 `internal/promptiter` 实现 GEPA 闭环（baseline 评估 → 定位弱项 score<阈值 → Reflector 反射生成改进指令 → 写回 Agent 指令/artifact → candidate 再评估 → 提升则 accept、否则 rollback）；`model.PromptIterRun`（运行记录，owner 隔离）+ `repo` CRUD；`engine.ModelConfig.InstructionOverride` + `singleInstruction` 抽取，单代理模式用优化后指令替换内置默认（空值回退向后兼容）；`api/gateway.go` 读用户 "default" 指令注入生产对话，使优化在生产生效；7 路由（optimize 202/异步 + runs 列表/详情/rollback + instructions 列表/详情/更新，RBAC promptiter|instructions read/write）；`role.go` 补 developer 全权 + viewer 只读；migrate 0011 建 promptiter_runs；`main.go` 接线 + 7 路由；CLI（cobra）新增 promptiter 子命令（optimize/runs/run/rollback/instructions/set，--instruction/--role/--repeats/--threshold/--wait/--timeout）。
+- 验证：`CGO_ENABLED=0 go build/vet` ✅；`go test ./internal/engine/... ./internal/api/... ./internal/promptiter/... ./cmd/server/...` ✅（optimize accept/rollback/no-improvement + 指令 CRUD + handler 503/202 等关键用例 PASS，纯 Go glebarez sqlite 免 gcc）；CLI `go build/vet` ✅。可测性设计：`Service.runnerFactory`/`Reflector` 可注入，mockRunner 按 override|input 表模拟「应用改进指令后输出变好」，避免真实 LLM 依赖。说明：team 模式指令常量在 codeagent 包、超出本任务范围，单代理（24h 自主 Loop 实际模式）已打通生产生效链路。
+- 下一步：M5-07（A2A 对外协议，○）。

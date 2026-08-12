@@ -87,6 +87,8 @@ func baselineModels() []any {
 		&model.EvalCase{},
 		&model.EvalRun{},
 		&model.EvalResult{},
+		&model.AgentInstruction{},
+		&model.PromptIterRun{},
 	}
 }
 
@@ -178,6 +180,25 @@ func Migrations() []Migration {
 			// 全部 owner-scoped（user_id 归属隔离），不依赖 AutoMigrate fallback。
 			Up: func(db *gorm.DB, _ MigrationContext) error {
 				return db.AutoMigrate(&model.EvalDataset{}, &model.EvalCase{}, &model.EvalRun{}, &model.EvalResult{})
+			},
+		},
+		{
+			Version: "0010",
+			Name:    "add_agent_instructions",
+			// M5-06：新增 agent_instructions 表（可优化的 Agent 系统提示词，owner-scoped）。
+			// promptiter 的 GEPA 反射式优化把改进后提示词写回此表，单代理对话经
+			// engine.ModelConfig.InstructionOverride 注入生效。
+			Up: func(db *gorm.DB, _ MigrationContext) error {
+				return db.AutoMigrate(&model.AgentInstruction{})
+			},
+		},
+		{
+			Version: "0011",
+			Name:    "add_promptiter_runs",
+			// M5-06：新增 promptiter_runs 表（GEPA 反射式优化运行记录，owner-scoped）。
+			// 落库 baseline/candidate 分数、优化前后指令全文与改进理由，支撑「可读、可回滚」。
+			Up: func(db *gorm.DB, _ MigrationContext) error {
+				return db.AutoMigrate(&model.PromptIterRun{})
 			},
 		},
 	}

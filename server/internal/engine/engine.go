@@ -31,6 +31,17 @@ import (
 const defaultInstruction = "你是一个有用的编程助手，基于 trpc-agent-go 运行。" +
 	"请用简洁、准确的中文回答用户的编程与技术问题；当需要使用工具时优先调用可用工具。"
 
+// singleInstruction 选择单代理模式使用的系统指令（M5-06）。
+// 配置 InstructionOverride 时整体替换为覆盖值（不叠加 skillCtx）；否则返回
+// 内置默认指令 + skillCtx。抽出为独立函数便于单测覆盖优先级逻辑。
+func singleInstruction(cfg ModelConfig, skillCtx string) string {
+	instr := defaultInstruction + skillCtx
+	if cfg.InstructionOverride != "" {
+		instr = cfg.InstructionOverride
+	}
+	return instr
+}
+
 // ModelConfig 描述一次对话所需的模型连接信息。
 // BaseURL 应为 OpenAI 兼容端点（含 /v1，例如 http://localhost:8080/v1）。
 type ModelConfig struct {
@@ -105,6 +116,11 @@ type ModelConfig struct {
 	// 无需人盯；Interactive 下 ask 直接 deny（有人值守调试会话）。经 codeagent.Deps
 	// 下传 Coder 子代理；单代理模式的工具由 api 层直接传入 NewCodeActWithGit。
 	ExecutorMode executor.Mode
+	// InstructionOverride 是「可优化并写回」的 Agent 系统提示词覆盖（M5-06 promptiter）。
+	// 非空时单代理模式用其值替换内置 defaultInstruction（不叠加 skillCtx），使 promptiter
+	// 的 GEPA 反射式优化能把改进后提示词注入生产对话；为空则回退内置默认，向后兼容。
+	// 仅对单代理模式生效（24h 自主 Loop 的实际模式）；Team 模式仍用 codeagent 包内常量。
+	InstructionOverride string
 }
 
 // KnowledgeRetriever 在对话前检索相关知识库内容并注入用户消息（M5-02）。
@@ -222,9 +238,13 @@ func New(cfg ModelConfig) (*Engine, error) {
 		// 单代理模式（默认 AGENT_MODE=single，也是 24h 循环的实际运行模式）：
 		// 同样必须挂载护栏熔断（M1-13）。否则无人值守循环在单代理模式下无任何
 		// LLM 调用/工具迭代上限，模型一旦陷入死循环会卡死整轮 Run。
+		// 单代理模式指令：默认用内置 defaultInstruction + skillCtx；若配置了
+		// InstructionOverride（M5-06 promptiter 写回的可优化提示词），则整体替换为
+		// 覆盖值（不叠加 skillCtx），使优化后的提示词在生产对话中生效。
+		instr := singleInstruction(cfg, skillCtx)
 		singleOpts := []llmagent.Option{
 			llmagent.WithModel(m),
-			llmagent.WithInstruction(defaultInstruction + skillCtx),
+			llmagent.WithInstruction(instr),
 			llmagent.WithTools(allTools),
 		}
 		if grdOpts := cfg.Guardrail.Options(); grdOpts != nil {

@@ -27,6 +27,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/eval"
 	"github.com/ayanmw/multiagent2/server/internal/evolution"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/promptiter"
 	"github.com/ayanmw/multiagent2/server/internal/knowledge"
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
@@ -233,6 +234,20 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 			protected.GET("/eval/runs", middleware.RequirePermission(db.DB, "evaluations", "read"), api.ListEvalRunsHandler(db.DB))
 			protected.GET("/eval/runs/:id", middleware.RequirePermission(db.DB, "evaluations", "read"), api.GetEvalRunHandler(db.DB))
 			protected.GET("/eval/runs/:id/results", middleware.RequirePermission(db.DB, "evaluations", "read"), api.ListEvalResultsHandler(db.DB))
+		}
+
+		// GEPA 反射式 Prompt 优化（M5-06）：异步触发优化 + 运行列表/详情 + 回滚；
+		// 以及可优化指令（AgentInstruction）的查看/手动编辑。读需 promptiter:read /
+		// instructions:read，写需 promptiter:write / instructions:write（RBAC）。
+		// PromptIterService 为 nil 时（测试套件未注入）跳过整组路由，不影响既有集成测试。
+		if api.PromptIterService() != nil {
+			protected.POST("/promptiter/optimize", middleware.RequirePermission(db.DB, "promptiter", "write"), api.OptimizePromptIterHandler(db.DB))
+			protected.GET("/promptiter/runs", middleware.RequirePermission(db.DB, "promptiter", "read"), api.ListPromptIterRunsHandler(db.DB))
+			protected.GET("/promptiter/runs/:id", middleware.RequirePermission(db.DB, "promptiter", "read"), api.GetPromptIterRunHandler(db.DB))
+			protected.POST("/promptiter/runs/:id/rollback", middleware.RequirePermission(db.DB, "promptiter", "write"), api.RollbackPromptIterHandler(db.DB))
+			protected.GET("/instructions", middleware.RequirePermission(db.DB, "instructions", "read"), api.ListInstructionsHandler(db.DB))
+			protected.GET("/instructions/:name", middleware.RequirePermission(db.DB, "instructions", "read"), api.GetInstructionHandler(db.DB))
+			protected.PUT("/instructions/:name", middleware.RequirePermission(db.DB, "instructions", "write"), api.UpdateInstructionHandler(db.DB))
 		}
 
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
@@ -586,6 +601,13 @@ func main() {
 	evalJudge := eval.NewLLMJudge(evalModelResolver, cfg.EngineTimeout())
 	evalSvc := eval.NewService(db.DB, evalModelResolver, evalRunner, evalJudge)
 	api.SetEvalService(evalSvc)
+
+	// GEPA 反射式 Prompt 优化（M5-06）：复用 eval 的模型解析器 + 裁判，反射器经同一
+	// 解析器调 LLM 产出改进指令；优化服务把改进后指令写回 AgentInstruction，生产对话
+	// 经 engine.ModelConfig.InstructionOverride 生效。
+	promptIterReflector := promptiter.NewEngineReflector(evalModelResolver, cfg.EngineTimeout())
+	promptIterSvc := promptiter.NewService(db.DB, evalModelResolver, evalJudge, promptIterReflector)
+	api.SetPromptIterService(promptIterSvc)
 
 	r := buildRouter(db, cfg, discoverer, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db, cfg.EncryptionKey), gw)
 
