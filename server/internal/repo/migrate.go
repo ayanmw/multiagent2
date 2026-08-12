@@ -81,6 +81,7 @@ func baselineModels() []any {
 		&model.Automation{},
 		&model.AutomationRun{},
 		&model.Notification{},
+		&model.KnowledgeBase{},
 	}
 }
 
@@ -142,6 +143,16 @@ func Migrations() []Migration {
 			// 自主化 Loop（cron/webhook/recover）完成/失败/需检查点时写入，前端通知中心消费。
 			Up: func(db *gorm.DB, _ MigrationContext) error {
 				return db.AutoMigrate(&model.Notification{})
+			},
+		},
+		{
+			Version: "0007",
+			Name:    "add_knowledge_bases",
+			// M5-02：新增 knowledge_bases 表（用户私有知识库元数据）。
+			// 实际切片向量存于独立的 kb_vectors 表（由 knowledge 包在构造时自管），
+			// 此处只持久化知识库的归属/名称/统计等元数据。
+			Up: func(db *gorm.DB, _ MigrationContext) error {
+				return db.AutoMigrate(&model.KnowledgeBase{})
 			},
 		},
 	}

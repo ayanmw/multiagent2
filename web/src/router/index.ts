@@ -57,6 +57,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '技能仓库', desc: '浏览与编辑技能（warm-start 注入）' },
       },
       {
+        path: 'knowledge',
+        name: 'knowledge',
+        component: () => import('@/views/KnowledgeView.vue'),
+        meta: { title: '知识库', desc: 'RAG 知识库：建库、上传/索引文档、检索并注入对话' },
+      },
+      {
         path: 'tasks',
         name: 'tasks',
         component: () => import('@/views/TaskCenterView.vue'),

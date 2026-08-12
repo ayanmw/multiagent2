@@ -68,6 +68,9 @@ type Config struct {
 	// 延迟工具箱（M2-06）：把 MCP 服务器工具经 tool_search/call_tool 双控制工具按需暴露给 Agent，
 	// 默认不把全部工具声明一次性灌进模型上下文，避免 token 随工具数线性膨胀。
 	toolSearchEnabled bool // 是否开启延迟工具箱（env TOOL_SEARCH_ENABLED，默认 true），M2-06
+	// 知识库 RAG 检索注入（M5-02）：env KNOWLEDGE_ENABLED（默认 true）。
+	// 开启后对话前检索用户知识库相关切片并前缀注入用户消息；关闭则不做检索注入。
+	knowledgeEnabled bool // 是否开启知识库检索注入（env KNOWLEDGE_ENABLED，默认 true），M5-02
 	// 平台级预算护栏总开关（M3-04）：env BUDGET_ENABLED（默认 true）。
 	// 关闭后所有预算检查直接放行（仅本地调试 / 紧急恢复用）；具体阈值由 DB 中的 BudgetPolicy 配置。
 	budgetEnabled bool // 是否开启预算护栏（env BUDGET_ENABLED，默认 true），M3-04
@@ -292,6 +295,10 @@ func Load() *Config {
 	// 避免上下文随工具数线性膨胀。TOOL_SEARCH_ENABLED=false 可关闭（纯调试 / 无 MCP 配置场景）。
 	cfg.toolSearchEnabled = envOrDefaultBool("TOOL_SEARCH_ENABLED", true)
 
+	// 知识库 RAG 检索注入（M5-02）：默认开启；对话前检索用户知识库相关切片前缀注入。
+	// KNOWLEDGE_ENABLED=false 可关闭（纯调试 / 无需知识库场景）。
+	cfg.knowledgeEnabled = envOrDefaultBool("KNOWLEDGE_ENABLED", true)
+
 	// 平台级预算护栏（M3-04）：默认开启；具体阈值由 DB 中的 BudgetPolicy 配置。
 	// BUDGET_ENABLED=false 可整体关闭拦截（紧急恢复 / 纯调试，非生产环境不建议）。
 	cfg.budgetEnabled = envOrDefaultBool("BUDGET_ENABLED", true)
@@ -479,6 +486,14 @@ func (c *Config) WorktreeIsolation() bool {
 // declaration into the context upfront.
 func (c *Config) ToolSearchEnabled() bool {
 	return c != nil && c.toolSearchEnabled
+}
+
+// KnowledgeEnabled reports whether the knowledge-base RAG injection (M5-02) is
+// turned on. When on, the engine retrieves related knowledge slices from the
+// user's knowledge bases before each chat turn and prepends them to the user
+// message. When off, no retrieval is performed.
+func (c *Config) KnowledgeEnabled() bool {
+	return c != nil && c.knowledgeEnabled
 }
 
 // BudgetEnabled reports whether the platform-level budget guardrail (M3-04) is

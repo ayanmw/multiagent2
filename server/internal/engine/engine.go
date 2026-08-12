@@ -88,6 +88,10 @@ type ModelConfig struct {
 	ToolSearchProvider ToolSearchProvider
 	// ToolSearchUserID 是当前对话归属用户，供 provider 做 owner 隔离（M2-02 MCP 配置按用户隔离）。
 	ToolSearchUserID uint
+	// KnowledgeRetriever 是可选的「对话前知识检索注入」（M5-02）。nil 时不检索、不做任何注入；
+	// 非空时引擎在发送用户消息前调用其 Retrieve 获取该用户全部知识库的相关内容，前缀注入用户消息，
+	// 丰富模型上下文（长度由 retriever 内部控长）。检索失败或无相关内容时安全跳过。
+	KnowledgeRetriever KnowledgeRetriever
 	// Auditor 是命令执行审计器（M3-01 执行审计落库）。nil 时回落日志审计（LogAuditor）。
 	// 经 codeagent.Deps 下传 Coder 子代理，使 team 模式下代码落地命令同样写入审计日志；
 	// 单代理模式的工具由 api 层直接以 DBAuditor 构造（见 chat.go/sse.go）。
@@ -101,6 +105,12 @@ type ModelConfig struct {
 	// 无需人盯；Interactive 下 ask 直接 deny（有人值守调试会话）。经 codeagent.Deps
 	// 下传 Coder 子代理；单代理模式的工具由 api 层直接传入 NewCodeActWithGit。
 	ExecutorMode executor.Mode
+}
+
+// KnowledgeRetriever 在对话前检索相关知识库内容并注入用户消息（M5-02）。
+// 返回 "" 表示无相关内容（引擎不注入，保持原消息）。任何错误由实现方自行降级（引擎忽略 error 并跳过）。
+type KnowledgeRetriever interface {
+	Retrieve(ctx context.Context, userID, query string) (string, error)
 }
 
 // ToolSearchProvider 在每次对话时按需构建延迟工具箱的回调（M2-06）。
@@ -263,6 +273,16 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 	// userID 透传真实用户标识（M2-04）：后台任务派生时 OwnerUserID 取自此值，
 	// 管控 API 据此做 owner 隔离；未注入时回退 "user"（兼容历史/测试调用）。
 	userID := userIDFromContext(ctx)
+
+	// 知识库检索注入（M5-02）：若配置了 KnowledgeRetriever，则在发送用户消息前
+	// 检索该用户全部知识库的相关内容，前缀注入用户消息（长度由 retriever 控长）。
+	// 检索失败或无相关内容时安全跳过，不影响主对话。
+	if e.cfg.KnowledgeRetriever != nil {
+		if kbCtx, rerr := e.cfg.KnowledgeRetriever.Retrieve(runCtx, userID, userMessage); rerr == nil && kbCtx != "" {
+			userMessage = kbCtx + "\n\n" + userMessage
+		}
+	}
+
 	ch, err := e.runner.Run(runCtx, userID, sessionID, model.NewUserMessage(userMessage), runOpts...)
 	if err != nil {
 		cancel()

@@ -510,3 +510,15 @@
 - 验证（端到端）：构建二进制后起 mock 后端（login + SSE 流），实测 `login` 存令牌 → `me`/`sessions`/`tasks` 正常列出 → `chat` 流式拼接「你好，我是GM-Agent的CLI回复。」且工具调用 `shell_exec` 正确显示在 stderr；另加 httptest 单测覆盖 SSE 帧解析/流式/错误路径，`go test ./...` 全 PASS。
 - 后端零改动（纯新增消费端模块）；`go build/vet/test` 全绿；`.gitignore` 增补 `tool/cli/gmctl(.exe)`。Commit: feat(M5-01): CLI 骨架（cobra+bubbletea 复用 REST+SSE）。
 - 下一步：M5-02（Knowledge RAG，依赖 M2）。
+
+### 2026-08-12 12:03 | M5-02 | ✅ Knowledge RAG（接入框架 knowledge 包 + 本地向量库 + 对话注入）
+- 后端 RAG 管线（复用框架 `knowledge` 包，绕开 `buildRouter`/`buildGateway` 签名变更以兼容 8 处测试）：
+  ① `internal/knowledge/manager.go`：`Manager{db, embedder}`，`IndexDocument`/`Search`/`RetrieveContext`(控长 4000 字)/`ListDocuments`/`DeleteDocument`/`DeleteKnowledge`，含 `chunkText`/`hardSplit`/`docID`/`isCode` 切片辅助；`DocInfo` 类型与 store 解耦。
+  ② `internal/knowledge/embed/local.go`：离线嵌入器（hashing trick + TF 加权 + L2 归一化，256 维，零依赖），编译期断言 `var _ embedder.Embedder = (*LocalEmbedder)(nil)`。
+  ③ `internal/knowledge/store/sqlite.go`：glebarez 纯 Go SQLite 向量库（`kb_id` 逻辑隔离，余弦检索，预留 PG/pgvector），`DeleteByFilter` 用 `vectorstore.WithDeleteAll(true)` variadic 选项。
+  ④ `internal/knowledge/source/static.go`：`StaticSource` 实现 `source.Source`（内存切片源，含 `MetaURI`/`MetaChunkIndex` 供框架 `resetDocumentID`）。
+- 引擎注入（可选 `KnowledgeRetriever` 接口，nil = no-op，不破坏既有引擎测试）：`engine.ModelConfig` 增 `KnowledgeRetriever`；`engine.Stream` 在发送用户消息前前缀注入检索内容；`api/gateway.go` 透传；`config` 增 `KNOWLEDGE_ENABLED`(默认 true)；`main.go` 建 `knowledgeRetrieverAdapter`（owner 隔离，仅查该用户知识库）。
+- 后端 CRUD API（`api/knowledge.go`，9 路由，RBAC `knowledge:read|write`，owner 隔离）：建/列/详情/改/删知识库 + 索引文档 + 列文档 + 删文档 + 检索；`model.KnowledgeBase` + `repo` owner-scoped CRUD + `role.go` 补 developer `knowledge:write`/viewer `knowledge:read`。
+- 前端：`web/src/api/knowledge.ts`（8 接口）+ `web/src/views/KnowledgeView.vue`（主从布局：左侧 KB 列表/新建编辑删除弹窗，右侧检索区 + 文档 NDataTable + 添加文档弹窗）+ 路由 `knowledge` + 菜单「知识库」。
+- 验证：CGO_ENABLED=0 `go build ./...` ✅ | `go vet ./...` ✅；`knowledge`/`embed`/`engine`/`config` 单测全 PASS；`TestKnowledgeAPI_FullLifecycle`（创建/owner 隔离/索引/检索/删文档/删库）PASS；前端 `vue-tsc --noEmit` ✅ + `vite build` ✅（KnowledgeView chunk 8.47 kB）。
+- 说明：依赖 M2 工作区/切片底座；对话时按 owner 检索注入，控长 4000 字；本地向量库满足「建库→索引→跨重启保留→检索」。下一步：M5-03（evolution 技能飞轮后端）。

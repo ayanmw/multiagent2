@@ -25,6 +25,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/knowledge"
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
 	"github.com/ayanmw/multiagent2/server/internal/model"
@@ -184,6 +185,18 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.PUT("/skills/:name", middleware.RequirePermission(db.DB, "skills", "write"), api.UpdateSkillHandler(cfg.SkillsRoot(), cfg.SkillsDataDir()))
 		protected.DELETE("/skills/:name", middleware.RequirePermission(db.DB, "skills", "write"), api.DeleteSkillHandler(cfg.SkillsRoot(), cfg.SkillsDataDir()))
 
+		// 知识库 RAG（M5-02）：用户归属的知识库 CRUD + 文档索引/检索（owner 隔离）。
+		// 读操作需 knowledge:read，写操作（建/更新/删/索引/删文档）需 knowledge:write（RBAC）。
+		protected.GET("/knowledge", middleware.RequirePermission(db.DB, "knowledge", "read"), api.ListKnowledgeBasesHandler(db.DB))
+		protected.POST("/knowledge", middleware.RequirePermission(db.DB, "knowledge", "write"), api.CreateKnowledgeBaseHandler(db.DB))
+		protected.GET("/knowledge/:id", middleware.RequirePermission(db.DB, "knowledge", "read"), api.GetKnowledgeBaseHandler(db.DB))
+		protected.PUT("/knowledge/:id", middleware.RequirePermission(db.DB, "knowledge", "write"), api.UpdateKnowledgeBaseHandler(db.DB))
+		protected.DELETE("/knowledge/:id", middleware.RequirePermission(db.DB, "knowledge", "write"), api.DeleteKnowledgeBaseHandler(db.DB))
+		protected.GET("/knowledge/:id/documents", middleware.RequirePermission(db.DB, "knowledge", "read"), api.ListKnowledgeDocumentsHandler(db.DB))
+		protected.POST("/knowledge/:id/documents", middleware.RequirePermission(db.DB, "knowledge", "write"), api.IndexDocumentHandler(db.DB))
+		protected.DELETE("/knowledge/:id/documents/:name", middleware.RequirePermission(db.DB, "knowledge", "write"), api.DeleteKnowledgeDocumentHandler(db.DB))
+		protected.POST("/knowledge/:id/search", middleware.RequirePermission(db.DB, "knowledge", "read"), api.SearchKnowledgeHandler(db.DB))
+
 		// 后台任务管控（M2-04）：列表/详情/取消/transcript，owner 隔离 + RBAC。
 		// 读操作需 taskruns:read，取消写操作需 taskruns:write。
 		protected.GET("/taskruns", middleware.RequirePermission(db.DB, "taskruns", "read"), api.ListTaskRunsHandler(taskRunController))
@@ -277,7 +290,28 @@ func buildGateway(db *repo.DB, cfg *config.Config, stateStore artifact.Store, en
 		ToolSearchProvider: toolSearchProvider,
 		CheckpointEnabled:  cfg.CheckpointEnabled(),
 		ExecutorMode:       cfg.ExecutorMode(), // M4-06：执行器运行模式（默认 unattended）
+		KnowledgeRetriever: buildKnowledgeRetriever(db, cfg),
 	})
+}
+
+// knowledgeRetrieverAdapter 把 knowledge.Manager 适配为 engine.KnowledgeRetriever（M5-02）：
+// 对话前检索该用户全部知识库的相关切片，拼接为注入文本（控长由 Manager 内部约束）。
+type knowledgeRetrieverAdapter struct {
+	mgr      *knowledge.Manager
+	maxChars int
+}
+
+func (a *knowledgeRetrieverAdapter) Retrieve(ctx context.Context, userID, query string) (string, error) {
+	return a.mgr.RetrieveContext(ctx, userID, query, a.maxChars)
+}
+
+// buildKnowledgeRetriever 按配置构造知识库检索注入器（M5-02）。KNOWLEDGE_ENABLED=false 时返回 nil，
+// 引擎不做任何检索注入；开启时返回包装 knowledge.Manager 的适配器。
+func buildKnowledgeRetriever(db *repo.DB, cfg *config.Config) engine.KnowledgeRetriever {
+	if !cfg.KnowledgeEnabled() {
+		return nil
+	}
+	return &knowledgeRetrieverAdapter{mgr: knowledge.NewManager(db.DB), maxChars: 4000}
 }
 
 func main() {

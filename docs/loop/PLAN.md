@@ -138,7 +138,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | # | 任务 | 状态 | 验证标准 | 依赖 |
 |---|------|------|----------|------|
 | M5-01 | **CLI 骨架**：Go CLI（cobra + bubbletea）登录/对话/查看会话/查看任务，复用 REST+SSE API；两端共用协议 | ✅ | `cli chat` 能登录并对同一后端发消息拿到流式回复；`cli sessions` 列出会话 | M3 |
-| M5-02 | **Knowledge RAG**：接入框架 `knowledge` 包（源加载→切片→向量化→检索）；`model.KnowledgeBase` + CRUD API + 前端管理；对话时按 workspace/关键词检索注入上下文（控长） | ○ | 建知识库 → 上传/索引文档 → 新会话检索到相关内容并注入；向量库先用本地（sqlite/bolt），留 PG/pgvector 升级位 | M2 |
+| M5-02 | **Knowledge RAG**：接入框架 `knowledge` 包（源加载→切片→向量化→检索）；`model.KnowledgeBase` + CRUD API + 前端管理；对话时按 workspace/关键词检索注入上下文（控长） | ✅ | 建知识库 → 上传/索引文档 → 新会话检索到相关内容并注入；向量库先用本地（sqlite/bolt），留 PG/pgvector 升级位 | M2 |
 | M5-03 | **evolution 技能飞轮（后端）**：后台异步扫描已结束 session transcript → LLM 提取候选 `SKILL.md`（name/描述/步骤）→ 质量门控（长度/结构/去重）→ 写 `skill_candidates` 待审批；不自动发布 | ○ | 跑完典型任务 → evolution 扫描 → 生成一条候选技能；质量门控拦截空泛候选 | M4, M2-03 |
 | M5-04 | **evolution 前端 + 审批发布**：`EvolutionView` 候选列表/预览/审批（approve→发布为托管技能进 `skills/` 共享库；reject→丢弃）；发布后自动进入 warm-start 复用 | ○ | 前端审批一条候选 → 技能进共享库 → 新会话可 warm-start 命中；与 M2-03 衔接 | M5-03, M2-03 |
 | M5-05 | **evaluation 回归**：评估集管理（case：prompt/输入/期望/评分器）API + 运行（多次跑取稳定分）；指标（精确/召回/自定义 LLM 评分）；CLI/API 触发回归 | ○ | 建评估集 → 跑回归 → 出分数报告；模型/Prompt 改动前后分数可对比 | M4 |

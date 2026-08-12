@@ -70,6 +70,11 @@ const menuOptions: MenuOption[] = [
     icon: svgIcon('M12 2l2.4 7.4H22l-6 4.4 2.3 7.2-6.3-4.6L5.7 21l2.3-7.2-6-4.4h7.6z'),
   },
   {
+    label: '知识库',
+    key: 'knowledge',
+    icon: svgIcon('M12 3C6.48 3 2 6.02 2 9.65c0 2.3 1.37 4.34 3.5 5.62V21l3.2-1.76c.74.16 1.52.26 2.3.26.39 0 .77-.02 1.15-.06C13.16 20.9 18 18.2 18 13.2V9.65C18 6.02 13.52 3 12 3zm-1 11H8v-2h3v2zm5 0h-3v-2h3v2zm0-4H8V8h8v2z'),
+  },
+  {
     label: '任务中心',
     key: 'tasks',
     icon: svgIcon('M3 5h18v4H3zm0 6h18v4H3zm0 6h18v2H3z'),

@@ -73,6 +73,9 @@ type GatewayConfig struct {
 	ExecutorMode executor.Mode
 	// Notifier 是运行结果/检查点通知出口（M4-07，可空：nil 时不发通知）。
 	Notifier notify.Notifier
+	// KnowledgeRetriever 是可选的「对话前知识检索注入」（M5-02，可空：nil 时不检索）。
+	// 非空时在每次对话前检索该用户知识库的相关切片并前缀注入用户消息。
+	KnowledgeRetriever engine.KnowledgeRetriever
 }
 
 // Gateway 是所有对话/自主 Loop 的统一入口（M4-04）。
@@ -306,6 +309,7 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 		ToolSearchEnabled:  g.cfg.ToolSearchEnabled,
 		ToolSearchProvider: g.cfg.ToolSearchProvider,
 		ToolSearchUserID:   uid,
+		KnowledgeRetriever: g.cfg.KnowledgeRetriever,
 		Auditor:            repo.NewDBAuditor(g.cfg.DB, uid),
 		Checkpointer:       checkpointer,
 		ExecutorMode:       exMode,
