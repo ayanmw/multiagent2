@@ -9,6 +9,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/evolution"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
+	"github.com/ayanmw/multiagent2/server/internal/skillrepo"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -141,9 +142,11 @@ type resolveSkillCandidateBody struct {
 // ResolveSkillCandidateHandler 处理 POST /api/skill-candidates/:id/resolve
 // （需 skill_candidates:write）。流转候选状态：approve→approved、reject→rejected。
 //
-// 注意（M5-03 范围）：本任务「不自动发布」——approve 仅把状态置为 approved，
-// 真正的「发布为托管技能进共享库」由 M5-04 审批前端完成。此处只闭环数据态。
-func ResolveSkillCandidateHandler(db *gorm.DB) gin.HandlerFunc {
+// M5-04 语义：approve 不仅把状态置为 approved，还会把候选的 body「发布」为托管技能
+// 写进共享技能库（sharedRoot/<name>/SKILL.md），随后自动被 M2-03 的 warm-start 扫描
+// 命中并注入对话（无需额外配置）；reject 仅置 rejected 并填写拒绝原因，不落盘。
+// 发布失败（如共享根未配置）返回 500，且不翻转数据态，保证「发布成功才算批准」。
+func ResolveSkillCandidateHandler(db *gorm.DB, sharedRoot string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -170,7 +173,24 @@ func ResolveSkillCandidateHandler(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "decision 必须为 approve 或 reject"})
 			return
 		}
-		cand, err := repo.UpdateSkillCandidateStatus(db, uint(id), uid, status, body.RejectReason)
+		// 取候选（owner 隔离）：approve 前先拿 name/body，发布失败则不翻转数据态。
+		cand, gerr := repo.GetSkillCandidate(db, uint(id), uid)
+		if gerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load candidate"})
+			return
+		}
+		if cand == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "skill candidate not found"})
+			return
+		}
+		if status == model.SkillCandidateApproved {
+			mgr := skillrepo.NewManager(sharedRoot, "")
+			if perr := mgr.PublishShared(cand.Name, cand.Body); perr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "发布为托管技能失败", "detail": perr.Error()})
+				return
+			}
+		}
+		cand, err = repo.UpdateSkillCandidateStatus(db, uint(id), uid, status, body.RejectReason)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve candidate"})
 			return

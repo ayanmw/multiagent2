@@ -211,7 +211,7 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		if api.EvolutionService() != nil {
 			protected.GET("/skill-candidates", middleware.RequirePermission(db.DB, "skill_candidates", "read"), api.ListSkillCandidatesHandler(db.DB))
 			protected.POST("/skill-candidates/scan", middleware.RequirePermission(db.DB, "skill_candidates", "write"), api.ScanSkillCandidatesHandler())
-			protected.POST("/skill-candidates/:id/resolve", middleware.RequirePermission(db.DB, "skill_candidates", "write"), api.ResolveSkillCandidateHandler(db.DB))
+			protected.POST("/skill-candidates/:id/resolve", middleware.RequirePermission(db.DB, "skill_candidates", "write"), api.ResolveSkillCandidateHandler(db.DB, cfg.SkillsRoot()))
 		}
 
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）

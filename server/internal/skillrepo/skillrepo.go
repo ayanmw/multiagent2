@@ -138,6 +138,25 @@ func (m *Manager) Get(uid, name string) (*Detail, error) {
 	return nil, fmt.Errorf("skill %q not found", name)
 }
 
+// PublishShared 把一份技能「发布」到共享技能库（只读、warm-start 可见）。
+//
+// 用于 evolution 飞轮审批通过后，把候选技能固化为托管技能（写 <sharedRoot>/<name>/SKILL.md）。
+// 已存在的同名共享技能会被覆盖（发布即替换，属于管理员的明确决策）；name 须合法
+// （仅 [A-Za-z0-9_-]，防路径穿越）；sharedRoot 未配置时返回错误。
+func (m *Manager) PublishShared(name, body string) error {
+	if !ValidSkillName(name) {
+		return fmt.Errorf("invalid skill name %q", name)
+	}
+	if m.sharedRoot == "" {
+		return fmt.Errorf("shared skills root not configured")
+	}
+	dir := filepath.Join(m.sharedRoot, sanitizeSegment(name))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, skill.SkillFile), []byte(body), 0o644)
+}
+
 // Create 在用户私有目录新建/覆盖技能。body 即 SKILL.md 全部内容（允许为空占位）。
 // 共享技能不可经 API 创建/覆盖（只读）。
 func (m *Manager) Create(uid, name, body string) error {

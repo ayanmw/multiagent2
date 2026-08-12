@@ -116,6 +116,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/AutomationView.vue'),
         meta: { title: '自动化管理', desc: '定时 / 事件触发的自主 Loop 任务：创建、启用停用、运行历史与检查点审批' },
       },
+      {
+        path: 'evolution',
+        name: 'evolution',
+        component: () => import('@/views/EvolutionView.vue'),
+        meta: { title: '进化飞轮', desc: '技能进化飞轮：扫描会话提取候选技能，审批后发布为托管技能并 warm-start 复用' },
+      },
     ],
   },
   // 兜底：未知路径回到首页（由守卫决定是否需要登录）。

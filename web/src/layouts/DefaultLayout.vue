@@ -123,6 +123,11 @@ const menuOptions: MenuOption[] = [
     key: 'automations',
     icon: svgIcon('M12 2l1 7h7l-5.5 4 2 7L12 15l-4.5 5 2-7L4 9h7z'),
   },
+  {
+    label: '进化飞轮',
+    key: 'evolution',
+    icon: svgIcon('M12 2a10 10 0 100 20 10 10 0 000-20zm0 4l2 5h5l-4 3 1.5 5L12 16l-4.5 3L9 14l-4-3h5z'),
+  },
 ]
 
 // 主题切换按钮图标：深色显示「太阳」(切回浅色)，浅色显示「月亮」(切到深色)。
