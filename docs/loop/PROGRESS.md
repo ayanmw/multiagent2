@@ -522,3 +522,17 @@
 - 前端：`web/src/api/knowledge.ts`（8 接口）+ `web/src/views/KnowledgeView.vue`（主从布局：左侧 KB 列表/新建编辑删除弹窗，右侧检索区 + 文档 NDataTable + 添加文档弹窗）+ 路由 `knowledge` + 菜单「知识库」。
 - 验证：CGO_ENABLED=0 `go build ./...` ✅ | `go vet ./...` ✅；`knowledge`/`embed`/`engine`/`config` 单测全 PASS；`TestKnowledgeAPI_FullLifecycle`（创建/owner 隔离/索引/检索/删文档/删库）PASS；前端 `vue-tsc --noEmit` ✅ + `vite build` ✅（KnowledgeView chunk 8.47 kB）。
 - 说明：依赖 M2 工作区/切片底座；对话时按 owner 检索注入，控长 4000 字；本地向量库满足「建库→索引→跨重启保留→检索」。下一步：M5-03（evolution 技能飞轮后端）。
+
+### 2026-08-12 13:15 | M5-03 | ✅ evolution 技能飞轮（后端，扫描 transcript 提取候选 SKILL 经质量门控落库）
+- 后端「越用越聪明」飞轮（M5 进化首个后端任务，依赖 M4 自主 Loop 产 transcript + M2-03 Skills 底座）：平台后台异步扫描已结束 session 的 transcript，经 LLM 提炼出候选 SKILL.md，经质量门控 + 双去重后写入 `skill_candidates`（pending），**不自动发布**（发布留 M5-04 审批前端）。
+- 分层与文件：
+  ① `internal/model/skill_candidate.go`：`SkillCandidate` 模型（owner 隔离 + `source_session_key`/`content_hash` 索引 + `status` pending/approved/rejected + 审计字段），`SkillCandidateStatus`/`ParseSkillCandidateStatus`/`Validate`。
+  ② `internal/repo/skillcandidate.go`：owner-scoped CRUD + `ExistsCandidateForSession`(去重①：跳过已提取会话) + `ExistsCandidateByHash`(去重②：跨会话内容去重) + `CountSkillCandidates`。
+  ③ `internal/repo/session_scan.go`：`ListSessionsAll` 全量遍历（扫描器跨用户）。
+  ④ `internal/evolution/quality.go`：纯函数质量门控（MinBodyLen=200/MaxBodyLen=8000/MinDescriptionLen=10/MaxNameLen=128 + nameRe `[A-Za-z0-9_-]` + 结构判定 `#`/步骤/列表 + 占位短语拦截 TODO/占位/待补充/lorem）+ `ContentHash`(sha256)。
+  ⑤ `internal/evolution/extractor.go`：`Extractor` 接口 + `LLMExtractor`（经 `engine.New`+`Chat` 调真实 LLM，`ErrNoSkill` 哨兵：无价值会话静默跳过）+ `parseExtraction`（兼容 NO_SKILL/代码围栏/夹带文字抠 JSON）。
+  ⑥ `internal/evolution/evolution.go`：`Service.Scan`（遍历会话→建 transcript→提取→质量门控→去重→落库，单会话错误不中断整体）+ `StartLoop`（ticker 默认 1h）。
+  ⑦ `internal/api/skill_candidate.go`：`evolutionSvc` 包级注入（`SetEvolutionService`/`EvolutionService`）+ 三路由 `GET /skill-candidates`(read)、`POST /skill-candidates/scan`(write)、`POST /skill-candidates/:id/resolve{approve,reject}`(write)；nil 守卫保证未注入时不挂载路由（既有集成测试无感）。
+  ⑧ 接线：`main.go` 注入 `evoModelResolver`（复用 ListEnabledModels+GetProviderByID+解密 → engine.ModelConfig）、`evoExtractor`、`evoSvc`，`cfg.EvolutionEnabled()` 时 `go evoSvc.StartLoop`；`model/role.go` 补 developer `skill_candidates:write` + viewer `skill_candidates:read`；`repo/migrate.go` 加 `0008 add_skill_candidates` AutoMigrate + baselineModels 注册；`config` 增 `EVOLUTION_ENABLED`(默认 true)/`EVOLUTION_INTERVAL_SECONDS`(默认 3600)。
+- 验证：CGO_ENABLED=0 `go build ./...` ✅ | `go vet ./...` ✅；`internal/evolution` 单测 `TestQualityGate`(6 例)/`TestContentHashStableAndDistinct`/`TestServiceScanCreatesCandidate`(含二次扫描去重)/`TestServiceScanNoSkillSkipped`/`TestServiceScanLowQualityRejected`/`TestServiceScanExtractorErrorCounts` 全 PASS（纯 Go glebarez sqlite，无 gcc）；`internal/api` 测试套件全 PASS。本轮修复三处真实缺陷：① extractor.go 提示词原始字符串内反引号提前闭合（语法错误）；② buildRouter 在 cmd/server 包无法直接引用 api 包未导出 `evolutionSvc`（补充导出 `api.EvolutionService()`）；③ `p.Protocol`（model.ProviderProtocol）赋给 engine.ModelConfig.Protocol(string) 需显式 `string()` 转换；另修正测试：内存库 DSN 改为每测试唯一（cache=shared 固定名跨测试串扰）+ 扩写「合格候选」body 至 ≥200 字满足质量门控下限。
+- 下一步：M5-04（evolution 前端 + 审批发布，依赖本任务 + M2-03）。

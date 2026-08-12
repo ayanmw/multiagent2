@@ -82,6 +82,7 @@ func baselineModels() []any {
 		&model.AutomationRun{},
 		&model.Notification{},
 		&model.KnowledgeBase{},
+		&model.SkillCandidate{},
 	}
 }
 
@@ -153,6 +154,16 @@ func Migrations() []Migration {
 			// 此处只持久化知识库的归属/名称/统计等元数据。
 			Up: func(db *gorm.DB, _ MigrationContext) error {
 				return db.AutoMigrate(&model.KnowledgeBase{})
+			},
+		},
+		{
+			Version: "0008",
+			Name:    "add_skill_candidates",
+			// M5-03：新增 skill_candidates 表（进化技能飞轮产出的候选技能）。
+			// 后台扫描 session transcript → LLM 提取候选 SKILL.md → 质量门控 →
+			// 落库 pending，等待人工审批（M5-04）后发布为托管技能。
+			Up: func(db *gorm.DB, _ MigrationContext) error {
+				return db.AutoMigrate(&model.SkillCandidate{})
 			},
 		},
 	}

@@ -98,6 +98,11 @@ type Config struct {
 	// 命中 ask 生成人工检查点排队、预算护栏全程生效，使 24h 自主 Loop 无需人盯；
 	// attended 仅用于有人实时值守的调试会话（危险命令 ask 直接 deny）。
 	runMode string
+	// 技能进化飞轮（M5-03）：env EVOLUTION_ENABLED（默认 true）控制是否启动后台扫描
+	// goroutine（遍历会话 → LLM 提取候选技能 → 质量门控 → 落库待审批）。
+	// EVOLUTION_INTERVAL_SECONDS（默认 3600）为扫描周期。
+	evolutionEnabled  bool
+	evolutionInterval time.Duration
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -349,6 +354,16 @@ func Load() *Config {
 		cfg.runMode = RunModeUnattended
 	}
 
+	// 技能进化飞轮（M5-03）：默认开启后台扫描；EVOLUTION_ENABLED=false 关闭（纯调试 /
+	// 不希望后台消耗 LLM 配额时）。扫描周期默认 3600s，非法取值回落默认。
+	cfg.evolutionEnabled = envOrDefaultBool("EVOLUTION_ENABLED", true)
+	evoInterval := envOrDefaultInt("EVOLUTION_INTERVAL_SECONDS", 3600)
+	if evoInterval <= 0 {
+		log.Printf("[WARN] EVOLUTION_INTERVAL_SECONDS must be positive; using default 3600")
+		evoInterval = 3600
+	}
+	cfg.evolutionInterval = time.Duration(evoInterval) * time.Second
+
 	return cfg
 }
 
@@ -573,6 +588,24 @@ func (c *Config) WebhookNotifyURL() string {
 		return ""
 	}
 	return c.webhookNotifyURL
+}
+
+// EvolutionEnabled reports whether the background skill-evolution scanner (M5-03)
+// is turned on. When on, the server periodically scans finished sessions, extracts
+// candidate skills via LLM, applies the quality gate, and persists them as pending
+// candidates for human approval. When off, no background scan runs (you can still
+// trigger a scan manually via POST /api/skill-candidates/scan).
+func (c *Config) EvolutionEnabled() bool {
+	return c != nil && c.evolutionEnabled
+}
+
+// EvolutionInterval returns the period between background evolution scans (M5-03).
+// It falls back to one hour when unset or invalid.
+func (c *Config) EvolutionInterval() time.Duration {
+	if c == nil || c.evolutionInterval <= 0 {
+		return time.Hour
+	}
+	return c.evolutionInterval
 }
 
 // IsUnattended reports whether the server runs in unattended mode (M4-06).

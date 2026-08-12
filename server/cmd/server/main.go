@@ -24,6 +24,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/config"
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
+	"github.com/ayanmw/multiagent2/server/internal/evolution"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/knowledge"
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
@@ -203,6 +204,15 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.GET("/taskruns/:id", middleware.RequirePermission(db.DB, "taskruns", "read"), api.GetTaskRunHandler(taskRunController))
 		protected.POST("/taskruns/:id/cancel", middleware.RequirePermission(db.DB, "taskruns", "write"), api.CancelTaskRunHandler(taskRunController))
 		protected.GET("/taskruns/:id/transcript", middleware.RequirePermission(db.DB, "taskruns", "read"), api.GetTaskRunTranscriptHandler(taskRunController, taskRunSession))
+
+		// 技能进化飞轮（M5-03）：候选技能列表（owner 隔离，需 skill_candidates:read）；
+		// 触发扫描（需 skill_candidates:write）；审批流转 approve/reject（需 skill_candidates:write）。
+		// evolutionSvc 为 nil 时（测试套件未注入）跳过整组路由，不影响既有集成测试。
+		if api.EvolutionService() != nil {
+			protected.GET("/skill-candidates", middleware.RequirePermission(db.DB, "skill_candidates", "read"), api.ListSkillCandidatesHandler(db.DB))
+			protected.POST("/skill-candidates/scan", middleware.RequirePermission(db.DB, "skill_candidates", "write"), api.ScanSkillCandidatesHandler())
+			protected.POST("/skill-candidates/:id/resolve", middleware.RequirePermission(db.DB, "skill_candidates", "write"), api.ResolveSkillCandidateHandler(db.DB))
+		}
 
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
 		// M1-08：AGENT_MODE=team 时根 Agent 换成 Orchestrator，代码落地委托 Coder 子代理。
@@ -447,6 +457,56 @@ func main() {
 	// 串行锁与同一套引擎构造（Team 取 Web 默认配置；自主化 Loop 通过 TeamOverride 强制
 	// 开启子代理 + 目标契约）。
 	gw := buildGateway(db, cfg, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db, cfg.EncryptionKey))
+
+	// 技能进化飞轮（M5-03）：后台异步扫描已结束 session 的 transcript，经 LLM 提取候选
+	// SKILL.md，质量门控 + 去重后写入 skill_candidates 表（pending），等待人工审批（M5-04）。
+	// 模型解析复用「默认启用模型 + Provider 解密」逻辑（与对话端点一致），按会话归属用户隔离。
+	evoModelResolver := func(ctx context.Context, userID uint) (engine.ModelConfig, error) {
+		list, lerr := repo.ListEnabledModels(db.DB, userID)
+		if lerr != nil {
+			return engine.ModelConfig{}, lerr
+		}
+		var m *model.Model
+		for i := range list {
+			if list[i].IsDefault {
+				m = &list[i]
+				break
+			}
+		}
+		if m == nil && len(list) > 0 {
+			m = &list[0]
+		}
+		if m == nil {
+			return engine.ModelConfig{}, fmt.Errorf("evolution: 用户 %d 无可用模型", userID)
+		}
+		p, perr := repo.GetProviderByID(db.DB, m.ProviderID)
+		if perr != nil {
+			return engine.ModelConfig{}, perr
+		}
+		if p.UserID != userID {
+			return engine.ModelConfig{}, fmt.Errorf("evolution: 无权限使用该 Provider")
+		}
+		apiKey := ""
+		if p.APIKeyEnc != "" {
+			if dec, derr := crypto.Decrypt(p.APIKeyEnc, cfg.EncryptionKey); derr == nil {
+				apiKey = dec
+			}
+		}
+		return engine.ModelConfig{
+			ModelID:  m.ModelID,
+			BaseURL:  p.BaseURL,
+			APIKey:   apiKey,
+			Protocol: string(p.Protocol),
+			Timeout:  cfg.EngineTimeout(),
+		}, nil
+	}
+	evoExtractor := evolution.NewLLMExtractor(evoModelResolver, cfg.EngineTimeout())
+	evoSvc := evolution.NewService(db.DB, evoExtractor)
+	api.SetEvolutionService(evoSvc)
+	if cfg.EvolutionEnabled() {
+		go evoSvc.StartLoop(context.Background(), cfg.EvolutionInterval())
+	}
+
 	r := buildRouter(db, cfg, discoverer, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db, cfg.EncryptionKey), gw)
 
 	// 自主化 cron 调度器（M4-02）：常驻扫描启用的 cron 自动化，到点创建 Goal Session 跑 Loop。
