@@ -122,6 +122,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/EvolutionView.vue'),
         meta: { title: '进化飞轮', desc: '技能进化飞轮：扫描会话提取候选技能，审批后发布为托管技能并 warm-start 复用' },
       },
+      {
+        path: 'evaluation',
+        name: 'evaluation',
+        component: () => import('@/views/EvaluationView.vue'),
+        meta: { title: '评估回归', desc: '评估集管理 + 回归运行（多次采样取稳定分）+ 精确/包含/LLM 评分，模型/Prompt 改动前后分数可对比' },
+      },
     ],
   },
   // 兜底：未知路径回到首页（由守卫决定是否需要登录）。

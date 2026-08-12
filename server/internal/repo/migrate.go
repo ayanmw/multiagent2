@@ -83,6 +83,10 @@ func baselineModels() []any {
 		&model.Notification{},
 		&model.KnowledgeBase{},
 		&model.SkillCandidate{},
+		&model.EvalDataset{},
+		&model.EvalCase{},
+		&model.EvalRun{},
+		&model.EvalResult{},
 	}
 }
 
@@ -164,6 +168,16 @@ func Migrations() []Migration {
 			// 落库 pending，等待人工审批（M5-04）后发布为托管技能。
 			Up: func(db *gorm.DB, _ MigrationContext) error {
 				return db.AutoMigrate(&model.SkillCandidate{})
+			},
+		},
+		{
+			Version: "0009",
+			Name:    "add_eval_tables",
+			// M5-05：新增评估回归四表（eval_datasets / eval_cases / eval_runs /
+			// eval_results）。一次模型/Prompt 改动后跑评估集对比「稳定分」判断退步。
+			// 全部 owner-scoped（user_id 归属隔离），不依赖 AutoMigrate fallback。
+			Up: func(db *gorm.DB, _ MigrationContext) error {
+				return db.AutoMigrate(&model.EvalDataset{}, &model.EvalCase{}, &model.EvalRun{}, &model.EvalResult{})
 			},
 		},
 	}

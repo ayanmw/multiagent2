@@ -541,3 +541,18 @@
 - evolution 飞轮审批闭环（M5 进化第四任务）。后端：① `internal/skillrepo/skillrepo.go` 新增 `PublishShared(name,body)`（写 `<sharedRoot>/<name>/SKILL.md`，复用 ValidSkillName 防穿越；已存在同名共享技能覆盖——发布即替换，属于管理员明确决策）；② `internal/api/skill_candidate.go` 的 `ResolveSkillCandidateHandler` 增 `sharedRoot` 形参，approve 时先把候选 body 发布进共享库、发布失败（500）不翻转数据态，reject 仅置 rejected 填原因、不落盘；③ `cmd/server/main.go` 路由补 `cfg.SkillsRoot()`。前端：④ `web/src/api/evolution.ts` 封装（list/scan/resolve）；⑤ `web/src/views/EvolutionView.vue`（状态筛选 + 扫描提取 + 候选表格 + 详情抽屉渲染 SKILL.md markdown + approve「批准发布」/reject「填写原因确认拒绝」）；⑥ `web/src/router/index.ts` 增 `evolution` 路由 + `DefaultLayout.vue` 增「进化飞轮」菜单。发布后候选技能即落在仓库 `skills/` 共享库，被 M2-03 warm-start 自动注入新会话，实现「越用越聪明」。
 - 验证：后端 `CGO_ENABLED=0 go build ./...` ✅ | `go vet ./...` ✅；新增 `skill_candidate_test.go` 3 例（approve→共享库落盘+状态 approved / reject→不落盘+状态 rejected / 越权 404，纯 Go glebarez sqlite 免 gcc）全 PASS；`internal/api`+`skillrepo`+`evolution` 测试套件全绿；前端 `vue-tsc --noEmit` ✅ | `vite build` ✅（EvolutionView chunk 6.67 kB）。无密钥/本地路径/作者用户名泄漏。
 - Commit 后将自动 push（post-commit hook）。下一步：M5-05（evaluation 回归，依赖 M4）。
+
+### 2026-08-12 16:40 | M5-05 | ✅ evaluation 回归（评估集管理 + 运行 + 分数报告 + CLI/API 触发）
+- 评估回归（M5 进化第五任务，依赖 M4）。后端：
+  ① `internal/model/eval.go`：四模型 `EvalDataset`/`EvalCase`/`EvalRun`/`EvalResult` + 评分器枚举 `GraderExact/GraderContains/GraderLLM` + `ParseGraderType` + 状态常 `EvalRunStatusRunning/Done/Failed`；`EvalCase.Model`→`ModelID`、`EvalRun.Model`→`ModelID`（规避 gorm.Model 内嵌重名 `Model` 字段）。
+  ② `internal/repo/eval.go`：owner-scoped CRUD + 哨兵 `ErrEvalDatasetNotFound/ErrEvalCaseNotFound/ErrEvalRunNotFound` + 级联删除；`GetEvalDatasetByName`/`ListEvalCases`/`ListEvalResults`。
+  ③ `internal/eval/grader.go`：纯函数 `Grade(grader,output,expected)`（exact 精确 / contains 大小写不敏感 / 其他 0）。
+  ④ `internal/eval/service.go`：`Service`（依赖 `CaseRunner`/`Judge`/`ModelResolver` 接口可注入 mock）+ `StartRun`（校验非空→建 running 记录→`go execute` 异步跑，context.Background 派生 + 30min 超时，请求断开仍跑完）+ `execute`（遍历用例×repeats→`runner.RunCase`→`GradeWithJudge`→写 `EvalResult`→聚合 ScoreAvg/PassRate 回写）→`GradeWithJudge`（非 llm 走 `Grade`，llm 走 `judge.Judge`）。「多次采样取稳定分」：EvalResult 每尝试一条，EvalRun 聚合。
+  ⑤ `internal/eval/llm.go`：`LLMRunner`（`engine.New`→`Chat`→`Close`，复用框架引擎封装）+ `LLMJudge`（buildJudgePrompt→Chat→parseJudgeScore 兼容 JSON/裸数字，0~1，≥0.5 通过）。
+  ⑥ `internal/api/eval.go`：包级 `evalSvc` 注入（`SetEvalService`/`EvalService`，nil 守卫跳过路由，与 evolution 同款）；13 路由（datasets CRUD/cases CRUD/run/runs/runs/:id/results，RBAC `evaluations:read|write`，owner 隔离）；视图 `StartedAt/FinishedAt` 为 `*string`。
+  ⑦ 接线：`model/role.go` 补 developer `evaluations:write`/viewer `evaluations:read`；`repo/migrate.go` baselineModels 注册四表 + `0009 add_eval_tables`；`cmd/server/main.go` `evalModelResolver`（按 modelID/ID 匹配→回退默认启用模型→Provider 解密）+ `evalRunner`/`evalJudge`/`evalSvc` 注入 + `buildRouter` 注册 13 路由（守卫）。
+- 前端：`web/src/api/eval.ts`（datasets/cases/runs/results 四区封装）+ `web/src/views/EvaluationView.vue`（评估集下拉+新建/编辑/删除弹窗；用例表格+增删改；运行面板 model/grader/repeats+异步触发轮询到 done；运行历史+逐条结果，分数/通过率透明可追溯）+ 路由 `evaluation` + 菜单「评估回归」。
+- CLI：`tool/cli` 新增 `eval` 子命令（list/cases/run/runs/results，复用 REST 客户端；`run --model/--grader/--repeats --wait` 阻塞到收敛并打印分数报告）。
+- 验收达成：「建评估集 → 跑回归 → 出分数报告；模型/Prompt 改动前后分数可对比」。后端 `TestEvalDatasetCRUD`/`TestEvalCaseCRUD`/`TestEvalRunFlow` 覆盖 owner 隔离/级联/异步聚合；grader/service 共 10 例单测 PASS（纯 Go glebarez sqlite 免 gcc）。
+- 验证：CGO_ENABLED=0 `go build ./...` ✅ | `go vet ./...` ✅；`go test ./internal/eval/... ./internal/api/...` ✅；前端 `vue-tsc --noEmit` ✅ | `vite build` ✅（EvaluationView chunk 12.74 kB）；CLI `go build/vet` ✅。无密钥/本地路径/作者用户名泄漏。
+- 下一步：M5-06（promptiter 优化，依赖本任务）。

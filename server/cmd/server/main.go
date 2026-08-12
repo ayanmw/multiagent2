@@ -24,6 +24,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/config"
 	"github.com/ayanmw/multiagent2/server/internal/crypto"
 	"github.com/ayanmw/multiagent2/server/internal/engine"
+	"github.com/ayanmw/multiagent2/server/internal/eval"
 	"github.com/ayanmw/multiagent2/server/internal/evolution"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/knowledge"
@@ -212,6 +213,26 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 			protected.GET("/skill-candidates", middleware.RequirePermission(db.DB, "skill_candidates", "read"), api.ListSkillCandidatesHandler(db.DB))
 			protected.POST("/skill-candidates/scan", middleware.RequirePermission(db.DB, "skill_candidates", "write"), api.ScanSkillCandidatesHandler())
 			protected.POST("/skill-candidates/:id/resolve", middleware.RequirePermission(db.DB, "skill_candidates", "write"), api.ResolveSkillCandidateHandler(db.DB, cfg.SkillsRoot()))
+		}
+
+		// 评估回归（M5-05）：评估集 owner-scoped CRUD + 用例 CRUD + 运行触发（异步）
+		// + 运行列表/详情 + 结果查看；读需 evaluations:read，写需 evaluations:write（RBAC）。
+		// evalSvc 为 nil 时（测试套件未注入）跳过整组路由，不影响既有集成测试。
+		if api.EvalService() != nil {
+			protected.GET("/eval/datasets", middleware.RequirePermission(db.DB, "evaluations", "read"), api.ListEvalDatasetsHandler(db.DB))
+			protected.POST("/eval/datasets", middleware.RequirePermission(db.DB, "evaluations", "write"), api.CreateEvalDatasetHandler(db.DB))
+			protected.GET("/eval/datasets/:id", middleware.RequirePermission(db.DB, "evaluations", "read"), api.GetEvalDatasetHandler(db.DB))
+			protected.PUT("/eval/datasets/:id", middleware.RequirePermission(db.DB, "evaluations", "write"), api.UpdateEvalDatasetHandler(db.DB))
+			protected.DELETE("/eval/datasets/:id", middleware.RequirePermission(db.DB, "evaluations", "write"), api.DeleteEvalDatasetHandler(db.DB))
+			protected.GET("/eval/datasets/:id/cases", middleware.RequirePermission(db.DB, "evaluations", "read"), api.ListEvalCasesHandler(db.DB))
+			protected.POST("/eval/datasets/:id/cases", middleware.RequirePermission(db.DB, "evaluations", "write"), api.CreateEvalCaseHandler(db.DB))
+			protected.GET("/eval/datasets/:id/cases/:caseId", middleware.RequirePermission(db.DB, "evaluations", "read"), api.GetEvalCaseHandler(db.DB))
+			protected.PUT("/eval/datasets/:id/cases/:caseId", middleware.RequirePermission(db.DB, "evaluations", "write"), api.UpdateEvalCaseHandler(db.DB))
+			protected.DELETE("/eval/datasets/:id/cases/:caseId", middleware.RequirePermission(db.DB, "evaluations", "write"), api.DeleteEvalCaseHandler(db.DB))
+			protected.POST("/eval/datasets/:id/run", middleware.RequirePermission(db.DB, "evaluations", "write"), api.RunEvalHandler(db.DB))
+			protected.GET("/eval/runs", middleware.RequirePermission(db.DB, "evaluations", "read"), api.ListEvalRunsHandler(db.DB))
+			protected.GET("/eval/runs/:id", middleware.RequirePermission(db.DB, "evaluations", "read"), api.GetEvalRunHandler(db.DB))
+			protected.GET("/eval/runs/:id/results", middleware.RequirePermission(db.DB, "evaluations", "read"), api.ListEvalResultsHandler(db.DB))
 		}
 
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
@@ -506,6 +527,65 @@ func main() {
 	if cfg.EvolutionEnabled() {
 		go evoSvc.StartLoop(context.Background(), cfg.EvolutionInterval())
 	}
+
+	// 评估回归（M5-05）：评估集管理 + 运行（多次采样取稳定分）+ LLM 裁判评分。
+	// 模型解析复用「默认启用模型 + Provider 解密」逻辑（与对话端点一致），并按
+	// 指定 modelID 解析（用例/运行级可覆盖使用的模型）。
+	evalModelResolver := func(ctx context.Context, userID uint, modelID string) (engine.ModelConfig, error) {
+		list, lerr := repo.ListEnabledModels(db.DB, userID)
+		if lerr != nil {
+			return engine.ModelConfig{}, lerr
+		}
+		var m *model.Model
+		if modelID != "" {
+			// 按 model id 或 model_id（上游模型名）精确匹配用户启用模型。
+			for i := range list {
+				if strconv.FormatUint(uint64(list[i].ID), 10) == modelID || list[i].ModelID == modelID {
+					m = &list[i]
+					break
+				}
+			}
+		}
+		// 未指定或匹配不到时回退「默认启用模型」。
+		if m == nil {
+			for i := range list {
+				if list[i].IsDefault {
+					m = &list[i]
+					break
+				}
+			}
+		}
+		if m == nil && len(list) > 0 {
+			m = &list[0]
+		}
+		if m == nil {
+			return engine.ModelConfig{}, fmt.Errorf("eval: 用户 %d 无可用模型", userID)
+		}
+		p, perr := repo.GetProviderByID(db.DB, m.ProviderID)
+		if perr != nil {
+			return engine.ModelConfig{}, perr
+		}
+		if p.UserID != userID {
+			return engine.ModelConfig{}, fmt.Errorf("eval: 无权限使用该 Provider")
+		}
+		apiKey := ""
+		if p.APIKeyEnc != "" {
+			if dec, derr := crypto.Decrypt(p.APIKeyEnc, cfg.EncryptionKey); derr == nil {
+				apiKey = dec
+			}
+		}
+		return engine.ModelConfig{
+			ModelID:  m.ModelID,
+			BaseURL:  p.BaseURL,
+			APIKey:   apiKey,
+			Protocol: string(p.Protocol),
+			Timeout:  cfg.EngineTimeout(),
+		}, nil
+	}
+	evalRunner := eval.NewLLMRunner(evalModelResolver, cfg.EngineTimeout())
+	evalJudge := eval.NewLLMJudge(evalModelResolver, cfg.EngineTimeout())
+	evalSvc := eval.NewService(db.DB, evalModelResolver, evalRunner, evalJudge)
+	api.SetEvalService(evalSvc)
 
 	r := buildRouter(db, cfg, discoverer, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db, cfg.EncryptionKey), gw)
 
