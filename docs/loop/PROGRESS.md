@@ -570,3 +570,12 @@
 - 新增 `cmd/server/a2a_integration_test.go` 3 例（复用 M3 E2E 基础设施 + `newM1HTTPMockLLM` 脚本化 LLM，不调真实 LLM）：① `TestA2A_SendTask_Success` 注册→建 Provider/默认模型→`message/send` 拿到 completed + agent 回复；② `TestA2A_MultiRound_Continuity` 同 task id 两轮，第二轮回复携带首轮上下文（证明跨轮记忆）；③ `TestA2A_InvalidRequest` 校验 jsonrpc/-32600、缺文本/-32602、方法/-32601。
 - 验证：CGO_ENABLED=0 `go build ./...` ✅ | `go vet ./...` ✅；`go test ./cmd/server/ -run TestA2A` 3 例全 PASS（纯 Go glebarez sqlite 免 gcc）；`go test ./...` 其余 25 包全绿；`internal/repo` 9 例历史 go-sqlite3 CGO 用例因 `CGO_ENABLED=0` 无 gcc 报 stub 失败，属环境限制且与本任务无关（未改动 repo 包）。Agent Card 即「前端连接配置」对外暴露能力（url/skills/auth），符合 M5-07「最小可用端点 + 连接配置」；出站 client UI（本平台作为 A2A client）可留作后续增强。
 - 下一步：M5-08（飞轮 × 回归联动，依赖 M5-04 + M5-05）。
+
+---
+
+### 2026-08-13 17:58 | M5-08 | ✅ 飞轮 × 回归联动——发布前回归门禁（依赖 M5-04 + M5-05）
+- 进化飞轮联动评估回归：候选技能审批发布时，先把技能「自动登记进评估集」（`skill:<name>` 评估集 + 1 条自测用例，幂等），试探性 `PublishShared` 后调用 `eval.Service.RunSync` 跑回归自测；回归未通过则 `RemoveShared` 回滚发布并返回 **409** 拦截、附 `detail`/`regression`/`hint` 提示修订 SKILL.md，避免「会破坏现有能力的技能」被发布进共享库；回归通过则照常翻转状态 + 落盘。
+- 分层实现：① `internal/regression`（新包，`Checker` 接口 `Register`+`Check` + 生产 `EvalChecker`，基于 `eval.Service`，`ResolverWithSkill` 把被测技能名注入 warm-start 关键词使自测真正命中该技能）；② `internal/eval/service.go` 新增 `RunSync` 同步运行（门禁需同步决策）+ `toResultPtrs` 适配值/指针切片；③ `internal/skillrepo` 新增 `RemoveShared` 供回滚；④ `internal/api/skill_candidate.go` approve 分支接入门禁（`regressionChecker` 为 nil 时退回 M5-04 旧行为，不影响既有测试）；⑤ `cmd/server/main.go` 装配 `regression.NewEvalChecker` 并经 `api.SetRegressionChecker` 注入。
+- 测试：① `regression_test.go::TestEvalChecker_Register_CreatesDatasetAndCase`（自动建集+用例、幂等）；② `eval/service_test.go` 增 RunSync 三例（Pass/Fail/EmptyDataset）；③ `api/regression_gate_test.go` 双向门禁（`_RegressionPass_GateAllowsPublish` 放行落盘 + `_RegressionBlock_GateRollback` 409 拦截且共享库回滚、DB 保持 pending）。
+- 验证：CGO_ENABLED=0 `go build ./...` ✅ | `go vet`（touched pkgs）✅；`go test ./internal/regression/... ./internal/eval/... ./internal/skillrepo/... ./internal/api/...` 全绿；`go test ./cmd/server/...` 集成测试全绿（10.6s，纯 Go glebarez sqlite 免 gcc）；`internal/repo` 历史 go-sqlite3 CGO 用例因无 gcc 跳过，与本任务无关。`regressionChecker` 经包级 `SetRegressionChecker` 注入，集成测试不设置故走旧行为，安全隔离。
+- Commit: d5be9d1（已推 origin/main）。下一步：M5-09（集成验证 E2E 进化，○，依赖 M5-01..08）。
