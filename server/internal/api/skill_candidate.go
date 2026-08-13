@@ -8,6 +8,7 @@ import (
 
 	"github.com/ayanmw/multiagent2/server/internal/evolution"
 	"github.com/ayanmw/multiagent2/server/internal/model"
+	"github.com/ayanmw/multiagent2/server/internal/regression"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/ayanmw/multiagent2/server/internal/skillrepo"
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,17 @@ func SetEvolutionService(s *evolution.Service) { evolutionSvc = s }
 
 // EvolutionService 返回已注入的进化服务（未注入时 nil）；供 main.go 判断是否挂载路由。
 func EvolutionService() *evolution.Service { return evolutionSvc }
+
+// regressionChecker 是「飞轮×回归联动」检查器（M5-08），由 main.go 在启动时注入。
+// 测试套件不调用 SetRegressionChecker，故为 nil —— 此时审批发布退回 M5-04 旧行为
+// （直接发布，不做回归门禁），不影响既有集成测试。
+var regressionChecker regression.Checker
+
+// SetRegressionChecker 注入回归检查器（main.go 启动时调用）。
+func SetRegressionChecker(c regression.Checker) { regressionChecker = c }
+
+// RegressionChecker 返回已注入的回归检查器（未注入时 nil）。
+func RegressionChecker() regression.Checker { return regressionChecker }
 
 // skillCandidateView 是候选技能的对外视图（不回显内部哈希细节以外的内容）。
 type skillCandidateView struct {
@@ -185,7 +197,37 @@ func ResolveSkillCandidateHandler(db *gorm.DB, sharedRoot string) gin.HandlerFun
 		}
 		if status == model.SkillCandidateApproved {
 			mgr := skillrepo.NewManager(sharedRoot, "")
-			if perr := mgr.PublishShared(cand.Name, cand.Body); perr != nil {
+			if regressionChecker != nil {
+				// M5-08 飞轮×回归联动：发布前先把候选技能登记进评估集（自动进 eval 集），
+				// 试探性发布后跑回归自测，不过则回滚并拦截发布、提示修订。
+				dsID, _, rerr := regressionChecker.Register(c.Request.Context(), uid, cand)
+				if rerr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "登记技能评估集失败", "detail": rerr.Error()})
+					return
+				}
+				if perr := mgr.PublishShared(cand.Name, cand.Body); perr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "发布为托管技能失败", "detail": perr.Error()})
+					return
+				}
+				rep, cerr := regressionChecker.Check(c.Request.Context(), uid, dsID)
+				if cerr != nil {
+					// 回归评估执行失败（如模型不可用）：回滚发布，保守拦截。
+					_ = mgr.RemoveShared(cand.Name)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "回归评估执行失败", "detail": cerr.Error()})
+					return
+				}
+				if !rep.Passed {
+					// 回归未通过：回滚发布（不落盘共享库），保留评估集供人工查看与重跑，并拦截。
+					_ = mgr.RemoveShared(cand.Name)
+					c.JSON(http.StatusConflict, gin.H{
+						"error":      "回归未通过，已阻止发布该技能",
+						"detail":     rep.Detail,
+						"regression": rep,
+						"hint":       "请修订 SKILL.md（步骤/描述/适用范围）后重新提交审批",
+					})
+					return
+				}
+			} else if perr := mgr.PublishShared(cand.Name, cand.Body); perr != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "发布为托管技能失败", "detail": perr.Error()})
 				return
 			}

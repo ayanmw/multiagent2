@@ -99,6 +99,61 @@ func (s *Service) StartRun(ctx context.Context, userID, datasetID uint, modelOve
 	return run, nil
 }
 
+// RunSync 是 StartRun 的同步变体：在同一调用内（受整体超时约束）跑完整个评估，
+// 立即返回 EvalRun 与逐条结果。用于需要同步拿到结论的场景——典型如 M5-08 飞轮×回归
+// 联动：发布技能前必须确认其自测通过，不能异步轮询。
+// 与 StartRun 共享 execute 的聚合与落库逻辑；runs/repeats 语义一致。
+func (s *Service) RunSync(ctx context.Context, userID, datasetID uint, modelOverride, graderOverride string, repeats int) (*model.EvalRun, []*model.EvalResult, error) {
+	ds, err := repo.GetEvalDataset(s.db, userID, datasetID)
+	if err != nil {
+		return nil, nil, err
+	}
+	cases, err := repo.ListEvalCases(s.db, datasetID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(cases) == 0 {
+		return nil, nil, fmt.Errorf("eval: 数据集 %d 没有用例", datasetID)
+	}
+	if repeats <= 0 {
+		repeats = 1
+	}
+	now := time.Now()
+	run := &model.EvalRun{
+		DatasetID:  ds.ID,
+		UserID:     userID,
+		ModelID:    orPerCase(modelOverride),
+		Grader:     orPerCase(graderOverride),
+		Repeats:    repeats,
+		Status:     model.EvalRunStatusRunning,
+		TotalCases: len(cases),
+		StartedAt:  &now,
+	}
+	if err := repo.CreateEvalRun(s.db, run); err != nil {
+		return nil, nil, err
+	}
+	rctx, cancel := context.WithTimeout(ctx, evalRunTimeout)
+	defer cancel()
+	if eerr := s.execute(rctx, run, ds, cases, userID, modelOverride, graderOverride, repeats); eerr != nil {
+		vals, _ := repo.ListEvalResults(s.db, run.ID)
+		return run, toResultPtrs(vals), eerr
+	}
+	vals, err := repo.ListEvalResults(s.db, run.ID)
+	if err != nil {
+		return run, nil, err
+	}
+	return run, toResultPtrs(vals), nil
+}
+
+// toResultPtrs 把值切片转为指针切片（RunSync 对外统一返回 []*model.EvalResult）。
+func toResultPtrs(vals []model.EvalResult) []*model.EvalResult {
+	pts := make([]*model.EvalResult, 0, len(vals))
+	for i := range vals {
+		pts = append(pts, &vals[i])
+	}
+	return pts
+}
+
 // execute 是评估的实际工作函数（在后台 goroutine 中运行）。遍历全部用例，每个用例跑
 // repeats 次，逐次打分并落库 EvalResult，最后聚合 ScoreAvg/PassRate 写回 EvalRun。
 // 任何「结果落库」失败属严重错误，直接终止整个运行并返回（由调用方记录日志）。

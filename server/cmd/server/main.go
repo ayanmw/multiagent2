@@ -28,6 +28,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/evolution"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/promptiter"
+	"github.com/ayanmw/multiagent2/server/internal/regression"
 	"github.com/ayanmw/multiagent2/server/internal/knowledge"
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
@@ -610,6 +611,24 @@ func main() {
 	evalJudge := eval.NewLLMJudge(evalModelResolver, cfg.EngineTimeout())
 	evalSvc := eval.NewService(db.DB, evalModelResolver, evalRunner, evalJudge)
 	api.SetEvalService(evalSvc)
+
+	// 飞轮×回归联动（M5-08）：候选技能审批发布前，先登记进评估集、再跑回归自测，
+	// 不过则回滚并拦截发布。regressionResolver 在 eval 模型解析基础上注入「被测技能名」
+	// 作为 warm-start 关键词，使自测真正用到该技能。
+	regressionResolver := func(ctx context.Context, userID uint, modelID, skillKeyword string) (engine.ModelConfig, error) {
+		c, rerr := evalModelResolver(ctx, userID, modelID)
+		if rerr != nil {
+			return engine.ModelConfig{}, rerr
+		}
+		c.SkillWarmStart = cfg.SkillWarmStart()
+		c.SkillRoots = []string{cfg.SkillsRoot(), filepath.Join(cfg.SkillsDataDir(), strconv.FormatUint(uint64(userID), 10))}
+		if skillKeyword != "" {
+			c.SkillKeywords = []string{skillKeyword}
+		}
+		return c, nil
+	}
+	regChecker := regression.NewEvalChecker(db.DB, regressionResolver, cfg.EngineTimeout(), 1.0)
+	api.SetRegressionChecker(regChecker)
 
 	// GEPA 反射式 Prompt 优化（M5-06）：复用 eval 的模型解析器 + 裁判，反射器经同一
 	// 解析器调 LLM 产出改进指令；优化服务把改进后指令写回 AgentInstruction，生产对话

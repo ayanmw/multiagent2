@@ -157,6 +157,25 @@ func (m *Manager) PublishShared(name, body string) error {
 	return os.WriteFile(filepath.Join(dir, skill.SkillFile), []byte(body), 0o644)
 }
 
+// RemoveShared 从共享技能库移除一份已发布的技能（M5-08 回归门禁回滚用）。
+// 不存在时返回 nil（幂等，便于回滚安全调用）；sharedRoot 未配置时返回错误。
+func (m *Manager) RemoveShared(name string) error {
+	if !ValidSkillName(name) {
+		return fmt.Errorf("invalid skill name %q", name)
+	}
+	if m.sharedRoot == "" {
+		return fmt.Errorf("shared skills root not configured")
+	}
+	dir := filepath.Join(m.sharedRoot, sanitizeSegment(name))
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
 // Create 在用户私有目录新建/覆盖技能。body 即 SKILL.md 全部内容（允许为空占位）。
 // 共享技能不可经 API 创建/覆盖（只读）。
 func (m *Manager) Create(uid, name, body string) error {

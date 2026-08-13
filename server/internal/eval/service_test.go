@@ -231,3 +231,48 @@ func TestService_StartRunOwnerIsolation(t *testing.T) {
 		t.Fatalf("expected owner-isolation error")
 	}
 }
+
+func TestService_RunSync_Pass(t *testing.T) {
+	db := newTestDB(t)
+	dsID, _ := seedDataset(t, db, 1, model.GraderExact, "2")
+	svc := NewService(db, dummyResolve, &mockRunner{output: "2"}, nil)
+	run, results, err := svc.RunSync(context.Background(), 1, dsID, "", "", 3)
+	if err != nil {
+		t.Fatalf("RunSync: %v", err)
+	}
+	if run.Status != model.EvalRunStatusDone || run.PassRate != 1.0 {
+		t.Fatalf("status=%s pass_rate=%.2f", run.Status, run.PassRate)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+}
+
+func TestService_RunSync_Fail(t *testing.T) {
+	db := newTestDB(t)
+	dsID, _ := seedDataset(t, db, 1, model.GraderExact, "2")
+	svc := NewService(db, dummyResolve, &mockRunner{output: "3"}, nil)
+	run, results, err := svc.RunSync(context.Background(), 1, dsID, "", "", 1)
+	if err != nil {
+		t.Fatalf("RunSync: %v", err)
+	}
+	if run.Status != model.EvalRunStatusDone || run.PassRate != 0.0 {
+		t.Fatalf("status=%s pass_rate=%.2f", run.Status, run.PassRate)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+}
+
+func TestService_RunSync_EmptyDataset(t *testing.T) {
+	db := newTestDB(t)
+	ds := &model.EvalDataset{UserID: 1, Name: "empty", DefaultGrader: model.GraderExact}
+	_ = ds.Validate()
+	if err := repo.CreateEvalDataset(db, ds); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	svc := NewService(db, dummyResolve, &mockRunner{output: "2"}, nil)
+	if _, _, err := svc.RunSync(context.Background(), 1, ds.ID, "", "", 1); err == nil {
+		t.Fatalf("expected error for empty dataset")
+	}
+}
