@@ -46,6 +46,7 @@ const (
 	ChannelCron    ChannelKind = "cron"    // 定时调度触发（M4-02）
 	ChannelIM      ChannelKind = "im"      // 预留：IM/邮件网关
 	ChannelRecover ChannelKind = "recover" // 进程重启后的跨天恢复续跑（M4-05）
+	ChannelA2A     ChannelKind = "a2a"     // 外部 Agent 经 A2A 协议发起的任务（M5-07）
 )
 
 // GatewayConfig 是 Gateway 运行所需的全部依赖（与 ChatHandler/StreamChatHandler/engineLoopRunner 对齐）。

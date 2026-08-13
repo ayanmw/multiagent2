@@ -61,6 +61,9 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 	// 可观测性（M3-09）：/metrics 暴露 Prometheus 文本格式指标；未启用时返回 404。
 	r.GET("/metrics", gin.WrapH(metrics.Handler()))
 
+	// A2A 协议（M5-07）：公开 Agent Card，供外部 Agent 发现本平台能力（无需鉴权）。
+	r.GET("/.well-known/agent.json", api.AgentCardHandler())
+
 	// Public auth routes
 	authGroup := r.Group("/api/auth")
 	{
@@ -268,6 +271,12 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// M0.5-06：message 改由 POST body 传递（避免明文进访问日志），故注册为 POST。
 		// 事件流由统一 Gateway 经 gw.Stream 产出（详见 StreamChatHandler）。
 		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(gw))
+
+		// A2A 协议任务入口（M5-07）：外部 Agent 经 JSON-RPC 2.0（method=message/send / tasks/send）
+		// 调用本平台能力。经统一 Gateway 跑引擎（复用会话串行锁、多轮记忆、预算护栏与用量计量），
+		// 外部任务以 ChannelA2A 标记，与 Web/CLI/定时/Webhook 收敛到同一套 Runner。
+		// 鉴权沿用 AuthMiddleware：外部 A2A client 用 X-API-Key 或 Bearer 调用（Agent Card 声明 apiKey）。
+		protected.POST("/a2a", api.A2AHandler(gw))
 	}
 
 	return r
