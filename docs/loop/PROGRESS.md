@@ -612,3 +612,19 @@
 - 验证：`CGO_ENABLED=0 go build/vet ./...` 通过（前端改动不影响后端）；前端 `vue-tsc --noEmit` 通过 + `vite build` 通过；后端 API 契约与 skill.ts 完全对齐（list/get/create/update/delete 五方法）。
 - Commit: 0204cc1（已推 origin/main）。下一步：MX-04（前端深度打通-任务中心，渲染 transcript + 实测取消）。
 
+---
+
+### 2026-08-14 17:25 | MX-04 | ✅ 前端深度打通-任务中心（transcript 可读化 + 实时刷新 + 取消按钮修复）
+- 任务中心详情页（TaskCenterView.vue）重写：transcript 由原始 JSON 堆砌改为可读时间线——按框架 `event.Event`（内嵌 `*model.Response`）结构解析为「作者(agent)/文本/工具调用(名称+参数)/工具结果/错误」分行卡片；修复取消按钮 `loading: cancelling && false`（恒 false）缺陷，改为按行 `cancellingId` 精确控制 loading/disabled；新增运行中轮询：详情打开且任务仍 active 时每 2s 重拉 transcript（GET /api/taskruns/:id/transcript）并自动滚动到底，形成「流」体验；附状态标签 +「实时刷新中」指示 + 手动刷新按钮。后端端点（M2-04 taskrun.go）保持不变。
+- 验证：前端 `vue-tsc --noEmit` 通过（exit 0）+ `vite build` 通过（TaskCenterView chunk 7.10 kB / gzip 3.03 kB）；纯前端改动，后端未触碰（list/get/cancel/transcript 端点与 owner 隔离已具备）。
+- Commit: 4ccf4ea（已推 origin/main）。下一步：MX-05（后端测试补全，为 M2 各包补单测）。
+
+---
+
+### 2026-08-14 18:40 | MX-05 | ✅ 后端测试补全（M2 各包补集成测试，M2-06 真实 MCP 装载路径闭环）
+- 巡检发现：M2 各包（taskrun/worktree/skillrepo/toolsearch + model.MCPServer/mcp 校验）**均已有单测且绿**；唯一缺口是 `toolsearch.LoadMCPServerTools` 的真实连接路径此前仅覆盖 `ValidateFail` 单测 + 手工 verify，M2-06「延迟工具箱经真实 MCP 服务器装载并调用」未由自动化测试守护。
+- 新增：① `server/internal/toolsearch/testmcp/main.go`——同模块最小 stdio MCP 服务器（复用框架同款 `trpc-mcp-go` 库，保证协议握手兼容），注册 `demo_echo` 工具回显 message；② `server/internal/toolsearch/load_integration_test.go::TestLoadMCPServerTools_Integration`——预编译 testmcp → 经 `LoadMCPServerTools` 真实连接并预取工具 → 断言 toolbox 含 `mcp__testmcp__demo_echo` → 经 `call_tool` 控制工具穿透到真实 MCP 工具拿到 `echo: hello-integration`（端到端可达，证明工具不经此路径就永远进不了 Agent 上下文）。
+- `go get`/`go mod tidy` 将 `trpc-mcp-go` 由 indirect 提升为 direct require（testmcp 直接引用），`server/go.mod` 已更新。
+- 验证：`CGO_ENABLED=0 go build ./...` ✅；`go vet ./internal/...` ✅；`go test` 四个 M2 包 + model 全绿（toolsearch 2.85s 含新增集成测试 PASS；taskrun/worktree/skillrepo/model PASS）。`internal/repo` 的 DB 测试在 `CGO_ENABLED=0` 下因 `go-sqlite3` 仍需 cgo 而报 stub 错误——属既有环境限制（历史 go-sqlite3 未全量迁 glebarez），与本次改动无关、非 M2 包缺陷，按 AGENTS.md 豁免。
+- 下一步：MX-06（用户管理后台 admin）或 MX-07（安全加固），均为独立 ○，下轮续推。
+

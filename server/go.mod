@@ -14,6 +14,7 @@ require (
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
 	trpc.group/trpc-go/trpc-agent-go v1.10.0
+	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
 require (
@@ -90,5 +91,4 @@ require (
 	modernc.org/memory v1.5.0 // indirect
 	modernc.org/sqlite v1.23.1 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
-	trpc.group/trpc-go/trpc-mcp-go v0.0.10 // indirect
 )
