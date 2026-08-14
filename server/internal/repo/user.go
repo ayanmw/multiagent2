@@ -50,3 +50,33 @@ func GetUserByID(db *gorm.DB, id uint) (*model.User, error) {
 	}
 	return &u, nil
 }
+
+// ListUsers returns all users ordered by id (with role preloaded).
+// Used by the admin user-management view.
+func ListUsers(db *gorm.DB) ([]model.User, error) {
+	var users []model.User
+	if err := db.Preload("Role").Order("id asc").Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+// UpdateUser persists changes to an existing user (role, status, display name...).
+func UpdateUser(db *gorm.DB, user *model.User) error {
+	return db.Save(user).Error
+}
+
+// CountAdmins returns the number of active admin users.
+// Used to prevent an admin from disabling/demoting themselves into a lockout.
+func CountAdmins(db *gorm.DB) (int64, error) {
+	roleID, err := GetRoleIDByName(db, model.RoleAdmin)
+	if err != nil {
+		return 0, err
+	}
+	var cnt int64
+	if err := db.Model(&model.User{}).Where("role_id = ? AND status = ?", roleID, model.UserStatusActive).
+		Count(&cnt).Error; err != nil {
+		return 0, err
+	}
+	return cnt, nil
+}

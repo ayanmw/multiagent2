@@ -160,7 +160,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | MX-03 | **前端深度打通-Skills**：Skills 页支持新建/编辑 SKILL.md（目前仅浏览），owner 隔离 | ✅ | 新建示例技能 → 列表可见 → warm-start 命中 | M2-03 |
 | MX-04 | **前端深度打通-任务中心**：TaskCenter 渲染 transcript（目前仅列表/详情）、「取消」按钮实测接 `cancel_task_run` | ✅ | 起后台任务 → 详情看到 transcript 流 → 取消生效 | M2-04 |
 | MX-05 | **后端测试补全**：为 M2 各包（taskrun/worktree/mcp/skills/toolsearch）补单测 + 集成测试（目前主要靠手动 verify） | ✅ | `go test ./internal/...` 各 M2 包有测试且绿 | M2 |
-| MX-06 | **用户管理后台（admin）**：管理员创建/禁用/重置用户、查看用户列表与配额；前端 `AdminView` | ○ | admin 创建用户 → 该用户可登录；禁用后无法登录 | M0, M3-04 |
+| MX-06 | **用户管理后台（admin）**：管理员创建/禁用/重置用户、查看用户列表与配额；前端 `AdminView` | ✅ | admin 创建用户 → 该用户可登录；禁用后无法登录 | M0, M3-04 |
 | MX-07 | **安全加固**：API 速率限制（登录/对话防刷）、CORS 精细化（仅放行前端域）、敏感信息不出日志 | ○ | 高频登录被限流；OPTIONS 预检通过且跨域仅白名单 | M0 |
 | MX-08 | **部署与文档**：`README` 补全（架构/启动/配置）、`docker-compose.yml`（前端+后端+网关）、`.env.example`、前端 `npm run build` 产物说明 | ○ | 新人按 README 能跑起；`docker-compose up` 起三服务 | M0-M2 |
 

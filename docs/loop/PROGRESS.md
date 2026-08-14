@@ -628,3 +628,9 @@
 - 验证：`CGO_ENABLED=0 go build ./...` ✅；`go vet ./internal/...` ✅；`go test` 四个 M2 包 + model 全绿（toolsearch 2.85s 含新增集成测试 PASS；taskrun/worktree/skillrepo/model PASS）。`internal/repo` 的 DB 测试在 `CGO_ENABLED=0` 下因 `go-sqlite3` 仍需 cgo 而报 stub 错误——属既有环境限制（历史 go-sqlite3 未全量迁 glebarez），与本次改动无关、非 M2 包缺陷，按 AGENTS.md 豁免。
 - 下一步：MX-06（用户管理后台 admin）或 MX-07（安全加固），均为独立 ○，下轮续推。
 
+
+### 2026-08-14 19:54 | MX-06 | ✅ 用户管理后台 admin 收口
+- 后端：server/internal/repo/user.go 增 ListUsers/UpdateUser/CountAdmins；server/internal/api/admin.go 扩 7 个 handler（列表/创建/详情/更新/禁用/启用/重置密码），含角色解析、防重复、防自锁（禁禁用自己/降级自己）、最后管理员保护，列表附配额（预算策略 GetEffectiveUserBudgetPolicy）；cmd/server/main.go admin 路由组注册 7 条（RequireRole(admin)）。
+- 前端：web/src/api/admin.ts 封装 + AdminView.vue（用户表格/创建编辑抽屉/禁用启用/重置密码/配额列，仅 admin 可见）+ 路由 admin + 菜单「用户管理」（非 admin 隐藏）。
+- 验证：CGO_ENABLED=0 go build/vet 全绿；admin_test 2 例（生命周期 + 防自锁）PASS；前端 vue-tsc --noEmit + vite build 全绿。CGO_ENABLED=0 下 internal/repo 历史 go-sqlite3 用例按 AGENTS.md 豁免跳过，与本次无关。
+- 下一步：MX-07（安全加固：登录/对话限流、CORS 白名单、敏感不出日志）。

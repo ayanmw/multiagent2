@@ -83,6 +83,14 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		admin.Use(middleware.RequireRole(model.RoleAdmin))
 		{
 			admin.GET("/roles", api.ListRolesHandler(db.DB))
+			// 用户管理后台（MX-06）：创建/列表/详情/更新/禁用/启用/重置密码。
+			admin.GET("/users", api.ListUsersHandler(db.DB))
+			admin.POST("/users", api.CreateUserHandler(db.DB))
+			admin.GET("/users/:id", api.GetUserHandler(db.DB))
+			admin.PUT("/users/:id", api.UpdateUserHandler(db.DB))
+			admin.POST("/users/:id/disable", api.DisableUserHandler(db.DB))
+			admin.POST("/users/:id/enable", api.EnableUserHandler(db.DB))
+			admin.POST("/users/:id/reset-password", api.ResetPasswordHandler(db.DB))
 		}
 
 		// Provider management (user-scoped CRUD; API key encrypted at rest).

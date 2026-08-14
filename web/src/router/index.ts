@@ -128,6 +128,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/EvaluationView.vue'),
         meta: { title: '评估回归', desc: '评估集管理 + 回归运行（多次采样取稳定分）+ 精确/包含/LLM 评分，模型/Prompt 改动前后分数可对比' },
       },
+      {
+        path: 'admin',
+        name: 'admin',
+        component: () => import('@/views/AdminView.vue'),
+        meta: { title: '用户管理', desc: '用户管理后台：创建 / 禁用 / 重置平台用户，查看配额', adminOnly: true },
+      },
     ],
   },
   // 兜底：未知路径回到首页（由守卫决定是否需要登录）。

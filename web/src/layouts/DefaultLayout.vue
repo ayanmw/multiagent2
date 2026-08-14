@@ -133,7 +133,18 @@ const menuOptions: MenuOption[] = [
     key: 'evaluation',
     icon: svgIcon('M3 3h18v4H3zm0 7h18v4H3zm0 7h12v4H3zm14 .5l3 3 3-3'),
   },
+  {
+    label: '用户管理',
+    key: 'admin',
+    icon: svgIcon('M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'),
+  },
 ]
+
+// 非管理员隐藏「用户管理」菜单项（后端同样强制 RequireRole(admin)）。
+const visibleMenuOptions = computed(() => {
+  if (auth.user?.role === 'admin') return menuOptions
+  return menuOptions.filter((o) => o.key !== 'admin')
+})
 
 // 主题切换按钮图标：深色显示「太阳」(切回浅色)，浅色显示「月亮」(切到深色)。
 const sunIcon = svgIcon(
@@ -218,7 +229,7 @@ function handleLogout() {
         @collapse="collapsed = true"
         @expand="collapsed = false"
       >
-        <n-menu :value="activeKey" :options="menuOptions" @update:value="handleMenuClick" />
+        <n-menu :value="activeKey" :options="visibleMenuOptions" @update:value="handleMenuClick" />
       </n-layout-sider>
       <n-layout-content class="p-4 overflow-auto bg-gray-50 dark:bg-gray-900">
         <router-view />
