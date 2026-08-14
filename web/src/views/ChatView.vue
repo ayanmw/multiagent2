@@ -15,6 +15,7 @@ import {
   getSession,
   deleteSession,
   renameSession,
+  bindSessionWorkspace,
   type SessionView,
   type MessageView,
 } from '@/api/session'
@@ -32,6 +33,7 @@ import {
   renderCommandPrompt,
   type Command,
 } from '@/api/command'
+import { listWorkspaces, type Workspace } from '@/api/workspace'
 import { renderMarkdown } from '@/utils/markdown'
 
 // 一条前端对话消息（id 仅本地用于渲染 key）。
@@ -62,6 +64,8 @@ const input = ref('')
 const models = ref<EnabledModel[]>([])
 const selectedModelId = ref<number | null>(null)
 const selectedWorkspaceKey = ref<string | null>(null)
+// 当前用户的工作区列表（MX-01：对话页下拉选择器数据源）。
+const workspaces = ref<Workspace[]>([])
 const streaming = ref(false)
 const abortController = ref<AbortController | null>(null)
 const scrollRef = ref<HTMLElement | null>(null)
@@ -84,6 +88,12 @@ const modelOptions = computed(() =>
 )
 // 当前选中的模型（选中项为空时走后端默认模型）。
 const currentModel = computed(() => models.value.find((m) => m.id === selectedModelId.value) ?? null)
+// 工具条展示的已绑定工作区标签（优先显示名称，回退到 key）。
+const currentWorkspaceLabel = computed(() => {
+  if (!selectedWorkspaceKey.value) return ''
+  const w = workspaces.value.find((x) => x.key === selectedWorkspaceKey.value)
+  return w ? (w.name ? `${w.name} · ${w.key}` : w.key) : selectedWorkspaceKey.value
+})
 // 默认模型（后端标记 is_default），用于未显式选择时的 Provider 展示。
 const defaultModel = computed(() => models.value.find((m) => m.is_default) ?? null)
 // 工具条展示的模型标签。
@@ -135,6 +145,13 @@ async function loadCommands() {
     commands.value = await fetchCommands()
   } catch (e) {
     message.error(`命令列表加载失败：${(e as Error).message}`)
+  }
+}
+async function loadWorkspaces() {
+  try {
+    workspaces.value = await listWorkspaces()
+  } catch (e) {
+    message.error(`工作区列表加载失败：${(e as Error).message}`)
   }
 }
 
@@ -215,10 +232,32 @@ async function selectSession(key: string) {
       role: m.role,
       content: m.content,
     }))
+    // MX-01：还原该会话已绑定的工作区（刷新后仍保留，因后端 GET 详情已暴露 workspace_key）。
+    selectedWorkspaceKey.value = detail.workspace_key ?? null
   } catch (e) {
     message.error((e as Error).message)
   }
   scrollToBottom()
+}
+
+// 工作区下拉选项：首项为「默认目录（不绑定）」，其后为当前用户的各 workspace。
+const workspaceOptions = computed(() => [
+  { label: '默认目录（不绑定）', value: '' },
+  ...workspaces.value.map((w) => ({
+    label: w.name ? `${w.name} · ${w.key}` : w.key,
+    value: w.key,
+  })),
+])
+
+// 切换工作区：写入本地状态并经后端 PATCH 持久化绑定（即使尚未发消息，刷新后仍保留）。
+async function onWorkspaceChange(val: string | null) {
+  selectedWorkspaceKey.value = val || null
+  if (!activeKey.value) return
+  try {
+    await bindSessionWorkspace(activeKey.value, selectedWorkspaceKey.value)
+  } catch (e) {
+    message.error(`绑定工作区失败：${(e as Error).message}`)
+  }
 }
 
 // 新建会话并立即选中。
@@ -464,6 +503,7 @@ watch(input, () => {
 onMounted(async () => {
   await loadModels()
   await loadCommands()
+  await loadWorkspaces()
   await loadSessions()
   if (sessions.value.length > 0) {
     await selectSession(sessions.value[0].session_key)
@@ -522,16 +562,30 @@ onMounted(async () => {
         <n-tag v-if="activeSession" size="small" :bordered="false" type="info">
           {{ activeSession.title }}
         </n-tag>
-        <span v-if="selectedWorkspaceKey" class="text-xs text-amber-500">
-          📁 {{ selectedWorkspaceKey }}
+        <span v-if="currentWorkspaceLabel" class="text-xs text-amber-500">
+          📁 {{ currentWorkspaceLabel }}
         </span>
         <span class="ml-auto text-xs text-gray-400">对话工作台 · 输入 / 唤起命令</span>
       </header>
 
-      <!-- 对话工具栏：当前模型/Provider 可点击切换 + 清空上下文 -->
+      <!-- 对话工具栏：工作区 / 当前模型 / Provider 可点击切换 + 清空上下文（MX-01 工作区选择） -->
       <div
         class="flex items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 text-sm"
       >
+        <span class="text-gray-500 dark:text-gray-400">工作区</span>
+        <n-popselect
+          :value="selectedWorkspaceKey ?? ''"
+          :options="workspaceOptions"
+          trigger="click"
+          size="small"
+          placement="bottom-start"
+          @update:value="onWorkspaceChange"
+        >
+          <n-tag :bordered="false" type="warning" class="cursor-pointer select-none">
+            📁 {{ selectedWorkspaceKey ? selectedWorkspaceKey : '默认目录' }}
+            <span class="ml-1 opacity-60">▾</span>
+          </n-tag>
+        </n-popselect>
         <span class="text-gray-500 dark:text-gray-400">当前模型</span>
         <n-popselect
           v-model:value="selectedModelId"

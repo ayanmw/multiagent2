@@ -587,3 +587,10 @@
 - 关键修复：mock 提取候选的 `Body` 原文约 136 rune，低于 `quality.go` 质量门控 `MinBodyLen=200` 被拦截（日志 `正文过短（少于最小长度）`），扩充正文至 200+ rune 并保持 `#`/步骤结构、不含占位词后确定性过门。evolution/eval/promptiter 三服务均经包级 `SetXxxService` 注入 mock（不挂回归检查器，走 M5-04 直接发布语义），`buildRouter` 据此挂载对应路由组。
 - 验证：CGO_ENABLED=0 `go build ./...` ✅ | `go vet ./...` ✅；`go test ./cmd/server/ -run TestM5_Evolution_E2E` 五段全 PASS（0.95s）；`go test ./cmd/server/`（整包，含 M3/M4/A2A 集成测试）全绿（12.3s，纯 Go glebarez sqlite 免 gcc）；`internal/repo` 历史 go-sqlite3 CGO 用例因 `CGO_ENABLED=0` 无 gcc 跳过，属环境限制且与本任务无关（仅改动 cmd/server 测试文件）。M5 里程碑全部 ✅。
 - 下一步：M5 全部 ✅；后续可拾取 MX 质量加固项（MX-01..08，○）或推进新里程碑。
+
+### 2026-08-14 14:16 | MX-01 | ✅ 前端深度打通-工作区
+- 对话页支持下拉选择/切换 Workspace 并绑定当前会话（此前仅有 /workspace 命令且刷新丢失绑定）。
+- 后端：`internal/api/session.go` 的 `sessionView`/`sessionDetailView` 新增 `workspace_key` 字段（列表/详情均暴露，刷新后保留）；新增 `BindWorkspaceHandler`（PATCH /api/sessions/:id/workspace，owner 隔离绑定/解绑，与对话端点一致不要求 sessions:write）；`main.go` 注册路由。
+- 前端：`web/src/api/session.ts` 增 `bindSessionWorkspace` + `SessionView.workspace_key` 类型；`ChatView.vue` 工具条增「工作区」下拉（`workspaceOptions` = 默认目录 + 各 workspace），切换即 PATCH 持久化，`selectSession` 时从 `getSession` 回灌已绑定 key，发送仍透传 workspaceKey 双保险。
+- 验证：`go build/vet ./...` 通过；`internal/api` 新增 `session_test.go`（绑定后详情暴露 workspace_key + 解绑 + 跨用户 404）全 PASS；前端 `vue-tsc --noEmit` + `vite build` 通过。`internal/repo` 10 例 go-sqlite3 CGO 用例在 CGO_ENABLED=0 沙箱失败（已知环境限制，与改动无关）。
+- 下一步：MX-02（前端深度打通-MCP，测试连接/装载校验）。

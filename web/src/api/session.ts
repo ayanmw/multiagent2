@@ -13,6 +13,8 @@ export interface SessionView {
   title: string
   created_at: string
   updated_at: string
+  // 绑定的 workspace key（MX-01）；null 表示使用默认目录。
+  workspace_key?: string | null
 }
 
 // 单条消息视图（历史回放用）。
@@ -55,4 +57,17 @@ export async function deleteSession(key: string): Promise<void> {
 // 重命名会话（更新标题）。
 export async function renameSession(key: string, title: string): Promise<SessionView> {
   return request<SessionView>(`/sessions/${key}`, { method: 'PUT', body: { title } })
+}
+
+// 绑定/解绑会话到 workspace（MX-01 前端深度打通-工作区）。
+// workspaceKey 为 null 或空串表示解除绑定、回退默认目录。
+// 绑定后该会话后续消息在对应 workspace 本地目录执行，且持久化（刷新后仍保留）。
+export async function bindSessionWorkspace(
+  key: string,
+  workspaceKey: string | null,
+): Promise<SessionView> {
+  return request<SessionView>(`/sessions/${key}/workspace`, {
+    method: 'PATCH',
+    body: { workspace_key: workspaceKey },
+  })
 }

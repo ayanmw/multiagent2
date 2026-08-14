@@ -121,6 +121,8 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.GET("/sessions/:id/artifacts/:name", api.GetSessionArtifactHandler(db.DB, stateStore, enableState))
 		protected.PUT("/sessions/:id", middleware.RequirePermission(db.DB, "sessions", "write"), api.RenameSessionHandler(db.DB))
 		protected.DELETE("/sessions/:id", middleware.RequirePermission(db.DB, "sessions", "write"), api.DeleteSessionHandler(db.DB))
+		// 绑定/解绑会话到 workspace（MX-01）：owner-scoped，与对话端点一致不要求额外 RBAC 写权限。
+		protected.PATCH("/sessions/:id/workspace", api.BindWorkspaceHandler(db.DB))
 
 		// 斜杠命令注册表（M1-14）：前端/CLI 共用，新增命令只改后端 command.Builtin()。
 		protected.GET("/commands", api.ListCommandsHandler())

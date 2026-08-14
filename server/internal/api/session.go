@@ -13,12 +13,13 @@ import (
 
 // sessionView 是会话对外返回的精简视图（列表用，不含历史消息）。
 type sessionView struct {
-	ID         uint   `json:"id"`
-	UserID     uint   `json:"user_id"`
-	SessionKey string `json:"session_key"`
-	Title      string `json:"title"`
-	CreatedAt  string `json:"created_at"`
-	UpdatedAt  string `json:"updated_at"`
+	ID           uint    `json:"id"`
+	UserID       uint    `json:"user_id"`
+	SessionKey   string  `json:"session_key"`
+	Title        string  `json:"title"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
+	WorkspaceKey *string `json:"workspace_key"` // 绑定的 workspace key（MX-01）；nil 表示使用默认目录
 }
 
 // messageView 是会话中单条消息的视图。
@@ -31,24 +32,39 @@ type messageView struct {
 
 // sessionDetailView 是带历史消息的会话详情（GET /api/sessions/:id 返回）。
 type sessionDetailView struct {
-	ID         uint          `json:"id"`
-	UserID     uint          `json:"user_id"`
-	SessionKey string        `json:"session_key"`
-	Title      string        `json:"title"`
-	CreatedAt  string        `json:"created_at"`
-	UpdatedAt  string        `json:"updated_at"`
-	Messages   []messageView `json:"messages"`
+	ID           uint          `json:"id"`
+	UserID       uint          `json:"user_id"`
+	SessionKey   string        `json:"session_key"`
+	Title        string        `json:"title"`
+	CreatedAt    string        `json:"created_at"`
+	UpdatedAt    string        `json:"updated_at"`
+	WorkspaceKey *string       `json:"workspace_key"` // 绑定的 workspace key（MX-01）；nil 表示默认目录
+	Messages     []messageView `json:"messages"`
+}
+
+// sessionWorkspaceKey 返回会话当前绑定的 workspace_key（无绑定返回 nil）。
+func sessionWorkspaceKey(db *gorm.DB, uid uint, sess *model.Session) *string {
+	if sess.WorkspaceID == nil || *sess.WorkspaceID == 0 {
+		return nil
+	}
+	ws, err := repo.GetWorkspaceByID(db, uid, *sess.WorkspaceID)
+	if err != nil {
+		return nil
+	}
+	k := ws.Key
+	return &k
 }
 
 // toSessionView 将领域模型转为列表视图。
-func toSessionView(s *model.Session) sessionView {
+func toSessionView(db *gorm.DB, uid uint, s *model.Session) sessionView {
 	return sessionView{
-		ID:         s.ID,
-		UserID:     s.UserID,
-		SessionKey: s.SessionKey,
-		Title:      s.Title,
-		CreatedAt:  s.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:  s.UpdatedAt.Format(time.RFC3339),
+		ID:           s.ID,
+		UserID:       s.UserID,
+		SessionKey:   s.SessionKey,
+		Title:        s.Title,
+		CreatedAt:    s.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:    s.UpdatedAt.Format(time.RFC3339),
+		WorkspaceKey: sessionWorkspaceKey(db, uid, s),
 	}
 }
 
@@ -81,7 +97,7 @@ func CreateSessionHandler(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
 			return
 		}
-		c.JSON(http.StatusCreated, toSessionView(s))
+		c.JSON(http.StatusCreated, toSessionView(db, uid, s))
 	}
 }
 
@@ -101,7 +117,7 @@ func ListSessionsHandler(db *gorm.DB) gin.HandlerFunc {
 		}
 		views := make([]sessionView, 0, len(sessions))
 		for i := range sessions {
-			views = append(views, toSessionView(&sessions[i]))
+			views = append(views, toSessionView(db, uid, &sessions[i]))
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"sessions": views,
@@ -136,12 +152,13 @@ func GetSessionHandler(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		detail := sessionDetailView{
-			ID:         s.ID,
-			UserID:     s.UserID,
-			SessionKey: s.SessionKey,
-			Title:      s.Title,
-			CreatedAt:  s.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:  s.UpdatedAt.Format(time.RFC3339),
+			ID:           s.ID,
+			UserID:       s.UserID,
+			SessionKey:   s.SessionKey,
+			Title:        s.Title,
+			CreatedAt:    s.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:    s.UpdatedAt.Format(time.RFC3339),
+			WorkspaceKey: sessionWorkspaceKey(db, uid, s),
 		}
 		detail.Messages = make([]messageView, 0, len(msgs))
 		for i := range msgs {
@@ -188,7 +205,62 @@ func RenameSessionHandler(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		s.Title = req.Title
-		c.JSON(http.StatusOK, toSessionView(s))
+		c.JSON(http.StatusOK, toSessionView(db, uid, s))
+	}
+}
+
+// BindWorkspaceHandler handles PATCH /api/sessions/:id/workspace.
+// 将当前用户的会话绑定到其拥有的某 workspace（owner-scoped），或传入空 key 解除绑定。
+// 绑定后该会话的后续消息均在对应 workspace 本地目录执行，刷新后仍保留（契合 MX-01）。
+// 鉴权走统一中间件；与对话端点一致：绑定仅影响用户自己的会话，不要求额外 RBAC 写权限。
+func BindWorkspaceHandler(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid, ok := currentUserID(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+			return
+		}
+		key := c.Param("id")
+		if key == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			return
+		}
+		var req struct {
+			WorkspaceKey *string `json:"workspace_key"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s, err := repo.GetSessionByKey(db, uid, key)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			return
+		}
+		if req.WorkspaceKey == nil || *req.WorkspaceKey == "" {
+			// 解除绑定，回退默认目录。
+			if uerr := db.Model(&model.Session{}).Where("id = ? AND user_id = ?", s.ID, uid).
+				Update("workspace_id", nil).Error; uerr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unbind workspace"})
+				return
+			}
+			s.WorkspaceID = nil
+			c.JSON(http.StatusOK, toSessionView(db, uid, s))
+			return
+		}
+		ws, werr := repo.GetWorkspaceByKey(db, uid, *req.WorkspaceKey)
+		if werr != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+			return
+		}
+		if uerr := db.Model(&model.Session{}).Where("id = ? AND user_id = ?", s.ID, uid).
+			Update("workspace_id", ws.ID).Error; uerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to bind workspace"})
+			return
+		}
+		sid := ws.ID
+		s.WorkspaceID = &sid
+		c.JSON(http.StatusOK, toSessionView(db, uid, s))
 	}
 }
 
