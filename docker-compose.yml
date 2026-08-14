@@ -1,0 +1,97 @@
+# ============================================================================
+# goMultiAgentV2 —— 一键三服务编排（server + web + gateway）
+#
+# 用法：
+#   cp .env.example .env        # 编辑并设置 JWT_SECRET / PROVIDER_ENC_KEY 等
+#   docker compose up -d --build
+#
+# 访问：
+#   前端（nginx 反代 /api → server）：http://localhost:8081
+#   后端直连（调试）：              http://localhost:8080   （GET /health）
+#   LLM 网关：                     http://localhost:8088   （GET /healthz）
+#
+# 数据持久化：server_data 命名卷（SQLite / workspaces / agent-state / 私有技能）。
+# ============================================================================
+
+services:
+  # ---------------- 后端 API + Agent 引擎 ----------------
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: gm-server
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 容器内固定端口；其余变量（JWT_SECRET/PROVIDER_ENC_KEY/开关等）优先取自 .env
+      PORT: "8080"
+      DB_PATH: "/data/codeagent.db"
+      WORKSPACE_ROOT: "/data/workspaces"
+      ARTIFACT_ROOT: "/data/agent-state"
+      SKILLS_DATA_DIR: "/data/skills"
+      SKILLS_ROOT: "/app/skills"
+      # 未显式设置时回落到服务端内置不安全默认值（会在日志告警，生产务必在 .env 设置）
+      JWT_SECRET: "${JWT_SECRET:-}"
+      PROVIDER_ENC_KEY: "${PROVIDER_ENC_KEY:-}"
+    volumes:
+      - server_data:/data
+      # 内置共享技能（只读挂载，使 warm-start 能命中仓库 skills/）
+      - ./skills:/app/skills:ro
+    ports:
+      - "8080:8080"
+    networks:
+      - gmnet
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------------- 前端静态站（nginx 反代 /api） ----------------
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: gm-web
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "8081:80"
+    networks:
+      - gmnet
+
+  # ---------------- LLM 网关（OpenAI 兼容） ----------------
+  gateway:
+    build:
+      context: ./tool/workbuddyLLMAPI
+      dockerfile: Dockerfile
+    container_name: gm-gateway
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      WB_LISTEN: ":8088"
+      WB_BACKEND: "${WB_BACKEND:-passthrough}"
+      WB_BASE_URL: "${WB_BASE_URL:-https://api.openai.com/v1}"
+      WB_API_KEY: "${WB_API_KEY:-}"
+    ports:
+      - "8088:8088"
+    networks:
+      - gmnet
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8088/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  server_data:
+
+networks:
+  gmnet:
+    driver: bridge

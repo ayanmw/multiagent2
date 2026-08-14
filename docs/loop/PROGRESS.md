@@ -644,3 +644,10 @@
 - 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓ | `go test -count=1 ./internal/middleware/... ./cmd/server/...`（含复用 buildRouter 的 M3/M4/M5 E2E）✓；`go test ./...` 非 CGO 包全绿。`internal/repo` 历史 10 例 `*_test.go` 仍走 go-sqlite3 驱动，CGO_ENABLED=0 下 stub 报错，属 AGENTS.md 豁免的 gcc 环境限制，与本次改动无关（生产 db.go 已用纯 Go glebarez）。
 - Commit: 6eca9cc（已推 origin/main）。
 - 下一步：MX-08（部署与文档：README/docker-compose/.env.example）。
+
+---
+
+### 2026-08-14 21:57 | MX-08 | ✅ 部署与文档：README 重写 + docker-compose 三服务 + .env.example
+- 部署与文档收口（MX 质量加固末项，依赖 M0-M2 全部交付）：① **README.md 重写**——修正过时「需 CGO/装 C 编译器」说法（实际 `repo/db.go` 用纯 Go `glebarez/sqlite`，已验证 `CGO_ENABLED=0` 可编译），补全 ASCII 架构图、组件端口表、里程碑全 ✅ 状态表、完整环境变量配置表（server 全部 env + gateway WB_*）、手动部署与 Docker 部署章节、前端构建产物说明、CLI(gmctl) 说明。② **docker-compose.yml**——三服务编排（server/web/gateway + `gmnet` 网络 + `server_data` 命名卷持久化）；server 暴露 `/health` 健康检查、gateway 暴露 `/healthz`、web(nginx) 反代 `/api`/`/metrics`/`/.well-known/` 到 server 并支持 SSE（关闭缓冲 + 长超时）。③ **Dockerfile**——server 与 gateway 纯 Go 多阶段（CGO_ENABLED=0，alpine 运行态），web 用 node 构建 + nginx 托管（含 `web/nginx.conf`）。④ **.env.example**——覆盖 server/gateway 全部关键变量与默认值，仅占位无真实密钥/本地路径。
+- 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓（纯文档/部署改动，无业务代码变更）；`docker-compose.yml` 经 PyYAML 解析合法（services: server/web/gateway）；本机无 docker 故未实跑镜像，Dockerfile/compose 按纯 Go 多阶段 + nginx 反代正确编写。
+- 下一步：MX 全部 ✅ → PLAN.md 已无 ○ 任务，触发「全部完成」终态分支；后续如需新方向（如 K8s 部署、CI/CD、监控告警）可在 PLAN.md 增补新里程碑。
