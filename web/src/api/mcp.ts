@@ -66,3 +66,23 @@ export async function updateMCPServer(
 export async function deleteMCPServer(id: number): Promise<void> {
   await request(`/mcp/${id}`, { method: 'DELETE' })
 }
+
+// MCPTestResult 是「测试连接」的返回结构（MX-02）。
+// ok=false 表示连接/装载失败（配置错误），error 给出明确文案；ok=true 时 tools 为发现的工具列表。
+export interface MCPToolInfo {
+  name: string
+  description: string
+}
+export interface MCPTestResult {
+  ok: boolean
+  transport: string
+  count: number
+  tools: MCPToolInfo[]
+  error?: string
+}
+
+// testMCPServer 实际调 toolsearch 连接并预取工具列表，验证配置可用（MX-02）。
+export async function testMCPServer(id: number): Promise<MCPTestResult> {
+  return request<MCPTestResult>(`/mcp/${id}/test`, { method: 'POST' })
+}
+

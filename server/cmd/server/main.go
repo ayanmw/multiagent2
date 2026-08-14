@@ -144,6 +144,8 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.GET("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "read"), api.GetMCPServerHandler(db.DB, cfg.EncryptionKey))
 		protected.PUT("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.UpdateMCPServerHandler(db.DB, cfg.EncryptionKey))
 		protected.DELETE("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.DeleteMCPServerHandler(db.DB, cfg.EncryptionKey))
+		// MX-02：测试连接/装载校验（mcp:read；实际调 toolsearch 连接并预取工具列表）。
+		protected.POST("/mcp/:id/test", middleware.RequirePermission(db.DB, "mcp", "read"), api.TestMCPServerHandler(db.DB, cfg.EncryptionKey))
 
 		// 执行审计日志（M3-01）：CodeAct/Git/taskrun 三类命令执行的审计落库查询。
 		// owner 隔离：developer/admin 看全员，viewer 仅看本人；读操作需 audit:read（RBAC）。

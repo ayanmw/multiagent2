@@ -594,3 +594,13 @@
 - 前端：`web/src/api/session.ts` 增 `bindSessionWorkspace` + `SessionView.workspace_key` 类型；`ChatView.vue` 工具条增「工作区」下拉（`workspaceOptions` = 默认目录 + 各 workspace），切换即 PATCH 持久化，`selectSession` 时从 `getSession` 回灌已绑定 key，发送仍透传 workspaceKey 双保险。
 - 验证：`go build/vet ./...` 通过；`internal/api` 新增 `session_test.go`（绑定后详情暴露 workspace_key + 解绑 + 跨用户 404）全 PASS；前端 `vue-tsc --noEmit` + `vite build` 通过。`internal/repo` 10 例 go-sqlite3 CGO 用例在 CGO_ENABLED=0 沙箱失败（已知环境限制，与改动无关）。
 - 下一步：MX-02（前端深度打通-MCP，测试连接/装载校验）。
+
+---
+
+### 2026-08-14 15:25 | MX-02 | ✅ 前端深度打通-MCP（测试连接/装载校验）
+- MCP 管理页新增「测试连接」按钮，实际调 toolsearch 连接并预取工具列表，验证配置可用（对齐 M2-02/M2-06 管理面与延迟工具箱解耦设计）。
+- 后端：`internal/api/mcp.go` 新增 `TestMCPServerHandler`（POST /api/mcp/:id/test，mcp:read，owner 隔离复用 `lookupOwnedMCPServer` 解密 env/headers 密文）；实际调 `toolsearch.LoadMCPServerTools`（45s 整体超时高于框架 30s 内部超时），连接成功返回 `ok/count/tools[]`（命名空间+描述），失败以 `200+ok:false+error` 返回明确文案（配置错误而非服务端故障，便于前端清晰展示）；测完 `box.Close()` 释放 MCP 连接；`main.go` 注册路由。
+- 前端：`web/src/api/mcp.ts` 增 `testMCPServer` + `MCPTestResult/MCPToolInfo` 类型；`McpView.vue` 操作列加「测试连接」按钮（行内 loading + 全局禁用防并发），结果弹窗（`n-alert` 成功/错误 + 工具列表 `n-list`，空工具提示）。
+- 验证：`CGO_ENABLED=0 go build/vet ./...` 通过；新增 `TestMCP_TestConnection`（bogus stdio 命令→200+ok:false+error 非空 + owner 隔离 404）PASS；`go test -run TestMCP ./cmd/server/` 全绿（2.55s，纯 Go glebarez sqlite）；前端 `vue-tsc --noEmit` + `vite build` 通过（McpView chunk 8.46 kB）。`internal/repo` 历史 go-sqlite3 CGO 用例因 `CGO_ENABLED=0` 无 gcc 失败，属环境限制且与本任务无关（未改动 repo）。
+- 下一步：MX-03（前端深度打通-Skills，新建/编辑 SKILL.md），○。
+

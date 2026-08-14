@@ -14,6 +14,8 @@ import {
   NTag,
   NSpace,
   NText,
+  NList,
+  NListItem,
   useMessage,
   type DataTableColumns,
 } from 'naive-ui'
@@ -22,9 +24,11 @@ import {
   createMCPServer,
   updateMCPServer,
   deleteMCPServer,
+  testMCPServer,
   type MCPServer,
   type MCPServerPayload,
   type MCPTransport,
+  type MCPTestResult,
 } from '@/api/mcp'
 
 const message = useMessage()
@@ -162,6 +166,31 @@ async function handleDelete(s: MCPServer) {
   }
 }
 
+// MX-02：测试连接/装载校验——实际调后端 toolsearch 连接并预取工具列表。
+const testingId = ref<number | null>(null)
+const showTestResult = ref(false)
+const testTargetName = ref('')
+const testResult = ref<MCPTestResult | null>(null)
+
+async function handleTest(s: MCPServer) {
+  testingId.value = s.id
+  testTargetName.value = s.name
+  try {
+    const res = await testMCPServer(s.id)
+    testResult.value = res
+    showTestResult.value = true
+    if (res.ok) {
+      message.success(`连接成功，发现 ${res.count} 个工具`)
+    } else {
+      message.warning('连接失败，请检查配置')
+    }
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    testingId.value = null
+  }
+}
+
 const transportOptions = [
   { label: 'stdio（本地进程）', value: 'stdio' },
   { label: 'sse（Server-Sent Events）', value: 'sse' },
@@ -223,6 +252,17 @@ const columns: DataTableColumns<MCPServer> = [
     render(row) {
       return h(NSpace, { size: 4, wrap: false }, {
         default: () => [
+          h(
+            NButton,
+            {
+              size: 'small',
+              tertiary: true,
+              loading: testingId.value === row.id,
+              disabled: testingId.value !== null,
+              onClick: () => handleTest(row),
+            },
+            { default: () => '测试连接' },
+          ),
           h(NButton, { size: 'small', tertiary: true, onClick: () => openEdit(row) }, { default: () => '编辑' }),
           h(
             NPopconfirm,
@@ -318,6 +358,36 @@ const columns: DataTableColumns<MCPServer> = [
             {{ editingId === null ? '创建' : '保存' }}
           </n-button>
         </n-space>
+      </template>
+    </n-modal>
+
+    <!-- MX-02：测试连接结果 -->
+    <n-modal
+      v-model:show="showTestResult"
+      :title="`测试连接 · ${testTargetName}`"
+      preset="card"
+      style="width: 560px; max-width: 94vw"
+    >
+      <template v-if="testResult">
+        <n-alert
+          v-if="testResult.ok"
+          type="success"
+          :title="`连接成功，发现 ${testResult.count} 个工具`"
+          class="mb-3"
+        />
+        <n-alert v-else type="error" :title="'连接失败'" class="mb-3">
+          {{ testResult.error }}
+        </n-alert>
+        <template v-if="testResult.ok">
+          <n-text depth="3" class="text-sm">实际装载的工具（命名空间 + 描述）：</n-text>
+          <n-list class="mt-2" v-if="testResult.tools.length">
+            <n-list-item v-for="t in testResult.tools" :key="t.name">
+              <div class="font-mono text-xs">{{ t.name }}</div>
+              <n-text depth="3" class="text-xs">{{ t.description || '（无描述）' }}</n-text>
+            </n-list-item>
+          </n-list>
+          <n-text v-else depth="3" class="text-sm">该服务器连接成功，但未暴露任何工具。</n-text>
+        </template>
       </template>
     </n-modal>
   </n-card>

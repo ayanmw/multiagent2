@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
+	"github.com/ayanmw/multiagent2/server/internal/toolsearch"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -254,6 +256,55 @@ func DeleteMCPServerHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
 			return
 		}
 		c.Status(http.StatusNoContent)
+	}
+}
+
+// mcpTestTimeout 是「测试连接」端点的整体超时，需高于 toolsearch 内部单次
+// MCP 连接超时（30s），避免请求半途 ctx 先到期把真实连接错误掩盖成超时。
+const mcpTestTimeout = 45 * time.Second
+
+// TestMCPServerHandler 处理 POST /api/mcp/:id/test（需 mcp:read）。
+//
+// 实际调用 toolsearch.LoadMCPServerTools 连接并预取工具列表，验证配置可用——
+// 这正是 MX-02「前端深度打通-MCP」所需的后端能力：配可用 MCP → 点测试 → 返回工具列表；
+// 配错 → 明确报错。连接/初始化失败属于「配置错误」而非服务端故障，故以 200 + ok:false
+// 返回明确错误文案，前端据此展示；只有 DB/鉴权等服务端故障才返回 5xx。
+//
+// 仅做连接探测，测完立即 box.Close() 释放 MCP 会话连接，不把工具挂载进任何 Agent。
+func TestMCPServerHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid, ok := currentUserID(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+			return
+		}
+		m, ok2 := lookupOwnedMCPServer(c, db, uid, encKey)
+		if !ok2 {
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), mcpTestTimeout)
+		defer cancel()
+		box, err := toolsearch.LoadMCPServerTools(ctx, *m)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"ok":         false,
+				"transport":  string(m.Transport),
+				"error":      err.Error(),
+			})
+			return
+		}
+		defer box.Close()
+		entries := box.List()
+		tools := make([]gin.H, 0, len(entries))
+		for _, e := range entries {
+			tools = append(tools, gin.H{"name": e.Name, "description": e.Description})
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":         true,
+			"transport":  string(m.Transport),
+			"count":      len(tools),
+			"tools":      tools,
+		})
 	}
 }
 

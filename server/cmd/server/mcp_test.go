@@ -148,3 +148,55 @@ func TestMCP_ManagementAPI(t *testing.T) {
 		t.Fatalf("删除后详情应 404, 实际 %d", code)
 	}
 }
+
+// TestMCP_TestConnection 覆盖 MX-02：实际调 toolsearch 连接并预取工具列表的「测试连接」端点。
+// 成功路径需真实 MCP 服务器（沙箱难构造），故这里验证「配置错误 → 明确报错」的失败路径，
+// 以及未授权（viewer 调读接口）返回 200 且 ok=false/error 非空的契约，确保前端可清晰展示。
+func TestMCP_TestConnection(t *testing.T) {
+	r, db := newRBACRouter(t)
+
+	dev := &e2eClient{t: t, r: r}
+	code, reg := dev.do("POST", "/api/auth/register", map[string]any{
+		"username": "mcptest", "email": "mcptest@example.com", "password": "secret123",
+	})
+	if code != 201 {
+		t.Fatalf("developer 注册失败: %d %v", code, reg)
+	}
+	dev.tok = reg["token"].(string)
+
+	// 用不存在的 stdio 命令——Validate 通过，但 Init（spawn 进程）必然失败。
+	code, body := dev.do("POST", "/api/mcp", map[string]any{
+		"name": "broken", "transport": "stdio",
+		"command": "this-mcp-binary-does-not-exist-xyz",
+	})
+	if code != 201 {
+		t.Fatalf("创建应 201, 实际 %d, body=%v", code, body)
+	}
+	id := int(body["id"].(float64))
+
+	// 测试连接：应 200 + ok=false + 明确 error（配置错误，非服务端故障）。
+	code, body = dev.do("POST", "/api/mcp/"+strconv.Itoa(id)+"/test", nil)
+	if code != 200 {
+		t.Fatalf("测试连接应 200, 实际 %d, body=%v", code, body)
+	}
+	if body["ok"] != false {
+		t.Fatalf("bogus 命令应 ok=false, 实际 %v", body)
+	}
+	if errMsg, _ := body["error"].(string); errMsg == "" {
+		t.Fatalf("失败应返回明确 error 文案, 实际 %v", body)
+	}
+	if body["transport"] != "stdio" {
+		t.Fatalf("应回显 transport, 实际 %v", body)
+	}
+
+	// owner 隔离：其他用户访问该测试端点应 404（先建一个 viewer 账户）。
+	viewerTok := createViewerToken(t, db, "rbac-secret")
+	v := &e2eClient{t: t, r: r, tok: viewerTok}
+	code, _ = v.do("POST", "/api/mcp/"+strconv.Itoa(id)+"/test", nil)
+	if code != http.StatusNotFound {
+		t.Errorf("viewer 访问他人 MCP 测试应 404, 实际 %d", code)
+	}
+
+	// 清理
+	dev.do("DELETE", "/api/mcp/"+strconv.Itoa(id), nil)
+}
