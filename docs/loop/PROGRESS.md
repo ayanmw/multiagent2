@@ -579,3 +579,11 @@
 - 测试：① `regression_test.go::TestEvalChecker_Register_CreatesDatasetAndCase`（自动建集+用例、幂等）；② `eval/service_test.go` 增 RunSync 三例（Pass/Fail/EmptyDataset）；③ `api/regression_gate_test.go` 双向门禁（`_RegressionPass_GateAllowsPublish` 放行落盘 + `_RegressionBlock_GateRollback` 409 拦截且共享库回滚、DB 保持 pending）。
 - 验证：CGO_ENABLED=0 `go build ./...` ✅ | `go vet`（touched pkgs）✅；`go test ./internal/regression/... ./internal/eval/... ./internal/skillrepo/... ./internal/api/...` 全绿；`go test ./cmd/server/...` 集成测试全绿（10.6s，纯 Go glebarez sqlite 免 gcc）；`internal/repo` 历史 go-sqlite3 CGO 用例因无 gcc 跳过，与本任务无关。`regressionChecker` 经包级 `SetRegressionChecker` 注入，集成测试不设置故走旧行为，安全隔离。
 - Commit: d5be9d1（已推 origin/main）。下一步：M5-09（集成验证 E2E 进化，○，依赖 M5-01..08）。
+
+---
+
+### 2026-08-14 13:03 | M5-09 | ✅ 集成验证 E2E（进化）收口——五段全链路打通（依赖 M5-01..08）
+- 集成验证 E2E（M5 进化收口，依赖 M5-01..08 全部 ✅）：新增 `server/cmd/server/m5_integration_test.go::TestM5_Evolution_E2E`，进程内 Gin 路由（复用 M3/M4 集成测试基础设施 `buildRouter`/`buildGateway`/`e2eClient`/`newM1HTTPMockLLM`/`parseAGUI`，不调真实 LLM），串起进化阶段五段主链路：① CLI 对话（经 SSE 端点，与 CLI chat 子命令同一数据通路 → 建会话 → 两轮对话 → 4 条消息落库，为进化扫描提供 transcript）；② RAG 检索（M5-02，建知识库→索引文档→检索命中）；③ 技能进化飞轮（M5-03/04，注入 mock Extractor 绕开真实 LLM → 扫描生成 pending 候选 → approve → 发布共享技能库落盘 `skills/<name>/SKILL.md`）；④ 评估回归（M5-05，建评估集+用例→运行 mock Runner/Judge 确定性评分→出结果）；⑤ GEPA 反射式优化（M5-06，触发一次优化 → mock Reflector 产出改进指令 → 基线/候选评估经引擎打 mock LLM → 到达终态 accepted，Reflector 被调用断言）。
+- 关键修复：mock 提取候选的 `Body` 原文约 136 rune，低于 `quality.go` 质量门控 `MinBodyLen=200` 被拦截（日志 `正文过短（少于最小长度）`），扩充正文至 200+ rune 并保持 `#`/步骤结构、不含占位词后确定性过门。evolution/eval/promptiter 三服务均经包级 `SetXxxService` 注入 mock（不挂回归检查器，走 M5-04 直接发布语义），`buildRouter` 据此挂载对应路由组。
+- 验证：CGO_ENABLED=0 `go build ./...` ✅ | `go vet ./...` ✅；`go test ./cmd/server/ -run TestM5_Evolution_E2E` 五段全 PASS（0.95s）；`go test ./cmd/server/`（整包，含 M3/M4/A2A 集成测试）全绿（12.3s，纯 Go glebarez sqlite 免 gcc）；`internal/repo` 历史 go-sqlite3 CGO 用例因 `CGO_ENABLED=0` 无 gcc 跳过，属环境限制且与本任务无关（仅改动 cmd/server 测试文件）。M5 里程碑全部 ✅。
+- 下一步：M5 全部 ✅；后续可拾取 MX 质量加固项（MX-01..08，○）或推进新里程碑。

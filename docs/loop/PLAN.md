@@ -145,7 +145,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | M5-06 | **promptiter 优化**：GEPA 反射式 Prompt/技能优化——跑 eval → 定位弱项 → 生成改进建议 → 应用（写回 Agent 指令/SKILL.md）→ 再 eval 验证 | ✅ | 一轮优化后相关 eval 分数提升或持平；建议可读、可回滚 | M5-05 |
 | M5-07 | **A2A 对外协议**：平台作为 A2A server 对外暴露 Agent 能力（接收外部 Agent 任务、返回结果）；或作 client 调用外部 A2A Agent；最小可用端点 + 前端连接配置 | ✅ | 外部 A2A client 能向本平台发起一个任务并拿到结果（用 mock client 验证） | M4 |
 | M5-08 | **飞轮 × 回归联动**：新发布技能自动进 eval 集；回归不过则阻止发布并提示修订 | ✅ | 发布会破坏现有能力的技能 → 回归拦截 → 不发布 | M5-04, M5-05 |
-| M5-09 | **集成验证 E2E（进化）**：CLI 对话 → RAG 检索 → evolution 提取并审批技能 → evaluation 回归 → promptiter 优化 全链路；补关键单测 | ○ | 全链路走通；测试绿 | M5-01..08 |
+| M5-09 | **集成验证 E2E（进化）**：CLI 对话 → RAG 检索 → evolution 提取并审批技能 → evaluation 回归 → promptiter 优化 全链路；补关键单测 | ✅ | 全链路走通；测试绿 | M5-01..08 |
 
 ---
 
