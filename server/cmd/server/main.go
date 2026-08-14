@@ -27,14 +27,14 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/eval"
 	"github.com/ayanmw/multiagent2/server/internal/evolution"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
-	"github.com/ayanmw/multiagent2/server/internal/promptiter"
-	"github.com/ayanmw/multiagent2/server/internal/regression"
 	"github.com/ayanmw/multiagent2/server/internal/knowledge"
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/notify"
+	"github.com/ayanmw/multiagent2/server/internal/promptiter"
 	"github.com/ayanmw/multiagent2/server/internal/provider"
+	"github.com/ayanmw/multiagent2/server/internal/regression"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"github.com/ayanmw/multiagent2/server/internal/scheduler"
 	"github.com/ayanmw/multiagent2/server/internal/sessionstore"
@@ -50,7 +50,12 @@ import (
 // 传 nil 表示不挂载延迟工具箱（如集成测试）。
 func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, stateStore artifact.Store, enableState bool, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchProvider engine.ToolSearchProvider, gw *api.Gateway) *gin.Engine {
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+	// 安全加固（MX-07）：CORS 精细化白名单（仅放行前端域）+ 不泄露敏感信息的访问日志。
+	r.Use(middleware.CORS(middleware.CORSOptions{
+		AllowedOrigins:   cfg.CORSAllowedOrigins(),
+		AllowCredentials: true,
+	}))
+	r.Use(middleware.SecureLogger(), gin.Recovery())
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -68,8 +73,14 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 	// Public auth routes
 	authGroup := r.Group("/api/auth")
 	{
-		authGroup.POST("/register", api.RegisterHandler(cfg.JWTSecret, db.DB))
-		authGroup.POST("/login", api.LoginHandler(cfg.JWTSecret, db.DB))
+		// 安全加固（MX-07）：登录/注册按客户端 IP 滑动窗口限流，防爆破。
+		loginEnabled, loginLimit, loginWindow := cfg.RateLimitLogin()
+		if !loginEnabled {
+			loginLimit = 0 // 关闭时中间件直接放行
+		}
+		loginLimiter := middleware.RateLimit(middleware.ClientIPKey, loginLimit, loginWindow)
+		authGroup.POST("/register", loginLimiter, api.RegisterHandler(cfg.JWTSecret, db.DB))
+		authGroup.POST("/login", loginLimiter, api.LoginHandler(cfg.JWTSecret, db.DB))
 	}
 
 	// Protected routes (accept either a Bearer JWT or an X-API-Key header)
@@ -273,17 +284,36 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// 推进到 complete/blocked 才允许结束，过早的最终答复会被拦截并要求继续干活。
 		// M1-12：team 模式默认启用 Plan-Execute 循环（PLAN_EXECUTE），Orchestrator 必须
 		// 先建计划、逐项执行完毕才允许结束；二者叠加在 Orchestrator 上。
-	// M2-03：skillWarmStart 等参数驱动「技能 warm-start」，会话开始把相关 SKILL.md
-	// 注入根 Agent 系统上下文（长度受 SkillWarmStartMaxChars 上限控制）。
-	// Web 对话（/api/chat 与 SSE 端点）经统一 Gateway（M4-04）跑引擎：Gateway 持有 Team
-	// 配置与全部运行时依赖，并负责稳定 session_id + 每会话串行锁 + 统一 Runner，
-	// 使 Web/SSE/定时/Webhook 收敛到同一代码路径。
-	protected.POST("/chat", api.ChatHandler(gw))
+		// M2-03：skillWarmStart 等参数驱动「技能 warm-start」，会话开始把相关 SKILL.md
+		// 注入根 Agent 系统上下文（长度受 SkillWarmStartMaxChars 上限控制）。
+		// Web 对话（/api/chat 与 SSE 端点）经统一 Gateway（M4-04）跑引擎：Gateway 持有 Team
+		// 配置与全部运行时依赖，并负责稳定 session_id + 每会话串行锁 + 统一 Runner，
+		// 使 Web/SSE/定时/Webhook 收敛到同一代码路径。
+		// 安全加固（MX-07）：对话按认证用户滑动窗口限流，防滥用（缺省回落 IP）。
+		chatEnabled, chatLimit, chatWindow := cfg.RateLimitChat()
+		if !chatEnabled {
+			chatLimit = 0 // 关闭时中间件直接放行
+		}
+		chatLimiter := middleware.RateLimit(middleware.UserIDKey, chatLimit, chatWindow)
+
+		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
+		// M1-08：AGENT_MODE=team 时根 Agent 换成 Orchestrator，代码落地委托 Coder 子代理。
+		// M1-09：team 模式默认再加入只读 Reviewer（TEAM_REVIEWER），形成「实现→审阅→修复」回环。
+		// M1-11：team 模式默认启用目标契约（GOAL_CONTRACT），Orchestrator 必须把目标
+		// 推进到 complete/blocked 才允许结束，过早的最终答复会被拦截并要求继续干活。
+		// M1-12：team 模式默认启用 Plan-Execute 循环（PLAN_EXECUTE），Orchestrator 必须
+		// 先建计划、逐项执行完毕才允许结束；二者叠加在 Orchestrator 上。
+		// M2-03：skillWarmStart 等参数驱动「技能 warm-start」，会话开始把相关 SKILL.md
+		// 注入根 Agent 系统上下文（长度受 SkillWarmStartMaxChars 上限控制）。
+		// Web 对话（/api/chat 与 SSE 端点）经统一 Gateway（M4-04）跑引擎：Gateway 持有 Team
+		// 配置与全部运行时依赖，并负责稳定 session_id + 每会话串行锁 + 统一 Runner，
+		// 使 Web/SSE/定时/Webhook 收敛到同一代码路径。
+		protected.POST("/chat", chatLimiter, api.ChatHandler(gw))
 
 		// AG-UI SSE 流式对话端点（M0-11）：事件流转 AG-UI 协议，Session 持久化。
 		// M0.5-06：message 改由 POST body 传递（避免明文进访问日志），故注册为 POST。
 		// 事件流由统一 Gateway 经 gw.Stream 产出（详见 StreamChatHandler）。
-		protected.POST("/chat/:session_id/stream", api.StreamChatHandler(gw))
+		protected.POST("/chat/:session_id/stream", chatLimiter, api.StreamChatHandler(gw))
 
 		// A2A 协议任务入口（M5-07）：外部 Agent 经 JSON-RPC 2.0（method=message/send / tasks/send）
 		// 调用本平台能力。经统一 Gateway 跑引擎（复用会话串行锁、多轮记忆、预算护栏与用量计量），

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
@@ -94,6 +95,17 @@ type Config struct {
 	// 出站 webhook 通知回调地址（M4-07）：自主化 Loop 结果除站内信外，额外 POST 一份 JSON
 	// 事件到该地址（占位，可对接外部系统）。为空则跳过（仅站内信）。
 	webhookNotifyURL string // 出站通知回调地址（env WEBHOOK_NOTIFY_URL，默认空=关闭）
+	// 安全加固（MX-07）：CORS 精细化允许的前端源列表（env CORS_ALLOWED_ORIGINS，逗号分隔），
+	// 仅放行白名单内的跨域源；缺省为本地 Vite 开发源。特殊值 "*" 放开全部（仅公开非凭证接口用）。
+	corsAllowedOrigins []string
+	// 登录/注册防刷（MX-07）：按客户端 IP 滑动窗口限流；关闭则 limit 回落 0（中间件直接放行）。
+	rateLimitLoginEnabled bool
+	rateLimitLoginLimit   int
+	rateLimitLoginWindow  time.Duration
+	// 对话防刷（MX-07）：按认证用户滑动窗口限流（缺省回落客户端 IP）；关闭则 limit 回落 0。
+	rateLimitChatEnabled bool
+	rateLimitChatLimit   int
+	rateLimitChatWindow  time.Duration
 	// 运行时模式（M4-06）：env RUN_MODE，默认 unattended。无人值守下危险命令 deny 默认、
 	// 命中 ask 生成人工检查点排队、预算护栏全程生效，使 24h 自主 Loop 无需人盯；
 	// attended 仅用于有人实时值守的调试会话（危险命令 ask 直接 deny）。
@@ -346,6 +358,40 @@ func Load() *Config {
 
 	// 出站 webhook 通知回调地址（M4-07）：为空表示只发站内信，不发外部回调。
 	cfg.webhookNotifyURL = envOrDefault("WEBHOOK_NOTIFY_URL", "")
+
+	// 安全加固（MX-07）：CORS 精细化允许源。缺省本地 Vite 开发源；生产用
+	// CORS_ALLOWED_ORIGINS 显式配置前端域名（逗号分隔）。特殊值 "*" 放开全部
+	//（仅公开非凭证接口用，此时 AllowCredentials 不生效）。
+	corsOrigins := envOrDefault("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+	cfg.corsAllowedOrigins = splitAndTrim(corsOrigins, ",")
+
+	// 登录/注册防刷（MX-07）：缺省开启，单 IP 每 60s 最多 10 次，抵御爆破。
+	cfg.rateLimitLoginEnabled = envOrDefaultBool("RATE_LIMIT_LOGIN_ENABLED", true)
+	cfg.rateLimitLoginLimit = envOrDefaultInt("RATE_LIMIT_LOGIN_LIMIT", 10)
+	if cfg.rateLimitLoginLimit <= 0 {
+		log.Printf("[WARN] RATE_LIMIT_LOGIN_LIMIT must be positive; using default 10")
+		cfg.rateLimitLoginLimit = 10
+	}
+	rlw := envOrDefaultInt("RATE_LIMIT_LOGIN_WINDOW_SECONDS", 60)
+	if rlw <= 0 {
+		log.Printf("[WARN] RATE_LIMIT_LOGIN_WINDOW_SECONDS must be positive; using default 60")
+		rlw = 60
+	}
+	cfg.rateLimitLoginWindow = time.Duration(rlw) * time.Second
+
+	// 对话防刷（MX-07）：缺省开启，单用户每 60s 最多 30 次（缺省回落 IP），抵御滥用。
+	cfg.rateLimitChatEnabled = envOrDefaultBool("RATE_LIMIT_CHAT_ENABLED", true)
+	cfg.rateLimitChatLimit = envOrDefaultInt("RATE_LIMIT_CHAT_LIMIT", 30)
+	if cfg.rateLimitChatLimit <= 0 {
+		log.Printf("[WARN] RATE_LIMIT_CHAT_LIMIT must be positive; using default 30")
+		cfg.rateLimitChatLimit = 30
+	}
+	rcw := envOrDefaultInt("RATE_LIMIT_CHAT_WINDOW_SECONDS", 60)
+	if rcw <= 0 {
+		log.Printf("[WARN] RATE_LIMIT_CHAT_WINDOW_SECONDS must be positive; using default 60")
+		rcw = 60
+	}
+	cfg.rateLimitChatWindow = time.Duration(rcw) * time.Second
 
 	// 运行时模式（M4-06）：默认 unattended（24h 自主平台的安全默认）。
 	cfg.runMode = envOrDefault("RUN_MODE", RunModeUnattended)
@@ -632,6 +678,46 @@ func envOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// splitAndTrim splits s by sep and returns non-empty trimmed parts.
+func splitAndTrim(s, sep string) []string {
+	parts := strings.Split(s, sep)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// CORSAllowedOrigins returns the allowlisted frontend origins for CORS (MX-07).
+// An empty slice means no cross-origin requests are permitted.
+func (c *Config) CORSAllowedOrigins() []string {
+	if c == nil {
+		return nil
+	}
+	return c.corsAllowedOrigins
+}
+
+// RateLimitLogin returns the login/register anti-bruteforce settings (MX-07):
+// enabled flag, per-IP limit within the window, and the window duration.
+func (c *Config) RateLimitLogin() (enabled bool, limit int, window time.Duration) {
+	if c == nil {
+		return true, 10, 60 * time.Second
+	}
+	return c.rateLimitLoginEnabled, c.rateLimitLoginLimit, c.rateLimitLoginWindow
+}
+
+// RateLimitChat returns the chat anti-abuse settings (MX-07): enabled flag,
+// per-user limit within the window, and the window duration.
+func (c *Config) RateLimitChat() (enabled bool, limit int, window time.Duration) {
+	if c == nil {
+		return true, 30, 60 * time.Second
+	}
+	return c.rateLimitChatEnabled, c.rateLimitChatLimit, c.rateLimitChatWindow
 }
 
 // envOrDefaultBool parses a boolean env var (1/t/true/0/f/false, case-insensitive).
