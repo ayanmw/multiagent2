@@ -634,3 +634,13 @@
 - 前端：web/src/api/admin.ts 封装 + AdminView.vue（用户表格/创建编辑抽屉/禁用启用/重置密码/配额列，仅 admin 可见）+ 路由 admin + 菜单「用户管理」（非 admin 隐藏）。
 - 验证：CGO_ENABLED=0 go build/vet 全绿；admin_test 2 例（生命周期 + 防自锁）PASS；前端 vue-tsc --noEmit + vite build 全绿。CGO_ENABLED=0 下 internal/repo 历史 go-sqlite3 用例按 AGENTS.md 豁免跳过，与本次无关。
 - 下一步：MX-07（安全加固：登录/对话限流、CORS 白名单、敏感不出日志）。
+
+---
+
+### 2026-08-14 20:58 | MX-07 | ✅ 安全加固：API 限流、CORS 精细化白名单、敏感日志脱敏
+- 后端安全加固（MX 质量加固收口项）：① **API 限流**——新增 `server/internal/middleware/ratelimit.go`（`RateLimiter` 内存滑动窗口 + `RateLimit(keyFunc,limit,window)` Gin 中间件，`limit<=0` 直接放行便于配置开关）；登录/注册按 `ClientIPKey` 限流（默认单 IP 每 60s 10 次，防爆破），对话 `/chat` 与 `/chat/:session_id/stream` 按 `UserIDKey`（认证用户，回落 IP）限流（默认每 60s 30 次，防滥用）。② **CORS 精细化**——新增 `middleware/cors.go`（`CORS(CORSOptions)`），仅放行 `CORS_ALLOWED_ORIGINS` 白名单内的源（缺省 `http://localhost:5173,http://127.0.0.1:5173`），未命中不回写 `Access-Control-Allow-Origin`；正确处理 OPTIONS 预检（带 Origin 时 204 短路，不进鉴权）；`*` 通配时禁止 `Allow-Credentials`（符合规范）。③ **敏感信息不出日志**——新增 `middleware/securelogging.go`（`SecureLogger()` 替换 `gin.Logger()`），访问日志仅记录 method/path/status/latency/IP，**绝不记录请求体或敏感头**（Authorization/X-API-Key），并附 `redactHeaders` 防御性脱敏工具。
+- 配置（`server/internal/config/config.go`）：新增 `CORS_ALLOWED_ORIGINS` / `RATE_LIMIT_LOGIN_ENABLED`(`_LIMIT`/`_WINDOW_SECONDS`) / `RATE_LIMIT_CHAT_ENABLED`(`_LIMIT`/`_WINDOW_SECONDS`) 共 7 个 env，含默认与非法值回落告警；`cmd/server/main.go` 全局挂载 CORS + SecureLogger，并在 authGroup/chat 路由按开关接线。
+- 测试：`middleware` 包新增 3 个测试文件共 14 例（ratelimit 6 + cors 5 + securelogging 3，含 429、预检 204、白名单拒绝、通配无凭证、脱敏等），全 PASS。
+- 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓ | `go test -count=1 ./internal/middleware/... ./cmd/server/...`（含复用 buildRouter 的 M3/M4/M5 E2E）✓；`go test ./...` 非 CGO 包全绿。`internal/repo` 历史 10 例 `*_test.go` 仍走 go-sqlite3 驱动，CGO_ENABLED=0 下 stub 报错，属 AGENTS.md 豁免的 gcc 环境限制，与本次改动无关（生产 db.go 已用纯 Go glebarez）。
+- Commit: 6eca9cc（已推 origin/main）。
+- 下一步：MX-08（部署与文档：README/docker-compose/.env.example）。
