@@ -83,6 +83,26 @@ const createName = ref('')
 const createBody = ref('')
 const createSubmitting = ref(false)
 
+function applyTemplate() {
+  const nm = createName.value.trim() || 'my-skill'
+  createBody.value = `---
+name: ${nm}
+description: 用一句话描述这个技能解决的问题
+---
+
+# 适用场景
+（何时应该使用这个技能）
+
+# 步骤
+1. ...
+2. ...
+
+# 注意事项
+- 关键约束与易错点
+`
+  message.success('已插入 SKILL.md 模板')
+}
+
 async function submitCreate() {
   if (!createName.value.trim()) {
     message.warning('请填写技能名（仅字母数字与 - _）')
@@ -214,6 +234,10 @@ const columns: DataTableColumns<Skill> = [
       style="width: 600px; max-width: 94vw"
     >
       <n-input v-model:value="createName" placeholder="技能名（仅字母数字与 - _）" class="mb-2" />
+      <n-space class="mb-2">
+        <n-button size="small" tertiary @click="applyTemplate">插入 SKILL.md 模板</n-button>
+        <n-text depth="3" class="text-xs">模板含 frontmatter(name/description)+正文，warm-start 会自动命中私有技能</n-text>
+      </n-space>
       <n-input
         v-model:value="createBody"
         type="textarea"
