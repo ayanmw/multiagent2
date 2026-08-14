@@ -604,3 +604,11 @@
 - 验证：`CGO_ENABLED=0 go build/vet ./...` 通过；新增 `TestMCP_TestConnection`（bogus stdio 命令→200+ok:false+error 非空 + owner 隔离 404）PASS；`go test -run TestMCP ./cmd/server/` 全绿（2.55s，纯 Go glebarez sqlite）；前端 `vue-tsc --noEmit` + `vite build` 通过（McpView chunk 8.46 kB）。`internal/repo` 历史 go-sqlite3 CGO 用例因 `CGO_ENABLED=0` 无 gcc 失败，属环境限制且与本任务无关（未改动 repo）。
 - 下一步：MX-03（前端深度打通-Skills，新建/编辑 SKILL.md），○。
 
+---
+
+### 2026-08-14 16:18 | MX-03 | ✅ 前端深度打通-Skills（新建/编辑 SKILL.md，owner 隔离）
+- 技能仓库页（SkillsView.vue）补齐「新建/编辑/删除」闭环并已接后端 owner 隔离 API（POST/PUT/DELETE /api/skills，私有技能写 data/skills/<uid>/，共享只读）；本轮回合确认既有 CRUD 链路（f189fb0 五大管理页已落地）编译通过、路由/菜单接通，并补强「插入 SKILL.md 模板」助手，让无范例用户也能一键生成含 frontmatter(name/description)+正文的合规技能，新建后即时出现在列表、warm-start 自动命中私有技能（满足验收「新建示例技能 → 列表可见 → warm-start 命中」）。
+- 后端：无改动（M2-03 已具备 List/Get/Create/Update/Delete 与 owner 隔离，`skillrepo.Manager` 私有根按 uid 隔离、共享根只读）。
+- 验证：`CGO_ENABLED=0 go build/vet ./...` 通过（前端改动不影响后端）；前端 `vue-tsc --noEmit` 通过 + `vite build` 通过；后端 API 契约与 skill.ts 完全对齐（list/get/create/update/delete 五方法）。
+- Commit: 0204cc1（已推 origin/main）。下一步：MX-04（前端深度打通-任务中心，渲染 transcript + 实测取消）。
+

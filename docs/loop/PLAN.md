@@ -157,7 +157,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 |---|------|------|----------|------|
 | MX-01 | **前端深度打通-工作区**：对话页支持选择/切换 Workspace 并绑定当前会话（Workspace 模型 API 已有，但未与对话绑定 UI 接通） | ✅ | 对话页下拉选 workspace → 消息在该目录执行 → 刷新后仍绑定 | M1-07 |
 | MX-02 | **前端深度打通-MCP**：MCP 页「测试连接/装载校验」按钮（调 toolsearch 实际装载一个工具验证配置可用） | ✅ | 配可用 MCP → 点测试 → 返回工具列表；配错 → 明确报错 | M2-02, M2-06 |
-| MX-03 | **前端深度打通-Skills**：Skills 页支持新建/编辑 SKILL.md（目前仅浏览），owner 隔离 | ○ | 新建示例技能 → 列表可见 → warm-start 命中 | M2-03 |
+| MX-03 | **前端深度打通-Skills**：Skills 页支持新建/编辑 SKILL.md（目前仅浏览），owner 隔离 | ✅ | 新建示例技能 → 列表可见 → warm-start 命中 | M2-03 |
 | MX-04 | **前端深度打通-任务中心**：TaskCenter 渲染 transcript（目前仅列表/详情）、「取消」按钮实测接 `cancel_task_run` | ○ | 起后台任务 → 详情看到 transcript 流 → 取消生效 | M2-04 |
 | MX-05 | **后端测试补全**：为 M2 各包（taskrun/worktree/mcp/skills/toolsearch）补单测 + 集成测试（目前主要靠手动 verify） | ○ | `go test ./internal/...` 各 M2 包有测试且绿 | M2 |
 | MX-06 | **用户管理后台（admin）**：管理员创建/禁用/重置用户、查看用户列表与配额；前端 `AdminView` | ○ | admin 创建用户 → 该用户可登录；禁用后无法登录 | M0, M3-04 |
