@@ -677,3 +677,12 @@
 - 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓；`go test -count=1 ./internal/engine/... ./internal/api/... ./cmd/server/...` 全绿（engine 2.1s / api 7.1s / cmd/server 19.0s）；`internal/repo` 的 go-sqlite3 CGO 用例因沙箱无 gcc 报 stub 错误，属既有环境限制（AGENTS.md 豁免），与本次无关。`api` 包 grep `trpc.group/.../(model|event|session)` 零命中，达成「api 层无框架类型直接 import」验收标准。
 - Commit: f797654（已推 origin/main）。
 - 下一步：M6-03（生产迁移治理：DB_AUTO_MIGRATE 默认关闭 + 启动告警 + README 说明，依赖 M3-08，已完成）。
+
+---
+
+### 2026-08-18 00:17 | M6-03 | ✅ 生产迁移治理（DB_AUTO_MIGRATE 默认关闭 + 启动告警 + schema_migrations 真相源）
+- 硬伤优先（S3 可运营）第三项：把「生产 schema 真相源 = schema_migrations 版本表」这一约束从「仅注释」落地为可验证的运行时保证。M3-08 已引入版本化迁移，本任务加固三点：① `DB_AUTO_MIGRATE` 默认关闭（config.go `envOrDefaultBool("DB_AUTO_MIGRATE", false)`，零值即为 false），开启时 config.go 与 db.go 两处打印醒目 `[WARN]`，明确「生产严禁开启、会造成各环境 schema 漂移」；② 启动自检 `logMigrationAuthority`（db.go）：每次启动打印「Schema 真相源 = schema_migrations 版本表：已应用 N 版本，待应用 M 版本」，若存在未应用迁移额外告警（提示部署滞后）；③ README 新增「数据库与迁移」专节，明确 DB_AUTO_MIGRATE 仅限本地开发、生产 schema 由版本表统一管理、如何新增迁移的正确流程（Migrations() 追加版本 + baselineModels 同步）。
+- 新增测试：`repo.TestRunMigrations_VersionTableIsSourceOfTruth`（全量迁移后版本表记录全部版本、PendingMigrations 为空，即「版本表即真相源」）+ `config.TestDBAutoMigrate_DefaultOff`/`TestDBAutoMigrate_EnvDriven`（默认 false、env 驱动）。既有 `TestRunMigrations_Idempotent`（含数据不破坏）保留。
+- 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓；`go test ./internal/repo/...`（迁移相关 TestMigrations_*/TestRunMigrations_*/TestNewDB_UsesVersionedMigrations 全绿，含新增 VersionTableIsSourceOfTruth）+ `go test ./internal/config/...`（10 测试全绿含新增 2 项）全绿；`internal/repo` 其余用例因沙箱无 gcc（go-sqlite3 需 cgo）报 stub 错误，属既有环境限制（AGENTS.md 豁免），与本次无关。
+- Commit: 622242b（已推 origin/main）。
+- 下一步：M6-04（种子技能库 + warm-start 真实命中 E2E，依赖 M2-03，已完成）。
