@@ -658,3 +658,11 @@
 - 动作：先前全 ✅ 终态时 Loop 自我 PAUSED；本轮补入 M6 计划并恢复 automation 为 ACTIVE（id automation-1785674327686），重新开启自主推进。
 - 计划增补：PLAN.md 新增「M6 可运营化加固」节（M6-01~06，全 ○），硬伤优先排序 M6-01/02/03（S1/S2/S3）在前，M6-04/05/06（能力/韧性/验证）在后。
 - 下一步：下一轮（约 23:00）自动拾取首个 ○=M6-01（worktree/taskrun 测试去 skip），按硬伤优先逐轮推进 M6。
+
+---
+
+### 2026-08-17 23:12 | M6-01 | ✅ worktree/taskrun 测试去 skip（git+executor 可用性探测）
+- 硬伤优先（S1 正确性）首任务：核心隔离测试此前仅用 `NewHostExecutor(".")` 弱探测，**未校验 git 可用性**——在缺 git 环境会直接 FAIL 而非 skip，破坏 `go test` 默认通过。新增 `skipUnlessGit(t)` 探针（两包各一份），同时校验 `exec.LookPath("git")` 与 `executor.NewHostExecutor(".")`，二者任一不可用即 `t.Skip`（明确提示「CI 应安装 git」）；git 可用环境（CI）则真正执行隔离核验。
+- 落地点：`worktree/worktree_test.go`（TestManager_CreateAndMerge、TestManager_FinalizeFailureKeepsBranch 改用探针）+ `taskrun/taskrun_test.go`（TestWorktreeHook_CreateAndFinalize 加探针）；纯逻辑用例（TestManager_UnknownSession/TestSanitizeName/TestTools_* /TestWorktreeHook_DisabledIsNoop）不依赖 git，保持直跑。
+- 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓；`go test -count=1 ./internal/worktree/... ./internal/taskrun/...` 在本环境（git 2.55 可用）真跑并全绿——确认隔离逻辑无隐藏 bug（CreateAndMerge 子任务提交→completed merge 回主分支+清理分支+移除 worktree；FinalizeFailure 失败保留分支；Hook CreateAndFinalize 终态 merge）。无密钥/本地路径/用户名泄漏。
+- 下一步：M6-02（框架依赖收敛到 engine 层：api 不再直接 import 框架 model.Message/event.Event/session.Service）。

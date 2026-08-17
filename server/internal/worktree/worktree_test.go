@@ -3,6 +3,7 @@ package worktree
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,18 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/executor"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
+
+// skipUnlessGit 在 git 或 host executor 不可用时跳过依赖 git 的隔离测试，
+// 使 `go test` 在缺少 git 的最小/本地环境也能默认通过；CI（已安装 git）则真正执行核心隔离测试。
+func skipUnlessGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git 不可用，跳过（CI 应安装 git 以运行核心隔离测试）")
+	}
+	if _, err := executor.NewHostExecutor("."); err != nil {
+		t.Skip("executor 不可用，跳过")
+	}
+}
 
 // initRepo 初始化一个含初始提交的主仓库（worktree add 必须有可检出的提交）。
 func initRepo(t *testing.T, dir string) {
@@ -48,9 +61,7 @@ func readFile(t *testing.T, path string) string {
 
 // TestManager_CreateAndMerge 验证核心验收：子任务在 worktree 提交 → 终态 merge 回主分支 → 主分支含改动 → 临时分支已清理。
 func TestManager_CreateAndMerge(t *testing.T) {
-	if _, err := executor.NewHostExecutor("."); err != nil {
-		t.Skip("executor 不可用，跳过")
-	}
+	skipUnlessGit(t)
 	base := t.TempDir()
 	repoDir := filepath.Join(base, "repo")
 	initRepo(t, repoDir)
@@ -113,9 +124,7 @@ func TestManager_CreateAndMerge(t *testing.T) {
 
 // TestManager_FinalizeFailureKeepsBranch 验证：失败任务不 merge 半成品，但保留分支供复核，仅移除检出目录。
 func TestManager_FinalizeFailureKeepsBranch(t *testing.T) {
-	if _, err := executor.NewHostExecutor("."); err != nil {
-		t.Skip("executor 不可用，跳过")
-	}
+	skipUnlessGit(t)
 	base := t.TempDir()
 	repoDir := filepath.Join(base, "repo")
 	initRepo(t, repoDir)

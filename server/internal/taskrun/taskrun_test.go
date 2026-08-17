@@ -3,6 +3,7 @@ package taskrun
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,18 @@ import (
 	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+// skipUnlessGit 在 git 或 host executor 不可用时跳过依赖 git 的隔离测试，
+// 使 `go test` 在缺少 git 的最小/本地环境也能默认通过；CI（已安装 git）则真正执行核验。
+func skipUnlessGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git 不可用，跳过（CI 应安装 git 以运行核心隔离测试）")
+	}
+	if _, err := executor.NewHostExecutor("."); err != nil {
+		t.Skip("executor 不可用，跳过")
+	}
+}
 
 // initRepo 初始化一个含初始提交的主仓库（worktree add 必须有可检出的提交）。
 func initRepo(t *testing.T, dir string) {
@@ -93,6 +106,7 @@ func TestTools_WithSessionService(t *testing.T) {
 // TestWorktreeHook_CreateAndFinalize 验证 M2-05 钩子胶水：
 // Create 创建隔离 worktree；OnRunUpdate(completed) 触发 merge 回主分支 + 清理。
 func TestWorktreeHook_CreateAndFinalize(t *testing.T) {
+	skipUnlessGit(t)
 	base := t.TempDir()
 	repoDir := filepath.Join(base, "repo")
 	initRepo(t, repoDir)

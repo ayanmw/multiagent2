@@ -173,7 +173,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 
 | # | 任务 | 状态 | 验证标准 | 依赖 |
 |---|------|------|----------|------|
-| M6-01 | **worktree / taskrun 测试去 skip**：CI 装 git + executor 可用性探测；核心隔离测试在 CI 真正执行并绿；本地 `go test` 默认跑通 | ○ | CI 装 git+executor 后 `TestManager_CreateAndMerge`/`TestWorktreeHook_*` 真跑并绿；本地 `go test ./internal/worktree/... ./internal/taskrun/...` 通过 | 无 |
+| M6-01 | **worktree / taskrun 测试去 skip**：CI 装 git + executor 可用性探测；核心隔离测试在 CI 真正执行并绿；本地 `go test` 默认跑通 | ✅ | CI 装 git+executor 后 `TestManager_CreateAndMerge`/`TestWorktreeHook_*` 真跑并绿；本地 `go test ./internal/worktree/... ./internal/taskrun/...` 通过 | 无 |
 | M6-02 | **框架依赖收敛到 engine 层**：`api` 层不再直接 import 框架 `model.Message`/`event.Event`/`session.Service`；新增 `engine` DTO 适配（出入转换） | ○ | `api` 层无框架类型直接 import；`engine.go` 注释承诺兑现 | 无 |
 | M6-03 | **生产迁移治理**：`DB_AUTO_MIGRATE` 默认关闭 + 启动时若开启则告警日志；README 明确「仅本地开发」；迁移版本表为唯一生产 schema 真相源 | ○ | 默认关闭；误开有告警；README 说明 | M3-08 |
 | M6-04 | **种子技能库 + warm-start 真实命中 E2E**：`skills/` 补 ≥3 个真实技能（如 git-flow/code-review/go-build）；新增测试证明新会话确实注入并模型遵循 | ○ | ≥3 技能入库；测试证明注入命中 | M2-03 |
