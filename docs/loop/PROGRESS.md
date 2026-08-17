@@ -666,3 +666,14 @@
 - 落地点：`worktree/worktree_test.go`（TestManager_CreateAndMerge、TestManager_FinalizeFailureKeepsBranch 改用探针）+ `taskrun/taskrun_test.go`（TestWorktreeHook_CreateAndFinalize 加探针）；纯逻辑用例（TestManager_UnknownSession/TestSanitizeName/TestTools_* /TestWorktreeHook_DisabledIsNoop）不依赖 git，保持直跑。
 - 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓；`go test -count=1 ./internal/worktree/... ./internal/taskrun/...` 在本环境（git 2.55 可用）真跑并全绿——确认隔离逻辑无隐藏 bug（CreateAndMerge 子任务提交→completed merge 回主分支+清理分支+移除 worktree；FinalizeFailure 失败保留分支；Hook CreateAndFinalize 终态 merge）。无密钥/本地路径/用户名泄漏。
 - 下一步：M6-02（框架依赖收敛到 engine 层：api 不再直接 import 框架 model.Message/event.Event/session.Service）。
+
+---
+
+### 2026-08-17 23:23 | M6-02 | ✅ 框架依赖收敛到 engine 层（api 不再直接 import 框架 model/event/session）
+- 硬伤优先（S2 可维护性）第二项：把 api 层对 trpc-agent-go 框架 `model.Message`/`event.Event`/`session.Service` 的直接依赖收敛到 engine 层，仅保留 `tool` 与 `agent/taskrun`（taskrunruntime.Controller）两个合法依赖。
+- 新增 `server/internal/engine/dto.go`：① `ChatMessage{Role,Content}` + `ToFramework()`（字符串角色→框架 Role 枚举边界映射，多轮记忆回灌仍由引擎完成）；② `StreamEvent`（归一化事件 DTO，含 IsError/CircuitBreak/ErrorMsg/Choices）+ `StreamChoice`/`StreamToolCall`，经 `toStreamEvent(*event.Event)` 在引擎边界完成 `*event.Event`→`StreamEvent` 转换，使 SSE 的 AG-UI 转换不再接触框架 event 包；③ `SessionService` 引擎层接口（`GetSessionEvents` 返回 `[]any` 原始框架事件以保持前端 transcript 契约不变 + `Framework()` 仅引擎内部回传底层 `session.Service` 给 taskrun 工具），`NewSessionService` 适配器包裹框架 `session.Service`。
+- api 层改动：`history.go`/`usage.go` 改用 `engine.ChatMessage`；`sse.go` 的 `aguiConverter.Convert` 消费 `engine.StreamEvent`（文本去重/工具调用/错误/熔断均经 DTO 字段）；`gateway.go` 的 `GatewayConfig.TaskRunSession` 改为 `engine.SessionService`；`taskrun.go` 的 `GetTaskRunTranscriptHandler` 改收 `engine.SessionService` 并调 `GetSessionEvents` 回查 transcript；`main.go` 两处（`GetTaskRunTranscriptHandler` 调用与 `GatewayConfig.TaskRunSession`）用 `engine.NewSessionService(taskRunSession)` 包裹原始框架 `session.Service`。
+- engine 层：`engine.go` 的 `Chat`/`Stream` 桥接消费 `StreamEvent` DTO（Chat 的熔断 partial 保留逻辑改用 `ev.CircuitBreak`），移除对框架 `event`/`session` 包的显式 import（转换逻辑已下沉至 dto.go）。测试：`sse_test.go` 改用 `engine.StreamEvent` DTO 构造（去除 framework event/model 依赖）；`engine_test.go` 历史改用 `engine.ChatMessage`。
+- 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓；`go test -count=1 ./internal/engine/... ./internal/api/... ./cmd/server/...` 全绿（engine 2.1s / api 7.1s / cmd/server 19.0s）；`internal/repo` 的 go-sqlite3 CGO 用例因沙箱无 gcc 报 stub 错误，属既有环境限制（AGENTS.md 豁免），与本次无关。`api` 包 grep `trpc.group/.../(model|event|session)` 零命中，达成「api 层无框架类型直接 import」验收标准。
+- Commit: f797654（已推 origin/main）。
+- 下一步：M6-03（生产迁移治理：DB_AUTO_MIGRATE 默认关闭 + 启动告警 + README 说明，依赖 M3-08，已完成）。
