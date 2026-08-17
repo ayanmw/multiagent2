@@ -651,3 +651,10 @@
 - 部署与文档收口（MX 质量加固末项，依赖 M0-M2 全部交付）：① **README.md 重写**——修正过时「需 CGO/装 C 编译器」说法（实际 `repo/db.go` 用纯 Go `glebarez/sqlite`，已验证 `CGO_ENABLED=0` 可编译），补全 ASCII 架构图、组件端口表、里程碑全 ✅ 状态表、完整环境变量配置表（server 全部 env + gateway WB_*）、手动部署与 Docker 部署章节、前端构建产物说明、CLI(gmctl) 说明。② **docker-compose.yml**——三服务编排（server/web/gateway + `gmnet` 网络 + `server_data` 命名卷持久化）；server 暴露 `/health` 健康检查、gateway 暴露 `/healthz`、web(nginx) 反代 `/api`/`/metrics`/`/.well-known/` 到 server 并支持 SSE（关闭缓冲 + 长超时）。③ **Dockerfile**——server 与 gateway 纯 Go 多阶段（CGO_ENABLED=0，alpine 运行态），web 用 node 构建 + nginx 托管（含 `web/nginx.conf`）。④ **.env.example**——覆盖 server/gateway 全部关键变量与默认值，仅占位无真实密钥/本地路径。
 - 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓（纯文档/部署改动，无业务代码变更）；`docker-compose.yml` 经 PyYAML 解析合法（services: server/web/gateway）；本机无 docker 故未实跑镜像，Dockerfile/compose 按纯 Go 多阶段 + nginx 反代正确编写。
 - 下一步：MX 全部 ✅ → PLAN.md 已无 ○ 任务，触发「全部完成」终态分支；后续如需新方向（如 K8s 部署、CI/CD、监控告警）可在 PLAN.md 增补新里程碑。
+
+---
+
+### 2026-08-17 22:59 | LOOP 重启（用户指令） | ✅
+- 动作：先前全 ✅ 终态时 Loop 自我 PAUSED；本轮补入 M6 计划并恢复 automation 为 ACTIVE（id automation-1785674327686），重新开启自主推进。
+- 计划增补：PLAN.md 新增「M6 可运营化加固」节（M6-01~06，全 ○），硬伤优先排序 M6-01/02/03（S1/S2/S3）在前，M6-04/05/06（能力/韧性/验证）在后。
+- 下一步：下一轮（约 23:00）自动拾取首个 ○=M6-01（worktree/taskrun 测试去 skip），按硬伤优先逐轮推进 M6。
