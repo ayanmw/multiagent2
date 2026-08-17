@@ -686,3 +686,10 @@
 - 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓；`go test ./internal/repo/...`（迁移相关 TestMigrations_*/TestRunMigrations_*/TestNewDB_UsesVersionedMigrations 全绿，含新增 VersionTableIsSourceOfTruth）+ `go test ./internal/config/...`（10 测试全绿含新增 2 项）全绿；`internal/repo` 其余用例因沙箱无 gcc（go-sqlite3 需 cgo）报 stub 错误，属既有环境限制（AGENTS.md 豁免），与本次无关。
 - Commit: 622242b（已推 origin/main）。
 - 下一步：M6-04（种子技能库 + warm-start 真实命中 E2E，依赖 M2-03，已完成）。
+
+### 2026-08-18 01:17 | M6-04 | ✅ 种子技能库 + warm-start 真实命中 E2E（依赖 M2-03）
+- 硬伤优先（能力侧）第一项：仓库 `skills/` 共享技能库从「仅 example 示例」升级为 4 个真实可用技能——`git-flow`（Git 分支/提交/PR 协作流程）、`code-review`（系统化评审清单）、`go-build`（Go 构建测试与沙箱坑）、`conventional-commits`（约定式提交）。均为中文、带 YAML front matter（name/description）+ 实用正文，warm-start 会注入根 Agent 系统上下文。
+- 测试证明「真实命中」：`server/internal/engine/warmstart_e2e_test.go` 新增 `TestEngine_SkillWarmStart_RealHit_E2E`——① 断言仓库技能库 ≥3 个（实际 5 个，含 example）；② mock OpenAI 桩捕获投递给 LLM 的 system 消息，断言 warm-start 技能块与 git-flow 正文确实抵达模型边界（注入命中）；③ 提供关键词 `git` 时仅展开 git-flow、不展开 go-build 正文（关键词真实命中）；④ mock 依据 system 中的技能标记返回差异化回复，断言引擎回包遵循技能（端到端交付；真实 LLM 下即「模型遵循」）。
+- 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓；`go test ./internal/engine/... ./internal/skillrepo/...` ✓（新 E2E 三条日志全绿：5 技能入库 / 全部注入抵达 LLM 且回复遵循 / 关键词 git 命中）；`go test ./...` 中 `internal/repo` 因沙箱无 gcc（go-sqlite3 需 cgo）报 stub 错误，属既有环境限制（AGENTS.md 豁免），与本次无关。
+- Commit: 待提交（feat(M6-04): 种子技能库加上 warm-start 真实命中 E2E 测试），post-commit hook 自动推 origin/main。
+- 下一步：M6-05（自动化韧性补强：Loop 失败指数退避重试+失败通知、Budget 超限通知渠道、Webhook 签名校验选项，依赖 M4，已完成）。
