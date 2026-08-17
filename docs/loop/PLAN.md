@@ -175,7 +175,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 |---|------|------|----------|------|
 | M6-01 | **worktree / taskrun 测试去 skip**：CI 装 git + executor 可用性探测；核心隔离测试在 CI 真正执行并绿；本地 `go test` 默认跑通 | ✅ | CI 装 git+executor 后 `TestManager_CreateAndMerge`/`TestWorktreeHook_*` 真跑并绿；本地 `go test ./internal/worktree/... ./internal/taskrun/...` 通过 | 无 |
 | M6-02 | **框架依赖收敛到 engine 层**：`api` 层不再直接 import 框架 `model.Message`/`event.Event`/`session.Service`；新增 `engine` DTO 适配（出入转换） | ✅ | `api` 层无框架类型直接 import；`engine.go` 注释承诺兑现 | 无 |
-| M6-03 | **生产迁移治理**：`DB_AUTO_MIGRATE` 默认关闭 + 启动时若开启则告警日志；README 明确「仅本地开发」；迁移版本表为唯一生产 schema 真相源 | ○ | 默认关闭；误开有告警；README 说明 | M3-08 |
+| M6-03 | **生产迁移治理**：`DB_AUTO_MIGRATE` 默认关闭 + 启动时若开启则告警日志；README 明确「仅本地开发」；迁移版本表为唯一生产 schema 真相源 | ✅ | 默认关闭；误开有告警；README 说明 | M3-08 |
 | M6-04 | **种子技能库 + warm-start 真实命中 E2E**：`skills/` 补 ≥3 个真实技能（如 git-flow/code-review/go-build）；新增测试证明新会话确实注入并模型遵循 | ○ | ≥3 技能入库；测试证明注入命中 | M2-03 |
 | M6-05 | **自动化韧性补强**：Loop 运行失败指数退避重试 + 失败通知；Budget 超限通知渠道打通；Webhook 增加签名校验选项 | ○ | 重试+通知生效；webhook 签名可开 | M4 |
 | M6-06 | **真实模型冒烟测试套件**：覆盖 promptiter 写回不破坏对话、evolution 质量门控不误杀、eval 多次跑分数稳定 | ○ | 冒烟套件绿 | M5 |

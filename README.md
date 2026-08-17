@@ -165,6 +165,26 @@ multiagent2/
 
 ---
 
+---
+
+## 数据库与迁移（Database & Migrations）
+
+本平台使用 SQLite（默认 `data/codeagent.db`），表结构**仅由版本化迁移管理**，唯一真相源是 `schema_migrations` 版本表（`server/internal/repo/migrate.go` 的 `Migrations()`）。
+
+- **生产环境**：启动只执行 `repo.RunMigrations`，按版本号升序应用尚未执行的迁移；新增/修改表结构**必须**追加一条新迁移（见下「如何新增迁移」），绝不依赖 AutoMigrate。
+- **`DB_AUTO_MIGRATE` 仅限本地开发**：默认 `false`。设为 `true` 时会在迁移之后再跑一次 GORM `AutoMigrate` 兜底，便于本地改模型时免写迁移，但会造成各环境表结构漂移，**生产严禁开启**（开启时启动日志会打印 `[WARN]` 告警）。
+- **启动自检**：每次启动会打印 `Schema 真相源 = schema_migrations 版本表：已应用 N 个版本，待应用 M 个。` 强化「版本表即真相源」这一保证。
+- **诊断 API**：`repo.AppliedMigrations(db)` / `repo.PendingMigrations(db)` 可查询已应用/待应用版本。
+
+### 如何新增一次结构变更
+
+1. 修改 `internal/model` 中的结构体；
+2. 在 `Migrations()` 末尾追加一条新版本（`Version` 四位数字递增，如 `0012`），`Up` 内用 `db.Migrator().AddColumn/AlterColumn/DropColumn` 或对**单个**模型调用 `db.AutoMigrate(&model.X{})` 完成变更，必要时回填数据；
+3. `baselineModels()` 保持为「当前全部模型」，使全新库经 `0001_baseline` 一次建成最新结构；
+4. 迁移函数必须幂等（执行成功才写版本行，失败下次重跑安全）。
+
+---
+
 ## 快速开始（手动）
 
 ### 1. 前置条件

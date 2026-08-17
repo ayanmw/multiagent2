@@ -328,7 +328,8 @@ func Load() *Config {
 	// 结构变更必须以 migration 落盘，避免各环境「靠 AutoMigrate 补齐」而漂移。
 	cfg.dbAutoMigrate = envOrDefaultBool("DB_AUTO_MIGRATE", false)
 	if cfg.dbAutoMigrate {
-		log.Println("[WARN] DB_AUTO_MIGRATE=true: AutoMigrate dev fallback enabled; do NOT use in production.")
+		log.Println("[WARN] DB_AUTO_MIGRATE=true: 开发期 AutoMigrate 兜底已开启；生产环境严禁开启——" +
+			"此开关会让各环境表结构靠 AutoMigrate 补齐而漂移，唯一生产 schema 真相源是 schema_migrations 版本表。")
 	}
 
 	// 可观测性（M3-09）：默认开启；初始化 OpenTelemetry MeterProvider 并暴露 /metrics

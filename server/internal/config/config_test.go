@@ -137,3 +137,35 @@ func TestRunModeInvalidFallsBack(t *testing.T) {
 		t.Fatalf("非法 RUN_MODE ExecutorMode 期望 %v，实际 %v", executor.ModeUnattended, bad.ExecutorMode())
 	}
 }
+
+// TestDBAutoMigrate_DefaultOff 验收 M6-03：「生产默认关闭」的运营约束。
+// 零值 Config 的 DBAutoMigrate() 必须为 false，绝不默認开启 AutoMigrate 兜底。
+func TestDBAutoMigrate_DefaultOff(t *testing.T) {
+	var c Config
+	if c.DBAutoMigrate() {
+		t.Fatal("默认 dbAutoMigrate 应为 false（生产默认关闭）")
+	}
+}
+
+// TestDBAutoMigrate_EnvDriven 验收 M6-03：DB_AUTO_MIGRATE 由环境变量驱动，
+// 默认值 false，显式 true 才开启（仅本地开发用）。
+func TestDBAutoMigrate_EnvDriven(t *testing.T) {
+	t.Run("unset_defaults_off", func(t *testing.T) {
+		t.Setenv("DB_AUTO_MIGRATE", "")
+		if Load().DBAutoMigrate() {
+			t.Fatal("DB_AUTO_MIGRATE 未设置时应默认 false")
+		}
+	})
+	t.Run("explicit_false", func(t *testing.T) {
+		t.Setenv("DB_AUTO_MIGRATE", "false")
+		if Load().DBAutoMigrate() {
+			t.Fatal("DB_AUTO_MIGRATE=false 应使 DBAutoMigrate()=false")
+		}
+	})
+	t.Run("explicit_true", func(t *testing.T) {
+		t.Setenv("DB_AUTO_MIGRATE", "true")
+		if !Load().DBAutoMigrate() {
+			t.Fatal("DB_AUTO_MIGRATE=true 应使 DBAutoMigrate()=true")
+		}
+	})
+}

@@ -273,3 +273,39 @@ func TestNewDB_UsesVersionedMigrations(t *testing.T) {
 		t.Fatalf("角色播种未生效: err=%v roles=%d", err, roles)
 	}
 }
+
+// TestRunMigrations_VersionTableIsSourceOfTruth 验收 M6-03：
+// schema_migrations 版本表是生产 schema 的唯一真相源——跑完迁移后不应有任何待应用
+// 版本，且版本表记录了全部已应用版本。
+func TestRunMigrations_VersionTableIsSourceOfTruth(t *testing.T) {
+	db := newMigrateTestDB(t)
+
+	applied, err := RunMigrations(db, MigrationContext{EncryptionKey: testEncKey()})
+	if err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+	if len(applied) != len(Migrations()) {
+		t.Fatalf("首次应执行全部 %d 个迁移, got %d: %v", len(Migrations()), len(applied), applied)
+	}
+
+	// 版本表存在且记录了全部已应用版本。
+	if !db.Migrator().HasTable(&SchemaMigration{}) {
+		t.Fatal("schema_migrations 版本表应存在")
+	}
+	appliedRows, err := AppliedMigrations(db)
+	if err != nil {
+		t.Fatalf("AppliedMigrations: %v", err)
+	}
+	if len(appliedRows) != len(Migrations()) {
+		t.Fatalf("版本表应记录全部 %d 个版本, got %d", len(Migrations()), len(appliedRows))
+	}
+
+	// 全量执行后不应有任何待应用迁移——这正是「版本表即真相源」的体现。
+	pending, err := PendingMigrations(db)
+	if err != nil {
+		t.Fatalf("PendingMigrations: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("全量迁移后不应有待应用版本, got %v", pending)
+	}
+}

@@ -46,12 +46,19 @@ func NewDB(cfg *config.Config) (*DB, error) {
 		log.Printf("[DB] Applied %d migration(s): %s", len(applied), strings.Join(applied, ", "))
 	}
 
+	// 启动自检（M6-03）：重申「schema_migrations 版本表是生产 schema 的唯一真相源」。
+	// 即便 Dev fallback 开启，也不改变这一事实——它只是本地便利，绝不能替代迁移。
+	if err := logMigrationAuthority(db); err != nil {
+		log.Printf("[DB] [WARN] 迁移自检失败: %v", err)
+	}
+
 	// 开发 fallback（M3-08）：DB_AUTO_MIGRATE=true 时额外跑一次 AutoMigrate，
 	// 便于本地改模型时免写 migration 迭代。生产环境务必保持关闭——AutoMigrate
-	// 只加表/加列，不能删列、改类型或回填数据，长期使用会让各环境结构漂移。
+	// 只加表/加列，不能删列、改类型或回填数据，长期使用会让各环境结构漂移，
+	// 且绕过 schema_migrations 版本表，使「生产 schema 真相源」这一保证失效。
 	if cfg.DBAutoMigrate() {
-		log.Println("[WARN] DB_AUTO_MIGRATE=true: falling back to AutoMigrate; " +
-			"schema changes must still be captured as a migration before release.")
+		log.Println("[WARN] DB_AUTO_MIGRATE=true: 开发期兜底 AutoMigrate 已执行（仅本地改模型用）。" +
+			"生产必须 DB_AUTO_MIGRATE=false，schema 由 schema_migrations 版本表统一管理，否则将产生不可控漂移。")
 		if err := db.AutoMigrate(baselineModels()...); err != nil {
 			return nil, fmt.Errorf("failed to auto-migrate (dev fallback): %w", err)
 		}
@@ -64,6 +71,27 @@ func NewDB(cfg *config.Config) (*DB, error) {
 
 	log.Printf("[DB] Connected to SQLite3: %s", cfg.DBPath)
 	return &DB{DB: db}, nil
+}
+
+// logMigrationAuthority 打印迁移权威声明：schema_migrations 版本表是生产 schema
+// 的唯一真相源（M6-03）。用于启动自检，强化「版本化迁移统一管理结构」这一运营约束。
+// 返回错误仅用于调用方决定是否打印自检告警，不影响启动。
+func logMigrationAuthority(db *gorm.DB) error {
+	applied, err := AppliedMigrations(db)
+	if err != nil {
+		return err
+	}
+	pending, err := PendingMigrations(db)
+	if err != nil {
+		return err
+	}
+	log.Printf("[DB] Schema 真相源 = schema_migrations 版本表：已应用 %d 个版本，待应用 %d 个。",
+		len(applied), len(pending))
+	if len(pending) > 0 {
+		log.Printf("[DB] [WARN] 存在 %d 个未应用迁移（%v）——生产环境出现此情况请确认部署是否滞后。",
+			len(pending), pending)
+	}
+	return nil
 }
 
 // migrateCompositeSessionKey 删除 sessions 表上遗留的「单列 session_key 唯一索引」
