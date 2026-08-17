@@ -693,3 +693,15 @@
 - 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓；`go test ./internal/engine/... ./internal/skillrepo/...` ✓（新 E2E 三条日志全绿：5 技能入库 / 全部注入抵达 LLM 且回复遵循 / 关键词 git 命中）；`go test ./...` 中 `internal/repo` 因沙箱无 gcc（go-sqlite3 需 cgo）报 stub 错误，属既有环境限制（AGENTS.md 豁免），与本次无关。
 - Commit: 待提交（feat(M6-04): 种子技能库加上 warm-start 真实命中 E2E 测试），post-commit hook 自动推 origin/main。
 - 下一步：M6-05（自动化韧性补强：Loop 失败指数退避重试+失败通知、Budget 超限通知渠道、Webhook 签名校验选项，依赖 M4，已完成）。
+
+---
+
+### 2026-08-18 02:25 | M6-05 | ✅ 自动化韧性补强（指数退避重试 + 预算超限通知 + Webhook 签名校验）
+- 三块韧性补强，全部对齐「自主化无人值守 Loop」的可靠运行诉求：
+  1. **Loop 失败指数退避重试**（scheduler/scheduler.go）：把原固定 `RetryBackoff`（默认 0=不退避）升级为指数退避（`base*2^(attempt-1)`，封顶 `RetryBackoffMax`）。`New()` 默认 `RetryBackoff=1s`/`RetryBackoffMax=30s`；新增 `backoffFor(attempt)` 与可选 `OnBackoff` 钩子（测试无等待断言退避序列）。失败仍写审计、最终失败仍发 `NewFailure` 站内信（M4-07 既有能力保持）。
+  2. **Budget 超限通知渠道打通**（api/gateway.go + notify/notify.go + model/notification.go）：`prepareRun` 预算护栏拦截时，在既有审计之外经 `Gateway.Notifier` 给用户发一条 `budget` 类型站内信（`notify.NewBudgetExhausted`，新常量 `NotificationTypeBudget`/`NotificationRefBudget`）；新增按用户 15min 冷却（`budgetNotifyCooldown` + `budgetNotifyLast`），避免无人值守 Loop 重试期间通知风暴。nil notifier / 未拦截时静默跳过。
+  3. **Webhook 签名校验选项**（api/webhook.go + config/config.go + cmd/server/main.go）：可选 HMAC-SHA256 校验（`X-Webhook-Signature: sha256=<hex>`），`WebhookHandler.WithSignatureSecret(secret)` 注入；secret 为空=关闭（向后兼容，外部系统无感）。新增 `validWebhookSignature`（恒定时间比较防时序侧信道）；config 增 `WEBHOOK_SIGN_SECRET` env 与 `WebhookSignSecret()`，main.go 接线。
+- 新增/加固单测：`scheduler_test.go`（TestScheduler_ExponentialBackoff 断言 [base,2*base,4*base→封顶] 序列；TestScheduler_NoBackoffWhenZero 向后兼容）；`api/budget_notify_test.go`（Blocked→发 budget 信、nil notifier/未拦截不发、同用户冷却 15min 内只发 1 条、跨用户各自 1 条）；`api/webhook_test.go`（TestWebhookHandler_SignatureVerification 合法放行/缺签·篡改·错签 401；TestWebhookHandler_SignatureDisabledByDefault 未配置即 202）。
+- 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓；`go test ./internal/scheduler/... ./internal/api/... ./internal/notify/... ./internal/model/... ./internal/config/...` 全绿（含新增用例）；`go test ./cmd/server/...` 大集成套件通过（17.9s，覆盖 M4 调度/webhook/恢复未回归）；`go test ./...` 中 `internal/repo` 因沙箱无 gcc（go-sqlite3 需 cgo）报 stub 错误，属既有环境限制（AGENTS.md 豁免），与本次无关。
+- Commit: 待提交（feat(M6-05): 自主化 Loop 韧性补强-指数退避重试+预算超限通知+Webhook签名校验），post-commit hook 自动推 origin/main。
+- 下一步：M6-06（真实模型冒烟测试套件：promptiter 写回不破坏对话、evolution 质量门控不误杀、eval 多次跑分数稳定，依赖 M5，已完成）。

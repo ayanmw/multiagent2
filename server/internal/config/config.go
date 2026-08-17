@@ -95,6 +95,9 @@ type Config struct {
 	// 出站 webhook 通知回调地址（M4-07）：自主化 Loop 结果除站内信外，额外 POST 一份 JSON
 	// 事件到该地址（占位，可对接外部系统）。为空则跳过（仅站内信）。
 	webhookNotifyURL string // 出站通知回调地址（env WEBHOOK_NOTIFY_URL，默认空=关闭）
+	// Webhook 入站签名密钥（M6-05）：非空时启用 HMAC-SHA256 校验（X-Webhook-Signature），
+	// 外部系统在调用 /api/webhooks/:token 时需携带按此密钥对 body 计算的签名；空=关闭校验（向后兼容）。
+	webhookSignSecret string // 入站 webhook 签名密钥（env WEBHOOK_SIGN_SECRET，默认空=关闭）
 	// 安全加固（MX-07）：CORS 精细化允许的前端源列表（env CORS_ALLOWED_ORIGINS，逗号分隔），
 	// 仅放行白名单内的跨域源；缺省为本地 Vite 开发源。特殊值 "*" 放开全部（仅公开非凭证接口用）。
 	corsAllowedOrigins []string
@@ -359,6 +362,7 @@ func Load() *Config {
 
 	// 出站 webhook 通知回调地址（M4-07）：为空表示只发站内信，不发外部回调。
 	cfg.webhookNotifyURL = envOrDefault("WEBHOOK_NOTIFY_URL", "")
+	cfg.webhookSignSecret = envOrDefault("WEBHOOK_SIGN_SECRET", "")
 
 	// 安全加固（MX-07）：CORS 精细化允许源。缺省本地 Vite 开发源；生产用
 	// CORS_ALLOWED_ORIGINS 显式配置前端域名（逗号分隔）。特殊值 "*" 放开全部
@@ -635,6 +639,15 @@ func (c *Config) WebhookNotifyURL() string {
 		return ""
 	}
 	return c.webhookNotifyURL
+}
+
+// WebhookSignSecret returns the inbound webhook HMAC-SHA256 signing secret (M6-05).
+// Empty means signature verification is disabled (backward compatible).
+func (c *Config) WebhookSignSecret() string {
+	if c == nil {
+		return ""
+	}
+	return c.webhookSignSecret
 }
 
 // EvolutionEnabled reports whether the background skill-evolution scanner (M5-03)

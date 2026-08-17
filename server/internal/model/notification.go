@@ -34,6 +34,7 @@ const (
 	NotificationTypeSuccess    = "success"
 	NotificationTypeFailure    = "failure"
 	NotificationTypeCheckpoint = "checkpoint"
+	NotificationTypeBudget     = "budget" // 平台级预算耗尽告警（M6-05）
 )
 
 // 通知来源类型（RefKind）。
@@ -41,4 +42,5 @@ const (
 	NotificationRefAutomation    = "automation"
 	NotificationRefAutomationRun = "automation_run"
 	NotificationRefCheckpoint    = "checkpoint"
+	NotificationRefBudget        = "budget" // 预算护栏来源（M6-05）
 )

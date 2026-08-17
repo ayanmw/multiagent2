@@ -717,7 +717,7 @@ func main() {
 	// Automation；命中后异步启动 Goal Loop（与 cron 调度器共用同一 Gateway）。
 	// 令牌校验 + 按 token 速率限制 + 防并发重入均在 handler 内完成。
 	webhookLimiter := api.NewWebhookRateLimiter(cfg.WebhookRateLimit(), cfg.WebhookRateWindow())
-	r.POST("/api/webhooks/:token", api.NewWebhookHandler(db.DB, webhookRunner, webhookLimiter).WithNotifier(notifier).Handle)
+	r.POST("/api/webhooks/:token", api.NewWebhookHandler(db.DB, webhookRunner, webhookLimiter).WithNotifier(notifier).WithSignatureSecret(cfg.WebhookSignSecret()).Handle)
 
 	// Graceful shutdown
 	go func() {

@@ -289,6 +289,76 @@ func TestScheduler_RecordsRunFailed(t *testing.T) {
 	}
 }
 
+// TestScheduler_ExponentialBackoff 验证 M6-05：失败重试采用指数退避（attempt k 等待 base*2^(k-1)，封顶 max）。
+// 用 OnBackoff 钩子无等待地捕获每次退避时长，断言序列为 [base, base*2, ...] 且受 max 约束。
+func TestScheduler_ExponentialBackoff(t *testing.T) {
+	db := newTestDB(t)
+	base := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
+	a := &model.Automation{
+		UserID: 1, Name: "eb-loop", TriggerType: model.AutomationTriggerCron,
+		CronExpr: "*/1 * * * *", GoalPrompt: "g", Enabled: true,
+		NextRun: ptrTime(base.Add(-time.Minute)),
+	}
+	if err := repo.CreateAutomation(db, a); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockRunner{err: errors.New("boom")}
+	s := New(db, mock)
+	s.Now = func() time.Time { return base }
+	s.MaxRetries = 3 // 共 4 次尝试（0..3），重试 3 次 → 退避序列 [base, 2*base, 4*base]
+	s.RetryBackoff = 100 * time.Millisecond
+	s.RetryBackoffMax = 250 * time.Millisecond // 第 3 次 4*100=400ms 应被封顶到 250ms
+	s.RetryDelay = time.Minute
+
+	var got []time.Duration
+	s.OnBackoff = func(attempt int, d time.Duration) { got = append(got, d) }
+	if ran := s.TickSync(context.Background()); ran != 1 {
+		t.Fatalf("应触发 1 个，ran=%d", ran)
+	}
+	if mock.count() != 4 {
+		t.Fatalf("runner 应被调用 4 次（1 首 + 3 重试），实际 %d", mock.count())
+	}
+	want := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 250 * time.Millisecond}
+	if len(got) != len(want) {
+		t.Fatalf("退避次数=%d, want %d (got=%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("退避[%d]=%v, want %v (全序列=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestScheduler_NoBackoffWhenZero 验证 RetryBackoff<=0 时立即重试（无等待，向后兼容既有行为）。
+func TestScheduler_NoBackoffWhenZero(t *testing.T) {
+	db := newTestDB(t)
+	base := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
+	a := &model.Automation{
+		UserID: 1, Name: "nb-loop", TriggerType: model.AutomationTriggerCron,
+		CronExpr: "*/1 * * * *", GoalPrompt: "g", Enabled: true,
+		NextRun: ptrTime(base.Add(-time.Minute)),
+	}
+	if err := repo.CreateAutomation(db, a); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockRunner{err: errors.New("boom")}
+	s := New(db, mock)
+	s.Now = func() time.Time { return base }
+	s.MaxRetries = 2
+	s.RetryBackoff = 0 // 明确关闭退避
+	var got int
+	s.OnBackoff = func(attempt int, d time.Duration) { got++ }
+	if ran := s.TickSync(context.Background()); ran != 1 {
+		t.Fatalf("应触发 1 个，ran=%d", ran)
+	}
+	if mock.count() != 3 {
+		t.Fatalf("runner 应被调用 3 次，实际 %d", mock.count())
+	}
+	if got != 0 {
+		t.Fatalf("RetryBackoff=0 时不应有任何退避，实际 %d", got)
+	}
+}
+
 // TestScheduler_NotifiesOnSuccess 验证成功后经 Notifier 写入一条站内信（M4-07）。
 func TestScheduler_NotifiesOnSuccess(t *testing.T) {
 	db := newTestDB(t)

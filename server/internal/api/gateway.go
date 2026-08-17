@@ -84,7 +84,14 @@ type Gateway struct {
 	cfg   GatewayConfig
 	mu    sync.Mutex
 	locks map[string]*sessionLock
+	// 预算耗尽通知按用户冷却（M6-05）：无人值守 Loop 重试期间，一次预算拦截可能频繁触发，
+	// 故对同用户限频，避免通知中心被刷屏。
+	budgetNotifyMu   sync.Mutex
+	budgetNotifyLast map[uint]time.Time
 }
+
+// budgetNotifyCooldown 是同一用户两次预算耗尽通知的最小间隔（M6-05）。
+const budgetNotifyCooldown = 15 * time.Minute
 
 type sessionLock struct {
 	mu  sync.Mutex
@@ -93,7 +100,26 @@ type sessionLock struct {
 
 // NewGateway 构造统一网关。
 func NewGateway(cfg GatewayConfig) *Gateway {
-	return &Gateway{cfg: cfg, locks: make(map[string]*sessionLock)}
+	return &Gateway{cfg: cfg, locks: make(map[string]*sessionLock), budgetNotifyLast: make(map[uint]time.Time)}
+}
+
+// maybeNotifyBudget 在「平台级预算耗尽拦截」时经统一通知出口给用户发一条告警（M6-05），
+// 并做按用户冷却以避免无人值守 Loop 重试期间通知风暴。nil notifier 或未触发拦截时静默跳过
+// （best-effort，不阻断主流程）。
+func (g *Gateway) maybeNotifyBudget(uid uint, ev repo.BudgetEvaluation) {
+	if g.cfg.Notifier == nil || !ev.Blocked {
+		return
+	}
+	now := time.Now()
+	g.budgetNotifyMu.Lock()
+	last, ok := g.budgetNotifyLast[uid]
+	if ok && now.Sub(last) < budgetNotifyCooldown {
+		g.budgetNotifyMu.Unlock()
+		return
+	}
+	g.budgetNotifyLast[uid] = now
+	g.budgetNotifyMu.Unlock()
+	_ = g.cfg.Notifier.Notify(context.Background(), notify.NewBudgetExhausted(uid, string(ev.Scope), ev.Used, ev.Max))
 }
 
 // DB 暴露底层数据库句柄（供 Channel handler 做预算检查等前置逻辑）。
@@ -217,6 +243,8 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 	}
 	if budgetEv.Blocked {
 		writeBudgetBlockAudit(g.cfg.DB, uid, budgetEv)
+		// M6-05：预算耗尽拦截同时经统一通知出口给用户发一条告警（按用户冷却防风暴）。
+		g.maybeNotifyBudget(uid, budgetEv)
 		return nil, &BudgetExhaustedError{Eval: budgetEv}
 	}
 

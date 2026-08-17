@@ -40,10 +40,14 @@ type Scheduler struct {
 
 	TickInterval time.Duration // 扫描周期，默认 30s
 	MaxRetries   int            // 单次运行失败后重试次数，默认 2
-	RetryBackoff time.Duration  // 重试间隔（每次重试前等待），默认 0（测试可设）
+	RetryBackoff time.Duration  // 重试指数退避的基准间隔（attempt k 等待 base*2^(k-1)），默认 1s；<=0 表示不退避
+	RetryBackoffMax time.Duration // 退避上限，防止高重试次数下等待爆炸，默认 30s
 	RetryDelay   time.Duration  // 运行失败后下次重试的延迟（写入 next_run），默认 1 分钟
 	Now          func() time.Time // 时间源（测试注入），默认 time.Now
 	Notifier     notify.Notifier  // 运行结果通知出口（M4-07，可空：nil 时不发通知）
+	// OnBackoff 是每次重试前等待退避时的可选回调（测试注入，用于无等待断言退避序列）；
+	// 生产为 nil，仅做实际 sleep。
+	OnBackoff func(attempt int, d time.Duration)
 
 	running sync.Map // automation id -> true，防止同一自动化并发重入
 	logger  *log.Logger
@@ -56,7 +60,8 @@ func New(db *gorm.DB, runner AutomationRunner) *Scheduler {
 		Runner:       runner,
 		TickInterval: 30 * time.Second,
 		MaxRetries:   2,
-		RetryBackoff: 0,
+		RetryBackoff: time.Second,
+		RetryBackoffMax: 30 * time.Second,
 		RetryDelay:   time.Minute,
 		Now:          time.Now,
 		logger:       log.Default(),
@@ -170,14 +175,22 @@ func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 		s.logger.Printf("[SCHED] automation %d 创建运行记录失败(恢复不可追踪): %v", a.ID, cerr)
 	}
 
-	// 失败重试：最多 MaxRetries 次（共 MaxRetries+1 次尝试）。
+	// 失败重试：最多 MaxRetries 次（共 MaxRetries+1 次尝试），每次重试前指数退避，
+	// 避免瞬时故障（如临时网络抖动/模型限流）把自动化直接判失败；退避封顶 RetryBackoffMax
+	// 防止高重试次数下等待时间爆炸。
 	var runErr error
 	for attempt := 0; attempt <= s.MaxRetries; attempt++ {
-		if attempt > 0 && s.RetryBackoff > 0 {
-			select {
-			case <-time.After(s.RetryBackoff):
-			case <-ctx.Done():
-				return
+		if attempt > 0 {
+			backoff := s.backoffFor(attempt)
+			if backoff > 0 {
+				if s.OnBackoff != nil {
+					s.OnBackoff(attempt, backoff)
+				}
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 		runErr = s.Runner.Run(ctx, a, sessionKey)
@@ -218,6 +231,23 @@ func (s *Scheduler) notify(ctx context.Context, n *model.Notification) {
 		return
 	}
 	_ = s.Notifier.Notify(ctx, n)
+}
+
+// backoffFor 计算第 attempt 次重试（attempt>=1）前的指数退避时长：base * 2^(attempt-1)，
+// 封顶 RetryBackoffMax。base<=0 表示不退避（立即重试）。该设计在「瞬时故障」与「高重试次数
+// 下等待爆炸」之间取得平衡（M6-05 韧性补强）。
+func (s *Scheduler) backoffFor(attempt int) time.Duration {
+	base := s.RetryBackoff
+	if base <= 0 {
+		return 0
+	}
+	max := s.RetryBackoffMax
+	// attempt>=1，2^(attempt-1) 用位移实现（避免 math.Pow 浮点误差）。
+	d := base * time.Duration(1<<uint(attempt-1))
+	if max > 0 && d > max {
+		return max
+	}
+	return d
 }
 
 // advanceNext 运行结束后更新 next_run：成功按 cron 推到下次；失败按 RetryDelay 快速重试。

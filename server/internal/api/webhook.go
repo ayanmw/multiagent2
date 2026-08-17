@@ -2,9 +2,13 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,11 +72,14 @@ func (l *WebhookRateLimiter) Allow(token string) bool {
 // WebhookHandler 处理外部事件触发的自动化（M4-03）。
 // 路由 POST /api/webhooks/:token 不挂鉴权中间件，完全靠 URL 中的 32B 令牌匹配 Automation；
 // 命中后异步启动 Goal Loop（与 cron 调度器共用同一套 Loop 运行器），并写审计 + 更新 LastRun。
+// 可选开启 HMAC-SHA256 签名校验（M6-05）：SignatureSecret 非空时校验请求头
+// X-Webhook-Signature: sha256=<hex>，为空表示关闭（向后兼容，外部系统无感）。
 type WebhookHandler struct {
 	db       *gorm.DB
 	runner   automationLoopRunner
 	limiter  *WebhookRateLimiter
 	notifier notify.Notifier // 运行结果通知出口（M4-07，可空）
+	sigSecret string         // Webhook 签名密钥（M6-05，空=关闭签名校验）
 	running  sync.Map        // automation id -> true，防止同一自动化并发重入
 }
 
@@ -89,7 +96,15 @@ func (h *WebhookHandler) WithNotifier(n notify.Notifier) *WebhookHandler {
 	return h
 }
 
-// Handle 是 Gin handler：先速率限制 → 令牌匹配 automation → 建会话 → 202 立即返回 → 异步跑 Loop。
+// WithSignatureSecret 注入 Webhook HMAC 签名密钥（M6-05），返回自身便于链式构造。
+// secret 非空时 Handle 将校验 X-Webhook-Signature 头；空字符串表示关闭校验（向后兼容）。
+func (h *WebhookHandler) WithSignatureSecret(secret string) *WebhookHandler {
+	h.sigSecret = secret
+	return h
+}
+
+// Handle 是 Gin handler：先速率限制 → 可选签名校验 → 令牌匹配 automation → 建会话 →
+// 202 立即返回 → 异步跑 Loop。
 func (h *WebhookHandler) Handle(c *gin.Context) {
 	token := c.Param("token")
 
@@ -99,20 +114,35 @@ func (h *WebhookHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	// 2) 令牌匹配启用的 webhook 自动化。
+	// 2) 可选 HMAC-SHA256 签名校验（M6-05）：secret 非空时启用。
+	// 读取原始 body 用于验签（验签后再交给 runLoop，避免 goroutine 内读已关闭的请求体）。
+	var body []byte
+	if c.Request.Body != nil {
+		if b, rerr := io.ReadAll(c.Request.Body); rerr == nil {
+			body = b
+		}
+	}
+	if h.sigSecret != "" {
+		if !validWebhookSignature(h.sigSecret, body, c.GetHeader("X-Webhook-Signature")) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid webhook signature"})
+			return
+		}
+	}
+
+	// 3) 令牌匹配启用的 webhook 自动化。
 	a, err := repo.GetAutomationByWebhookToken(h.db, token)
 	if err != nil || a.TriggerType != model.AutomationTriggerWebhook {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or disabled webhook token"})
 		return
 	}
 
-	// 3) 防重入：同一自动化已有 webhook 在跑则冲突返回（与调度器 running 锁思路一致）。
+	// 4) 防重入：同一自动化已有 webhook 在跑则冲突返回（与调度器 running 锁思路一致）。
 	if _, loaded := h.running.LoadOrStore(a.ID, true); loaded {
 		c.JSON(http.StatusConflict, gin.H{"error": "automation already running"})
 		return
 	}
 
-	// 4) 预先建会话（可观测，验证要求「触发 Loop」应创建会话）。
+	// 5) 预先建会话（可观测，验证要求「触发 Loop」应创建会话）。
 	sessionKey := repo.NewSessionKey()
 	if _, serr := repo.GetOrCreateSession(h.db, a.UserID, sessionKey); serr != nil {
 		h.running.Delete(a.ID)
@@ -122,22 +152,30 @@ func (h *WebhookHandler) Handle(c *gin.Context) {
 
 	// 捕获请求上下文信息（异步 goroutine 内 c 不可再用）。
 	clientIP := c.ClientIP()
-	eventSize := 0
-	if c.Request.Body != nil {
-		if body, rerr := io.ReadAll(c.Request.Body); rerr == nil {
-			eventSize = len(body)
-		}
-	}
+	eventSize := len(body)
 
-	// 5) 立即返回 202 Accepted（外部系统不应长等 LLM 跑完）。
+	// 6) 立即返回 202 Accepted（外部系统不应长等 LLM 跑完）。
 	c.JSON(http.StatusAccepted, gin.H{
 		"status":        "accepted",
 		"automation_id": a.ID,
 		"session_key":   sessionKey,
 	})
 
-	// 6) 异步跑 Loop。
+	// 7) 异步跑 Loop。
 	go h.runLoop(a, sessionKey, clientIP, eventSize)
+}
+
+// validWebhookSignature 校验 HMAC-SHA256 签名（M6-05）：以 secret 对 body 计算摘要，
+// 与请求头（期望形如 "sha256=<hex>"，忽略大小写/前缀空格）做恒定时间比较，防时序侧信道。
+func validWebhookSignature(secret string, body []byte, header string) bool {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(expected), []byte(header))
 }
 
 // runLoop 在独立 goroutine 中执行一次 webhook 触发的自动化：跑 Goal Loop → 更新 LastRun → 写审计。

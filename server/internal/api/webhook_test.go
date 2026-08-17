@@ -3,6 +3,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -262,6 +265,63 @@ func TestWebhookHandler_ConcurrentGuard(t *testing.T) {
 	}
 	// 释放阻塞，让第 1 次 goroutine 收尾。
 	close(block)
+}
+
+// TestWebhookHandler_SignatureVerification 验证 M6-05：开启签名校验后，合法签名放行、非法/缺失签名 401。
+func TestWebhookHandler_SignatureVerification(t *testing.T) {
+	db := newWebhookTestDB(t)
+	createWebhookAutomation(t, db, "tok-signed", true)
+	secret := "topsecret"
+	signer := func(body []byte) string {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(body)
+		return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	}
+
+	cases := []struct {
+		name   string
+		body   []byte
+		sig    string
+		want   int
+	}{
+		{"valid signature", []byte(`{"event":"push"}`), signer([]byte(`{"event":"push"}`)), http.StatusAccepted},
+		{"missing signature", []byte(`{"event":"push"}`), "", http.StatusUnauthorized},
+		{"tampered body", []byte(`{"event":"push"}`), signer([]byte(`{"event":"other"}`)), http.StatusUnauthorized},
+		{"wrong signature", []byte(`{"event":"push"}`), "sha256=deadbeef", http.StatusUnauthorized},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockLoopRunner{}
+			limiter := NewWebhookRateLimiter(10, time.Minute)
+			h := NewWebhookHandler(db, mock, limiter).WithSignatureSecret(secret)
+			r := newWebhookRouter(h)
+			req, _ := http.NewRequest(http.MethodPost, "/api/webhooks/tok-signed", bytes.NewBuffer(tc.body))
+			if tc.sig != "" {
+				req.Header.Set("X-Webhook-Signature", tc.sig)
+			}
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("期望 %d，得到 %d: %s", tc.want, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestWebhookHandler_SignatureDisabledByDefault 验证未配置签名密钥时向后兼容（无签名也能触发）。
+func TestWebhookHandler_SignatureDisabledByDefault(t *testing.T) {
+	db := newWebhookTestDB(t)
+	createWebhookAutomation(t, db, "tok-nosign", true)
+	mock := &mockLoopRunner{done: make(chan struct{})}
+	limiter := NewWebhookRateLimiter(10, time.Minute)
+	h := NewWebhookHandler(db, mock, limiter) // 不调 WithSignatureSecret → 关闭校验
+	r := newWebhookRouter(h)
+	req, _ := http.NewRequest(http.MethodPost, "/api/webhooks/tok-nosign", bytes.NewBufferString(`{"event":"push"}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("关闭签名校验时应 202，得到 %d", w.Code)
+	}
 }
 
 // TestWebhookHandler_NotifiesOnSuccess 验证成功 Loop 后写入一条成功站内信（M4-07）。

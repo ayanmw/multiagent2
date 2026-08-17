@@ -143,6 +143,20 @@ func NewCheckpoint(userID uint, automationID uint, automationName, checkpointDis
 	}
 }
 
+// NewBudgetExhausted 构造「平台级预算耗尽」告警通知（M6-05）。
+// scope 为命中策略的作用域（user/session/automation），used/max 为窗口内已用/上限 token 数，
+// 由 Gateway 在预算护栏拦截时调用，提醒用户后续 LLM 调用已暂停、需提额后恢复。
+func NewBudgetExhausted(userID uint, scope string, used, max int64) *model.Notification {
+	return &model.Notification{
+		UserID:  userID,
+		Type:    model.NotificationTypeBudget,
+		Title:   "平台预算已耗尽",
+		Message: fmt.Sprintf("作用域=%s 已用 %d >= 上限 %d，后续 LLM 调用已暂停，待管理员提额后恢复", scope, used, max),
+		RefKind: model.NotificationRefBudget,
+		RefID:   scope,
+	}
+}
+
 // shortReply 截断过长的结果正文，避免一条通知塞入整段 Loop 输出。
 func shortReply(reply string) string {
 	const max = 200
