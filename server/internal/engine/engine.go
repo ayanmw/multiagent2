@@ -12,11 +12,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	taskruntool "trpc.group/trpc-go/trpc-agent-go/tool/taskrun"
 
@@ -89,7 +87,8 @@ type ModelConfig struct {
 	TaskRunController taskrunruntime.Controller
 	// TaskRunSession 是后台任务 child session 的持久化 session.Service（M2-04 ①）：
 	// 落盘子任务事件/transcript，进程重启后仍能读回。为空则 read_task_run_transcript 不挂载。
-	TaskRunSession session.Service
+	// 类型为引擎层 SessionService 抽象（M6-02：避免 api 直接依赖框架 session 包）。
+	TaskRunSession SessionService
 	// ToolSearchEnabled 开启「延迟工具箱」（M2-06）：把 MCP 服务器工具经一对控制工具
 	// tool_search（检索）/call_tool（按需调用）暴露给 Agent，默认不把全部工具的声明
 	// 一次性灌进模型上下文，避免 token 随工具数线性膨胀。
@@ -176,11 +175,18 @@ func New(cfg ModelConfig) (*Engine, error) {
 	// worker Runner 的默认代理名一致）；WithParentAppNamePropagation(true) 使父子
 	// appName 一致，从而 transcript 回查钥匙可命中（见框架 tool/taskrun 实现）。
 	if cfg.TaskRunController != nil {
-		trTools := taskruntool.NewTools(
-			cfg.TaskRunController,
+		trOpts := []taskruntool.Option{
 			taskruntool.WithDefaultAgentName(codeagent.RoleCoder),
 			taskruntool.WithParentAppNamePropagation(true),
-			taskruntool.WithSessionService(cfg.TaskRunSession),
+		}
+		// TaskRunSession 为引擎层抽象（M6-02）；仅当非 nil 时把底层框架 session.Service
+		// 注入 taskrun 工具，保持与「未配置 session 服务」时一致的行为（nil 回落）。
+		if cfg.TaskRunSession != nil {
+			trOpts = append(trOpts, taskruntool.WithSessionService(cfg.TaskRunSession.Framework()))
+		}
+		trTools := taskruntool.NewTools(
+			cfg.TaskRunController,
+			trOpts...,
 		)
 		allTools = append(allTools, trTools.All()...)
 	}
@@ -269,14 +275,15 @@ func New(cfg ModelConfig) (*Engine, error) {
 	return &Engine{cfg: cfg, runner: r, toolbox: box}, nil
 }
 
-// Stream 发送一条用户消息并返回 Agent 事件流（channel）。
+// Stream 发送一条用户消息并返回 Agent 事件流（channel，元素为归一化 StreamEvent DTO）。
 // 调用方负责消费 channel，并在结束后调用 Close 释放 Runner 资源；
 // 当 ctx 被取消（如客户端断开）或 90s 超时后，底层 channel 会自动关闭。
 //
 // history 为可选的对话历史（按时间正序），用于多轮记忆回灌：框架无 SQLite
 // 会话后端（v1.10.0 仅 inmemory/noop），这里把 DB 加载的历史作为初始消息
 // seed 进本次 Run 的会话，使模型能看到前文（见 M0.5-01）。为空则单轮。
-func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, history []model.Message) (<-chan *event.Event, error) {
+// history 类型为引擎层 ChatMessage DTO（M6-02：api 不直接依赖框架 model 包）。
+func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, history []ChatMessage) (<-chan StreamEvent, error) {
 	if sessionID == "" {
 		sessionID = "default"
 	}
@@ -288,7 +295,8 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 	if len(history) > 0 {
 		// 把 DB 历史作为初始消息 seed 进本次会话（fresh inmemory service），
 		// runner 会先落库历史事件再追加本轮 user 消息，模型即拥有多轮上下文。
-		runOpts = append(runOpts, agent.WithMessages(history))
+		// 边界处把 ChatMessage DTO 转换为框架 model.Message（角色映射）。
+		runOpts = append(runOpts, agent.WithMessages(ToFrameworkMessages(history)))
 	}
 	// userID 透传真实用户标识（M2-04）：后台任务派生时 OwnerUserID 取自此值，
 	// 管控 API 据此做 owner 隔离；未注入时回退 "user"（兼容历史/测试调用）。
@@ -310,7 +318,8 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 	}
 
 	// 桥接到独立输出 channel：源 channel 关闭或 ctx 取消时收尾并释放资源。
-	out := make(chan *event.Event)
+	// 源事件经 toStreamEvent 归一化为 StreamEvent DTO，使下游（api/SSE）无需 import 框架 event 包。
+	out := make(chan StreamEvent)
 	go func() {
 		defer close(out)
 		defer cancel()
@@ -323,7 +332,7 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 				e.usageMu.Unlock()
 			}
 			select {
-			case out <- ev:
+			case out <- toStreamEvent(ev):
 			case <-runCtx.Done():
 				return
 			}
@@ -343,8 +352,8 @@ func (e *Engine) LastUsage() model.Usage {
 
 // Chat 发送一条用户消息并返回模型的最终文本回复（Stream 的累积版）。
 // sessionID 用于多轮隔离（M0-11 起可配合 DB 持久化的 Session）；
-// history 为可选的对话历史，用于多轮记忆回灌（见 M0.5-01）。
-func (e *Engine) Chat(ctx context.Context, sessionID, userMessage string, history []model.Message) (string, error) {
+// history 为可选的对话历史（引擎层 ChatMessage DTO），用于多轮记忆回灌（见 M0.5-01）。
+func (e *Engine) Chat(ctx context.Context, sessionID, userMessage string, history []ChatMessage) (string, error) {
 	ch, err := e.Stream(ctx, sessionID, userMessage, history)
 	if err != nil {
 		return "", err
@@ -360,19 +369,21 @@ func (e *Engine) Chat(ctx context.Context, sessionID, userMessage string, histor
 	// 而不是把它当成运行错误丢弃（见 IsCircuitBreakEvent）。
 	circuitBroken := false
 	for ev := range ch {
-		if ev == nil || ev.Response == nil {
-			continue
-		}
-		if IsCircuitBreakEvent(ev) {
-			if !circuitBroken {
-				sb.WriteString(CircuitBreakNotice())
-				circuitBroken = true
+		if ev.IsError {
+			// 运行级兜底（M1-13）：护栏熔断（LLM 调用/工具迭代预算耗尽）由引擎以
+			// StreamEvent.CircuitBreak 标记表达，本质是优雅终止。这里保留已产出的
+			// partial 文本，并在末尾追加提示，而不是当成运行错误丢弃。
+			if ev.CircuitBreak {
+				if !circuitBroken {
+					sb.WriteString(CircuitBreakNotice())
+					circuitBroken = true
+				}
 			}
 			continue
 		}
-		for i := range ev.Response.Choices {
-			c := ev.Response.Choices[i]
-			if t := ds.Text(c.Delta.Content, c.Message.Content); t != "" {
+		for i := range ev.Choices {
+			c := ev.Choices[i]
+			if t := ds.Text(c.DeltaContent, c.MessageContent); t != "" {
 				sb.WriteString(t)
 			}
 		}

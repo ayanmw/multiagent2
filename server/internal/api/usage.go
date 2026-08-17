@@ -11,7 +11,6 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
-	framework "trpc.group/trpc-go/trpc-agent-go/model"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -151,9 +150,9 @@ func ListUsageHandler(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// buildPromptText 把对话历史（框架 model.Message）与当前用户消息拼成一段文本，
+// buildPromptText 把对话历史（引擎 ChatMessage DTO）与当前用户消息拼成一段文本，
 // 供上游未返回 usage 时做本地估算（M3-03 兜底）。
-func buildPromptText(history []framework.Message, current string) string {
+func buildPromptText(history []engine.ChatMessage, current string) string {
 	var sb strings.Builder
 	for _, msg := range history {
 		sb.WriteString(string(msg.Role))

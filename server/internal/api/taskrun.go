@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/gin-gonic/gin"
 	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // ListTaskRunsHandler GET /api/taskruns：列出当前用户发起的后台任务（owner 隔离）。
@@ -84,7 +84,9 @@ func CancelTaskRunHandler(controller taskrunruntime.Controller) gin.HandlerFunc 
 
 // GetTaskRunTranscriptHandler GET /api/taskruns/:id/transcript：读取子任务 transcript（owner 隔离）。
 // 复用框架 transcript 回查契约：父 appName + OwnerUserID + ChildSessionID。
-func GetTaskRunTranscriptHandler(controller taskrunruntime.Controller, sessionSvc session.Service) gin.HandlerFunc {
+// sessionSvc 为引擎层 SessionService 抽象（M6-02：api 不直接依赖框架 session 包），
+// 底层经持久化 session 服务读取子会话事件并透传给前端（JSON 线格式与历史一致）。
+func GetTaskRunTranscriptHandler(controller taskrunruntime.Controller, sessionSvc engine.SessionService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -106,25 +108,17 @@ func GetTaskRunTranscriptHandler(controller taskrunruntime.Controller, sessionSv
 			c.JSON(http.StatusNotFound, gin.H{"error": "transcript unavailable"})
 			return
 		}
-		child, err := sessionSvc.GetSession(c.Request.Context(), session.Key{
-			AppName:   run.AppName,
-			UserID:    run.OwnerUserID,
-			SessionID: run.ChildSessionID,
-		}, session.WithEventNum(200))
+		events, err := sessionSvc.GetSessionEvents(c.Request.Context(), run.AppName, run.OwnerUserID, run.ChildSessionID, 200)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		if child == nil {
-			c.JSON(http.StatusOK, gin.H{
-				"child_session_id": run.ChildSessionID,
-				"events":           []any{},
-			})
-			return
+		if events == nil {
+			events = []any{}
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"child_session_id": run.ChildSessionID,
-			"events":           child.GetEvents(),
+			"events":           events,
 		})
 	}
 }

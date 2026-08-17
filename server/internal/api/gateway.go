@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	framework "trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 
@@ -64,7 +62,7 @@ type GatewayConfig struct {
 	SkillWarmStart     bool
 	SkillMaxChars      int
 	TaskRunController  taskrunruntime.Controller
-	TaskRunSession     session.Service
+	TaskRunSession     engine.SessionService
 	ToolSearchEnabled  bool
 	ToolSearchProvider engine.ToolSearchProvider
 	CheckpointEnabled  bool
@@ -202,7 +200,7 @@ type preparedRun struct {
 	p          *model.Provider
 	workdir    string
 	eng        *engine.Engine
-	history    []framework.Message
+	history    []engine.ChatMessage
 }
 
 // prepareRun 统一完成「解析模型 → 解密 → 建会话/写 user 消息 → 解析工作目录 → 构建引擎 → 加载历史」

@@ -232,7 +232,7 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.GET("/taskruns", middleware.RequirePermission(db.DB, "taskruns", "read"), api.ListTaskRunsHandler(taskRunController))
 		protected.GET("/taskruns/:id", middleware.RequirePermission(db.DB, "taskruns", "read"), api.GetTaskRunHandler(taskRunController))
 		protected.POST("/taskruns/:id/cancel", middleware.RequirePermission(db.DB, "taskruns", "write"), api.CancelTaskRunHandler(taskRunController))
-		protected.GET("/taskruns/:id/transcript", middleware.RequirePermission(db.DB, "taskruns", "read"), api.GetTaskRunTranscriptHandler(taskRunController, taskRunSession))
+		protected.GET("/taskruns/:id/transcript", middleware.RequirePermission(db.DB, "taskruns", "read"), api.GetTaskRunTranscriptHandler(taskRunController, engine.NewSessionService(taskRunSession)))
 
 		// 技能进化飞轮（M5-03）：候选技能列表（owner 隔离，需 skill_candidates:read）；
 		// 触发扫描（需 skill_candidates:write）；审批流转 approve/reject（需 skill_candidates:write）。
@@ -383,7 +383,7 @@ func buildGateway(db *repo.DB, cfg *config.Config, stateStore artifact.Store, en
 		SkillWarmStart:     cfg.SkillWarmStart(),
 		SkillMaxChars:      cfg.SkillWarmStartMaxChars(),
 		TaskRunController:  taskRunController,
-		TaskRunSession:     taskRunSession,
+		TaskRunSession:     engine.NewSessionService(taskRunSession),
 		ToolSearchEnabled:  cfg.ToolSearchEnabled(),
 		ToolSearchProvider: toolSearchProvider,
 		CheckpointEnabled:  cfg.CheckpointEnabled(),

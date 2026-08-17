@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"trpc.group/trpc-go/trpc-agent-go/model"
-
 	"github.com/ayanmw/multiagent2/server/internal/executor"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 )
@@ -165,10 +163,10 @@ func TestEngine_MultiTurnHistory(t *testing.T) {
 	}
 	eng1.Close()
 
-	// 第二轮：携带第一轮历史。
-	history := []model.Message{
-		{Role: model.RoleUser, Content: "我叫小明"},
-		{Role: model.RoleAssistant, Content: "收到"},
+	// 第二轮：携带第一轮历史（引擎层 ChatMessage DTO，M6-02）。
+	history := []ChatMessage{
+		{Role: "user", Content: "我叫小明"},
+		{Role: "assistant", Content: "收到"},
 	}
 	eng2, _ := New(cfg)
 	if _, err := eng2.Chat(context.Background(), "sess-h", "我刚说了什么名字？", history); err != nil {

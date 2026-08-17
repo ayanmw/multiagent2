@@ -4,8 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	framework "trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/event"
+	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/gin-gonic/gin"
 )
 
@@ -17,7 +16,9 @@ type capture struct {
 	hadErr bool
 }
 
-func runConverter(ch <-chan *event.Event) *capture {
+// runConverter 驱动 aguiConverter.Convert：入参已是引擎归一化后的 StreamEvent DTO
+// （M6-02：api 测试不再依赖框架 event/model 包）。
+func runConverter(ch <-chan engine.StreamEvent) *capture {
 	cap := &capture{byID: map[string][]string{}}
 	conv := newAGUIConverter()
 	_, err := conv.Convert(ch, func(t string, d gin.H) {
@@ -34,26 +35,20 @@ func runConverter(ch <-chan *event.Event) *capture {
 }
 
 func TestAGUIConverter_TextStream(t *testing.T) {
-	// 模拟真实框架流式行为：前两段为流式增量（Delta.Content），
-	// 最终响应把完整文本放进 Message.Content（即增量之和，重复）。
-	// converter 必须只累加增量，跳过最终重复的 Message.Content。
-	ch := make(chan *event.Event, 3)
-	ch <- &event.Event{Response: &framework.Response{Choices: []framework.Choice{
-		{Delta: framework.Message{Content: "你"}},
-	}}}
-	ch <- &event.Event{Response: &framework.Response{Choices: []framework.Choice{
-		{Delta: framework.Message{Content: "好"}},
-	}}}
-	ch <- &event.Event{Response: &framework.Response{Choices: []framework.Choice{
-		{Message: framework.Message{Content: "你好"}}, // 最终整块 = 增量之和（重复，应跳过）
-	}}}
+	// 模拟真实框架流式行为：前两段为流式增量（DeltaContent），
+	// 最终响应把完整文本放进 MessageContent（即增量之和，重复）。
+	// converter 必须只累加增量，跳过最终重复的 MessageContent。
+	ch := make(chan engine.StreamEvent, 3)
+	ch <- engine.StreamEvent{Choices: []engine.StreamChoice{{DeltaContent: "你"}}}
+	ch <- engine.StreamEvent{Choices: []engine.StreamChoice{{DeltaContent: "好"}}}
+	ch <- engine.StreamEvent{Choices: []engine.StreamChoice{{MessageContent: "你好"}}} // 最终整块 = 增量之和（重复，应跳过）
 	close(ch)
 
 	cap := runConverter(ch)
 	if cap.text.String() != "你好" {
 		t.Fatalf("累积文本错误（不应重复）: %q", cap.text.String())
 	}
-	// 仅两段增量产生 TEXT_MESSAGE_CONTENT；最终的 Message.Content 不应再发一次。
+	// 仅两段增量产生 TEXT_MESSAGE_CONTENT；最终的 MessageContent 不应再发一次。
 	want := []string{"TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_CONTENT"}
 	if len(cap.types) != len(want) {
 		t.Fatalf("事件数量错误: got %v want %v", cap.types, want)
@@ -66,11 +61,9 @@ func TestAGUIConverter_TextStream(t *testing.T) {
 }
 
 func TestAGUIConverter_TextNonStreaming(t *testing.T) {
-	// 非流式：单响应无增量，整块文本在 Message.Content，应正常输出。
-	ch := make(chan *event.Event, 1)
-	ch <- &event.Event{Response: &framework.Response{Choices: []framework.Choice{
-		{Message: framework.Message{Content: "你好，世界"}},
-	}}}
+	// 非流式：单响应无增量，整块文本在 MessageContent，应正常输出。
+	ch := make(chan engine.StreamEvent, 1)
+	ch <- engine.StreamEvent{Choices: []engine.StreamChoice{{MessageContent: "你好，世界"}}}
 	close(ch)
 
 	cap := runConverter(ch)
@@ -83,15 +76,10 @@ func TestAGUIConverter_TextNonStreaming(t *testing.T) {
 }
 
 func TestAGUIConverter_ToolCall(t *testing.T) {
-	ch := make(chan *event.Event, 2)
-	ch <- &event.Event{Response: &framework.Response{Choices: []framework.Choice{
-		{Message: framework.Message{ToolCalls: []framework.ToolCall{
-			{ID: "call_1", Function: framework.FunctionDefinitionParam{
-				Name:      "echo",
-				Arguments: []byte(`{"text":"hi"}`),
-			}},
-		}}},
-	}}}
+	ch := make(chan engine.StreamEvent, 1)
+	ch <- engine.StreamEvent{Choices: []engine.StreamChoice{{ToolCalls: []engine.StreamToolCall{
+		{ID: "call_1", Name: "echo", Arguments: `{"text":"hi"}`},
+	}}}}
 	close(ch)
 
 	cap := runConverter(ch)
@@ -105,11 +93,8 @@ func TestAGUIConverter_ToolCall(t *testing.T) {
 }
 
 func TestAGUIConverter_Error(t *testing.T) {
-	ch := make(chan *event.Event, 1)
-	ch <- &event.Event{Response: &framework.Response{
-		Object: framework.ObjectTypeError,
-		Error:  &framework.ResponseError{Message: "上游故障"},
-	}}
+	ch := make(chan engine.StreamEvent, 1)
+	ch <- engine.StreamEvent{IsError: true, ErrorMsg: "上游故障", CircuitBreak: false}
 	close(ch)
 
 	cap := runConverter(ch)

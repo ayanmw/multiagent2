@@ -12,8 +12,6 @@ import (
 
 	"github.com/ayanmw/multiagent2/server/internal/engine"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
-	"trpc.group/trpc-go/trpc-agent-go/event"
-	framework "trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // streamChatRequest 是 SSE 流式对话的请求体（M0.5-06：message 由 GET query 改为 POST body）。
@@ -134,20 +132,14 @@ func newAGUIConverter() *aguiConverter {
 	}
 }
 
-// Convert 读取 Agent 事件流，通过 emit 输出 AG-UI 事件，返回累积的助手文本。
-// 事件流携带错误（IsError）时返回非 nil 错误（RUN_ERROR 已先行上报）。
-func (cv *aguiConverter) Convert(ch <-chan *event.Event, emit func(string, gin.H)) (string, error) {
+// Convert 读取 Agent 事件流（引擎归一化后的 StreamEvent DTO），通过 emit 输出 AG-UI 事件，
+// 返回累积的助手文本。事件流携带错误（IsError）时返回非 nil 错误（RUN_ERROR 已先行上报）。
+// 入参事件已为引擎层 StreamEvent DTO（M6-02：api 不再直接依赖框架 event 包）。
+func (cv *aguiConverter) Convert(ch <-chan engine.StreamEvent, emit func(string, gin.H)) (string, error) {
 	var sb strings.Builder
 	for ev := range ch {
-		if ev == nil || ev.Response == nil {
-			continue
-		}
-		if ev.IsError() {
-			msg := "agent error"
-			if ev.Response.Error != nil {
-				msg = ev.Response.Error.Message
-			}
-			if engine.IsCircuitBreakEvent(ev) {
+		if ev.IsError {
+			if ev.CircuitBreak {
 				// 运行级兜底（M1-13）：护栏熔断是优雅终止，partial 文本已在前面
 				// 以 TEXT_MESSAGE_CONTENT 增量推送给客户端。这里追加一条明确的熔断
 				// 提示，并标记 circuitBroken，使 handler 仍把 partial 文本落库，
@@ -155,30 +147,26 @@ func (cv *aguiConverter) Convert(ch <-chan *event.Event, emit func(string, gin.H
 				cv.circuitBroken = true
 				emit("RUN_ERROR", gin.H{"message": engine.CircuitBreakNotice()})
 				cv.closeOpenCalls(emit)
-				return sb.String(), fmt.Errorf("%s", msg)
+				return sb.String(), fmt.Errorf("%s", ev.ErrorMsg)
 			}
-			emit("RUN_ERROR", gin.H{"message": msg})
+			emit("RUN_ERROR", gin.H{"message": ev.ErrorMsg})
 			cv.closeOpenCalls(emit)
-			return sb.String(), fmt.Errorf("%s", msg)
+			return sb.String(), fmt.Errorf("%s", ev.ErrorMsg)
 		}
-		for i := range ev.Response.Choices {
-			choice := ev.Response.Choices[i]
-			// 文本去重复用 engine.DeltaState 的同一规则：优先流式增量 Delta.Content，
-			// 仅当整轮未出现任何增量时才回退到非流式整块 Message.Content（终帧
+		for i := range ev.Choices {
+			choice := ev.Choices[i]
+			// 文本去重复用 engine.DeltaState 的同一规则：优先流式增量 DeltaContent，
+			// 仅当整轮未出现任何增量时才回退到非流式整块 MessageContent（终帧
 			// 重复文本会被跳过，避免重复一倍）。两处行为由 M0.5-04 统一保证。
-			if t := cv.ds.Text(choice.Delta.Content, choice.Message.Content); t != "" {
+			if t := cv.ds.Text(choice.DeltaContent, choice.MessageContent); t != "" {
 				emit("TEXT_MESSAGE_CONTENT", gin.H{
 					"messageId": cv.msgID,
 					"delta":     t,
 				})
 				sb.WriteString(t)
 			}
-			// 工具调用：流式走 Delta.ToolCalls，非流式走 Message.ToolCalls。
-			tcs := choice.Delta.ToolCalls
-			if len(tcs) == 0 {
-				tcs = choice.Message.ToolCalls
-			}
-			cv.onToolCalls(tcs, emit)
+			// 工具调用：流式走 Delta.ToolCalls，非流式走 Message.ToolCalls（已由引擎归一化到同一切片）。
+			cv.onToolCalls(choice.ToolCalls, emit)
 		}
 	}
 	// 流正常结束，关闭任何仍处于打开状态的工具调用。
@@ -187,7 +175,7 @@ func (cv *aguiConverter) Convert(ch <-chan *event.Event, emit func(string, gin.H
 }
 
 // onToolCalls 处理一批工具调用事件，输出 TOOL_CALL_START / TOOL_CALL_ARGS。
-func (cv *aguiConverter) onToolCalls(tcs []framework.ToolCall, emit func(string, gin.H)) {
+func (cv *aguiConverter) onToolCalls(tcs []engine.StreamToolCall, emit func(string, gin.H)) {
 	for i := range tcs {
 		tc := tcs[i]
 		id := tc.ID
@@ -198,7 +186,7 @@ func (cv *aguiConverter) onToolCalls(tcs []framework.ToolCall, emit func(string,
 		if _, ok := cv.openCalls[id]; !ok {
 			// 新工具调用开始：先关闭已打开的调用（流式同一时刻只处理一个）。
 			cv.closeOpenCalls(emit)
-			name := tc.Function.Name
+			name := tc.Name
 			emit("TOOL_CALL_START", gin.H{
 				"toolCallId":      id,
 				"toolCallName":    name,
@@ -206,10 +194,10 @@ func (cv *aguiConverter) onToolCalls(tcs []framework.ToolCall, emit func(string,
 			})
 			cv.openCalls[id] = &aguiToolCall{name: name}
 		}
-		if len(tc.Function.Arguments) > 0 {
+		if len(tc.Arguments) > 0 {
 			emit("TOOL_CALL_ARGS", gin.H{
 				"toolCallId": id,
-				"delta":      string(tc.Function.Arguments),
+				"delta":      tc.Arguments,
 			})
 		}
 	}
