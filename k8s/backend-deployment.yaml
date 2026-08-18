@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/part-of: go-multi-agent-v2
+spec:
+  # ⚠️ 后端用本地 SQLite（单文件），多副本会并发写冲突，保持 1 副本。
+  # 横向扩展需先切 PG（见 M8 规划），再放开 replicas + HPA。
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          # 替换为你的镜像仓库地址（CI 可推送至 ghcr.io/ayanmw/multiagent2/server:latest）
+          image: ghcr.io/ayanmw/multiagent2/server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: go-multi-agent-config
+            - secretRef:
+                name: go-multi-agent-secrets
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: skills
+              mountPath: /app/skills
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: go-multi-agent-data
+        - name: skills
+          configMap:
+            name: go-multi-agent-skills   # 由 k8s/gen-skills-configmap.sh 生成

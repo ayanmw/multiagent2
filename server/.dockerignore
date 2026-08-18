@@ -1,0 +1,9 @@
+# 构建上下文 ./server：排除本地产物与敏感/运行时数据，避免打进镜像
+bin/
+data/
+*.db
+.git/
+.gitignore
+.idea/
+.vscode/
+*.md

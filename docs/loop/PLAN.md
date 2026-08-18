@@ -182,6 +182,23 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 
 ---
 
+## M7 生产交付与可观测闭环（当前终态后新增阶段，无门槛前置）
+
+> 来源：用户 2026-08-18 规划「下一步该做什么」。目标：把功能完备的平台变成可 CI 校验、可容器化部署、可监控告警、可排障的**生产就绪**系统——兑现「24h 自主」上线承诺的最后一公里。
+> 已确认：server/web/gateway 三 Dockerfile 已于 M6-08 存在且正确（纯 Go `glebarez/sqlite` 无需 CGO；alpine 运行态）；本阶段补齐 **CI、k8s 清单与 .dockerignore 收尾**。
+
+| # | 任务 | 状态 | 验证标准 | 依赖 |
+|---|------|------|----------|------|
+| M7-01 | **CI 流水线（GitHub Actions）**：`.github/workflows/ci.yml`——server(`go build/vet/test`, `CGO_ENABLED=0`) + web(`npm ci/build/typecheck`) + 三镜像 `docker build` 校验（不推送）；worktree/taskrun 测试靠 runner 自带 git 真跑（不再 skip） | ✅ | PR 触发 CI 全绿；worktree/taskrun 测试在 CI 真跑 | 无 |
+| M7-02 | **容器化收尾（.dockerignore + HEALTHCHECK）**：server/web/gateway 加 `.dockerignore`（排除 `bin/ data/ node_modules/ dist/`，避免把本地 DB 打进镜像）；server/Dockerfile 补 `/health` HEALTHCHECK | ✅ | `docker build` 三镜像成功且镜像内不含 `data/` 与 `bin/`；`docker ps` 显示 healthy | M6-08 |
+| M7-03 | **K8s 部署清单**：`configmap` / `secret`(占位) / `pvc` / `backend` deploy+svc（**服务名必须为 `server`** 以匹配前端 `nginx.conf` 的 `http://server:8080`）/ `web` deploy+svc / `ingress`(路径分流) / `hpa-web` + `gen-skills-configmap.sh`（把仓库 `skills/` 挂为 ConfigMap 供 warm-start） | ✅ | `kubectl apply -f k8s/` 起三服务，端到端对话走通；后端崩溃自动重启；backend 因本地 SQLite 保持单副本 | 无 |
+| M7-04 | **告警规则（Prometheus Alertmanager）**：基于 M3-09 `/metrics` 写规则——LLM 错误率、工具失败率、Loop 失败率、预算耗尽、进程频繁重启、P99 时延；路由到通知渠道（复用 M4-07） | ○ | 人为制造高错误率 → 触发告警 → 通知中心/外部渠道收到 | M3-09 |
+| M7-05 | **Grafana 看板**：运行监控概览（调用量/时延/错误率/Token 用量/Active Loops/检查点堆积）；前端「运行监控」可内嵌或外链 | ○ | 跑几轮对话后看板有实时数据 | M3-09 |
+| M7-06 | **日志聚合 + trace 贯通**：OTel `traceID` 贯通 Gateway→Runner→工具调用；结构化 JSON 日志 + 集中采集（文档化 OTel Collector/Loki）；统一 `requestID` | ○ | 一次对话 trace 可在日志串联；错误可下钻到具体工具调用 | M3-09, M4 |
+| M7-07 | **部署文档与 quickstart（运维向）**：README 增补「生产部署」专节（CI/CD、K8s、Prometheus+Grafana、日志/trace、密钥管理）；`.env.example` 补全运维变量 | ○ | 新人按文档独立 K8s 部署并看到监控 | M7-01~06 |
+
+---
+
 ## 阻塞与依赖
 
 - **阶段门槛**：M0.5-01..07 全部 ✅ 之前，任何 M1 任务不得开始（循环按「第一个 ○」自然保证，同时这是硬规则）

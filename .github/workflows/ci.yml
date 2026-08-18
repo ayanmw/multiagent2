@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: Server (go build / vet / test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: server/go.sum
+      # glebarez/sqlite 为纯 Go 驱动，CGO_ENABLED=0 即可跨平台静态构建，无需 gcc。
+      # worktree/taskrun 等测试依赖 git 命令，ubuntu-latest 自带 git，可直接真跑（不再 skip）。
+      - name: Build
+        run: CGO_ENABLED=0 go build ./...
+      - name: Vet
+        run: CGO_ENABLED=0 go vet ./...
+      - name: Test
+        run: CGO_ENABLED=0 go test -count=1 ./...
+
+  web:
+    name: Web (npm ci / build / typecheck)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+
+  docker:
+    name: Docker image build (validate only)
+    runs-on: ubuntu-latest
+    # 仅 push 到 main 时构建镜像做校验；默认不推送，避免误发。
+    # 如需发版推送，取消下方 push 并接入容器 registry 登录步骤即可。
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build server image
+        uses: docker/build-push-action@v6
+        with:
+          context: server
+          file: server/Dockerfile
+          push: false
+          tags: ghcr.io/ayanmw/multiagent2/server:ci
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          file: web/Dockerfile
+          push: false
+          tags: ghcr.io/ayanmw/multiagent2/web:ci
+      - name: Build gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: tool/workbuddyLLMAPI
+          file: tool/workbuddyLLMAPI/Dockerfile
+          push: false
+          tags: ghcr.io/ayanmw/multiagent2/gateway:ci

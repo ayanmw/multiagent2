@@ -33,4 +33,9 @@ ENV PORT=8080 \
 VOLUME ["/data", "/app/skills"]
 
 EXPOSE 8080
+
+# 健康检查同源端 /health（main.go 已实现，返回 200）；alpine 自带 busybox wget。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:8080/health || exit 1
+
 ENTRYPOINT ["/app/server"]

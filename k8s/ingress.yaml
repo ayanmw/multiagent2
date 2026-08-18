@@ -1,0 +1,56 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: go-multi-agent-ingress
+  labels:
+    app.kubernetes.io/part-of: go-multi-agent-v2
+  annotations:
+    # SSE / 长任务：关闭缓冲、放宽超时（与 web/nginx.conf 一致）
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  rules:
+    - host: agent.example.com   # ← 改成你的域名
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: server
+                port:
+                  number: 8080
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: server
+                port:
+                  number: 8080
+          - path: /metrics
+            pathType: Exact
+            backend:
+              service:
+                name: server
+                port:
+                  number: 8080
+          - path: /.well-known/agent.json
+            pathType: Exact
+            backend:
+              service:
+                name: server
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80
+  # 如需 HTTPS，取消注释并配置 cert-manager 或手动 tls secret：
+  # tls:
+  #   - hosts:
+  #       - agent.example.com
+  #     secretName: go-multi-agent-tls

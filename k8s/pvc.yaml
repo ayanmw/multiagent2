@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: go-multi-agent-data
+  labels:
+    app.kubernetes.io/part-of: go-multi-agent-v2
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  # 如有已有 StorageClass 需指定，取消下行注释：
+  # storageClassName: standard

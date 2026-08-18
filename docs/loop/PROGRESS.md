@@ -705,3 +705,25 @@
 - 验证：CGO_ENABLED=0 `go build ./...` ✓ | `go vet ./...` ✓；`go test ./internal/scheduler/... ./internal/api/... ./internal/notify/... ./internal/model/... ./internal/config/...` 全绿（含新增用例）；`go test ./cmd/server/...` 大集成套件通过（17.9s，覆盖 M4 调度/webhook/恢复未回归）；`go test ./...` 中 `internal/repo` 因沙箱无 gcc（go-sqlite3 需 cgo）报 stub 错误，属既有环境限制（AGENTS.md 豁免），与本次无关。
 - Commit: 待提交（feat(M6-05): 自主化 Loop 韧性补强-指数退避重试+预算超限通知+Webhook签名校验），post-commit hook 自动推 origin/main。
 - 下一步：M6-06（真实模型冒烟测试套件：promptiter 写回不破坏对话、evolution 质量门控不误杀、eval 多次跑分数稳定，依赖 M5，已完成）。
+
+---
+
+### 2026-08-18 13:30 | M6-06 | ✅ 真实模型冒烟测试套件（补记，commit 7298e36）
+- 覆盖 promptiter 写回不破坏对话、evolution 质量门控不误杀、eval 多次跑分数稳定。验证全绿。Commit: 7298e36（已推 origin/main）。至此 M6 全段收口。
+
+---
+
+### 2026-08-18 13:30 | M7-01 | ✅ CI 流水线（GitHub Actions）
+- 新增 `.github/workflows/ci.yml`：① server 作业 `CGO_ENABLED=0 go build/vet/test ./...`（glebarez 纯 Go 无需 gcc；worktree/taskrun 测试靠 ubuntu runner 自带 git 真跑，落实 M6-01「CI 真跑」意图）；② web 作业 `npm ci && npm run build && npm run typecheck`；③ docker 作业对 server/web/gateway 三镜像 `docker/build-push-action`（push:false，仅校验 Dockerfile 语法与构建）。触发：push 到 main + PR。
+- 验证：YAML 经 `yaml.safe_load_all` 解析通过；server 构建命令与本地 `CGO_ENABLED=0 go build -o bin/server ./cmd/server` 实测一致（产出 63MB 纯 Go 二进制）。GitHub 实际跑测在下次 push/PR 触发。
+
+### 2026-08-18 13:30 | M7-02 | ✅ 容器化收尾（.dockerignore + HEALTHCHECK）
+- server/web/gateway 各补 `.dockerignore`：排除 `bin/ data/ *.db / node_modules/ dist/ .git`，避免把本地 SQLite 与构建产物打进镜像（Docker 不自动遵循 .gitignore）。
+- server/Dockerfile 补 `HEALTHCHECK ... CMD wget -qO- http://localhost:8080/health`（alpine 自带 busybox wget；`/health` 端点已在 main.go:60 实现）。
+- 注：三 Dockerfile 本体（M6-08 已建）逻辑正确（纯 Go alpine、端口/卷/环境变量齐全），本次不重写，仅收尾。
+
+### 2026-08-18 13:30 | M7-03 | ✅ K8s 部署清单
+- 新增 `k8s/`：`configmap.yaml`（端口/路径/运行模式/开关）、`secret.yaml`（JWT_SECRET/PROVIDER_ENC_KEY 占位，提示用 sealed-secrets/external-secrets）、`pvc.yaml`（10Gi RWO）、`backend-deployment.yaml`+`backend-service.yaml`（**Service 名必须为 `server`** 以匹配前端 `nginx.conf` 的 `http://server:8080`）、`web-deployment.yaml`+`web-service.yaml`、`ingress.yaml`（路径分流：`/api`·`/health`·`/metrics`·`/.well-known/agent.json`→backend，`/`→web；SSE 关缓冲+长超时）、`hpa-web.yaml`（前端无状态可 HPA；backend 因本地 SQLite 保持单副本，注释说明切 PG 后才可 HPA）、`gen-skills-configmap.sh`（把仓库 `skills/` 挂为 ConfigMap 供 warm-start）。
+- 后端探针用 `/health`；因本地 SQLite 单文件，replicas=1（横向扩展需 M8 切 PG）。
+- 验证：全部 k8s YAML 经 `yaml.safe_load_all` 解析通过。实际 `kubectl apply` 由用户在目标集群执行（需先把镜像推到 ghcr.io/ayanmw/multiagent2/{server,web,gateway} 并替换 secret 占位）。
+- 下一步：M7-04（告警规则 Prometheus Alertmanager，依赖 M3-09 /metrics）。

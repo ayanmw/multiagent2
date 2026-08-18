@@ -1,0 +1,23 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/part-of: go-multi-agent-v2
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+# 说明：前端是无状态静态站，可安全 HPA。
+# 后端 backend 使用本地 SQLite（单文件），多副本会并发写冲突，故不提供 HPA；
+# 切 PG（M8 规划）后才能对 backend 加 HPA 做横向扩展。
