@@ -1,0 +1,93 @@
+# Prometheus 告警规则（M7-04）
+#
+# 基于 M3-09 暴露的 /metrics 指标，覆盖六类生产关注信号：
+#   LLM 错误率 / 工具失败率 / 自主 Loop 失败率 / 预算耗尽 / 进程频繁重启 / LLM 时延 P99。
+# 每条规则触发的告警经 Alertmanager 路由到后端 /api/alerts（见 alertmanager.yml），
+# 再经统一通知出口（M4-07）写入通知中心，直达管理员站内信 / 外部渠道。
+#
+# 阈值均为可直接调的参数；如需更灵敏/更迟钝，改下方数字即可。
+#
+# 校验：server/internal/metrics/alertrules_test.go 会解析本文件，确认每条 expr 引用的
+# 指标名确实由 /metrics 暴露（KnownMetricNames），避免「规则写了但指标不存在」的静默失效。
+
+groups:
+  - name: codeagent-alerts
+    rules:
+      # 1) LLM 错误率过高：近 5m 错误率超过 10%（持续 2m）。
+      - alert: CodeAgentHighLLMErrorRate
+        expr: |
+          (
+            rate(codeagent_llm_errors_total[5m])
+            /
+            clamp_min(rate(codeagent_llm_calls_total[5m]), 1)
+          ) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM 调用错误率过高"
+          description: "近 5 分钟 LLM 调用错误率为 {{ $value | humanizePercentage }}，超过阈值 10%。请检查 Provider/模型可用性、密钥与网络。"
+
+      # 2) 工具（代码执行）失败率过高：近 5m 失败率超过 20%（持续 2m）。
+      - alert: CodeAgentHighToolFailureRate
+        expr: |
+          (
+            rate(codeagent_tool_errors_total[5m])
+            /
+            clamp_min(rate(codeagent_tool_calls_total[5m]), 1)
+          ) > 0.2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "工具执行失败率过高"
+          description: "近 5 分钟工具（代码执行）调用失败率为 {{ $value | humanizePercentage }}，超过阈值 20%。请检查执行器/沙箱健康度与危险命令策略。"
+
+      # 3) 自主 Loop 失败率过高：近 5m 失败率超过 30%（持续 5m）。自主化平台的核心健康信号。
+      - alert: CodeAgentHighLoopFailureRate
+        expr: |
+          (
+            rate(codeagent_loop_failures_total[5m])
+            /
+            clamp_min(rate(codeagent_loop_runs_total[5m]), 1)
+          ) > 0.3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "自主 Loop 失败率过高"
+          description: "近 5 分钟自主 Loop（cron/webhook）失败率为 {{ $value | humanizePercentage }}，超过阈值 30%。请检查自动化运行日志与依赖的 LLM/工具链路。"
+
+      # 4) 平台级预算耗尽：15m 窗口内出现至少一次预算拦截（即时告警）。
+      - alert: CodeAgentBudgetExhausted
+        expr: increase(codeagent_budget_exhausted_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "平台预算已耗尽"
+          description: "近 15 分钟发生平台级预算耗尽拦截，对应作用域的后续 LLM 调用已被暂停。请到预算策略管理页提额或调整阈值。"
+
+      # 5) 进程频繁重启：1h 内进程启动时间变更超过 2 次（即重启 >2 次）。
+      - alert: CodeAgentFrequentRestarts
+        expr: changes(process_start_time_seconds[1h]) > 2
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "后端进程频繁重启"
+          description: "过去 1 小时内后端进程重启次数超过 2 次（当前 {{ $value }} 次变更）。请排查 OOM / 崩溃循环 / 健康检查配置。"
+
+      # 6) LLM 调用 P99 时延过高：近 5m P99 超过 10 秒（持续 5m）。
+      - alert: CodeAgentHighLLMLatencyP99
+        expr: |
+          histogram_quantile(
+            0.99,
+            rate(codeagent_llm_call_duration_seconds_bucket[5m])
+          ) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM 调用 P99 时延过高"
+          description: "近 5 分钟 LLM 调用 P99 时延为 {{ $value | humanizeDuration }}，超过阈值 10s。请检查模型服务负载、网络与超时配置。"

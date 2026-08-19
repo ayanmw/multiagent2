@@ -1,0 +1,34 @@
+# Prometheus 抓取配置（M7-04 可观测闭环）
+#
+# 作用：从后端 /metrics（Prometheus 文本格式，M3-09 暴露）抓取指标，并加载告警规则。
+#
+# 部署说明：
+#   - K8s 内：后端 Service 名为 `server`（见 k8s/backend-service.yaml），故 scrape 目标为
+#     `server:8080`；Prometheus/Alertmanager 以独立 Deployment 部署时，本文件随 ConfigMap 挂载。
+#   - 本地 docker-compose（monitoring/docker-compose.monitoring.yml）：后端在宿主机运行，
+#     请将下方 `server:8080` 改为 `host.docker.internal:8080`（或 `localhost:8080`）。
+#   - 后端需开启 METRICS_ENABLED=true（默认开）才会暴露 /metrics，否则抓取 404。
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: "codeagent"
+
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  - job_name: codeagent-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - server:8080   # 本地单主机请改为 host.docker.internal:8080 或 localhost:8080
+        labels:
+          service: backend

@@ -1,0 +1,36 @@
+# Alertmanager 配置（M7-04）
+#
+# 把触发的告警路由到后端接收端点 /api/alerts（见 server/internal/api/alerts.go），
+# 该端点经统一通知出口（M4-07）把告警写入通知中心 → 管理员站内信 / 外部渠道。
+#
+# 安全：若后端配置了 ALERT_WEBHOOK_TOKEN（推荐生产开启），在此用 http_config 携带
+# 同样的令牌（Authorization: Bearer）。未配置令牌时保持下方 url 即可（后端关闭校验）。
+
+global:
+  resolve_timeout: 5m
+
+route:
+  # 默认接收器：所有告警统一投递到后端通知中心。
+  receiver: codeagent-notify
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers:
+        - severity = "critical"
+      receiver: codeagent-notify
+    - matchers:
+        - severity = "warning"
+      receiver: codeagent-notify
+
+receivers:
+  - name: codeagent-notify
+    webhook_configs:
+      - url: "http://server:8080/api/alerts"   # 本地单主机请改为 http://host.docker.internal:8080/api/alerts
+        send_resolved: true
+        # 若后端开启了 ALERT_WEBHOOK_TOKEN，取消下方注释并填入同一令牌：
+        # http_config:
+        #   authorization:
+        #     type: Bearer
+        #     credentials: "<ALERT_WEBHOOK_TOKEN>"

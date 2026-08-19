@@ -719,6 +719,12 @@ func main() {
 	webhookLimiter := api.NewWebhookRateLimiter(cfg.WebhookRateLimit(), cfg.WebhookRateWindow())
 	r.POST("/api/webhooks/:token", api.NewWebhookHandler(db.DB, webhookRunner, webhookLimiter).WithNotifier(notifier).WithSignatureSecret(cfg.WebhookSignSecret()).Handle)
 
+	// 告警接收端点（M7-04）：接收 Alertmanager 推送的告警，经统一通知出口（M4-07）写入通知中心，
+	// 使 Prometheus 告警直达用户站内信 / 外部渠道。共享密钥校验（ALERT_WEBHOOK_TOKEN），
+	// 空则关闭校验（向后兼容，生产建议配置）；告警投递到 ALERT_NOTIFY_USER_IDS 指定的管理员。
+	alertsHandler := api.NewAlertsWebhookHandler(notifier).WithToken(cfg.AlertWebhookToken()).WithTargetUsers(cfg.AlertNotifyUserIDs())
+	r.POST("/api/alerts", alertsHandler.Handle)
+
 	// Graceful shutdown
 	go func() {
 		quit := make(chan os.Signal, 1)

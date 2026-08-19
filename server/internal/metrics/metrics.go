@@ -51,7 +51,34 @@ type Overview struct {
 	TokenPrompt     int64 `json:"token_prompt"`
 	TokenCompletion int64 `json:"token_completion"`
 	TokenTotal      int64 `json:"token_total"`
+	// 以下为 M7-04 告警规则所需的聚合快照（自主 Loop 与预算护栏维度）。
+	LoopRuns        int64 `json:"loop_runs"`
+	LoopFailures    int64 `json:"loop_failures"`
+	BudgetExhausted int64 `json:"budget_exhausted"`
 }
+
+// KnownMetricNames 是本包 /metrics 端点会对外暴露的全部指标名（含派生后缀前的基名）。
+// 供 M7-04 的告警规则契约测试（alertrules_test.go）校验 alert-rules.yml 引用的指标
+// 确实由本系统产出，避免「规则写了但指标不存在」的静默失效。
+var KnownMetricNames = []string{
+	"codeagent_llm_calls_total",
+	"codeagent_llm_call_duration_seconds",
+	"codeagent_llm_errors_total",
+	"codeagent_tool_calls_total",
+	"codeagent_tool_errors_total",
+	"codeagent_token_prompt_total",
+	"codeagent_token_completion_total",
+	"codeagent_token_total",
+	"codeagent_loop_runs_total",
+	"codeagent_loop_failures_total",
+	"codeagent_budget_exhausted_total",
+	"process_start_time_seconds",
+}
+
+// processStartTimeSeconds 是进程启动的 Unix 时间戳（秒），用于 M7-04「进程频繁重启」
+// 告警（Prometheus 约定指标 process_start_time_seconds，配合 changes() 检测重启次数）。
+// 以静态 gauge 行渲染，不依赖 OTel gauge（ManualReader 对一次性 gauge 的采集不稳定）。
+var processStartTimeSeconds float64
 
 // 进程内原子累加器，作为 Summary() 的唯一数据源（与 OpenTelemetry instruments 同源：
 // 每次 Record* 时同时写入 OTel instrument 与这里的原子计数器）。避免从 metricdata 反解。
@@ -64,6 +91,10 @@ var (
 	tokenPrompt     atomic.Int64
 	tokenCompletion atomic.Int64
 	tokenTotal      atomic.Int64
+	// M7-04：自主 Loop 运行/失败 与 预算耗尽 计数。
+	loopRuns        atomic.Int64
+	loopFailures    atomic.Int64
+	budgetExhausted atomic.Int64
 )
 
 // OpenTelemetry instruments（启用时非 nil）。
@@ -77,6 +108,10 @@ var (
 	tokenPromptCounter     metric.Int64Counter
 	tokenCompletionCounter metric.Int64Counter
 	tokenTotalCounter      metric.Int64Counter
+	// M7-04：自主 Loop 与预算护栏计数器。
+	loopRunsCounter        metric.Int64Counter
+	loopFailuresCounter    metric.Int64Counter
+	budgetExhaustedCounter metric.Int64Counter
 )
 
 // reader 是 ManualReader 实例，用于 /metrics 抓取时即时聚合当前指标快照。
@@ -118,9 +153,21 @@ func Init(cfg Config) error {
 	if tokenTotalCounter, err = m.Int64Counter("codeagent_token_total", metric.WithDescription("总 token 累计")); err != nil {
 		return err
 	}
+	// M7-04：自主 Loop 运行/失败 与 平台级预算耗尽（供告警规则消费）。
+	if loopRunsCounter, err = m.Int64Counter("codeagent_loop_runs_total", metric.WithDescription("自主 Loop 运行总数（cron/webhook 触发）")); err != nil {
+		return err
+	}
+	if loopFailuresCounter, err = m.Int64Counter("codeagent_loop_failures_total", metric.WithDescription("自主 Loop 失败总数")); err != nil {
+		return err
+	}
+	if budgetExhaustedCounter, err = m.Int64Counter("codeagent_budget_exhausted_total", metric.WithDescription("平台级预算耗尽拦截次数")); err != nil {
+		return err
+	}
 
 	reader = r
 	meter = m
+	// 进程启动时间（秒）：用于 M7-04「进程频繁重启」告警。
+	processStartTimeSeconds = float64(time.Now().Unix())
 	atomic.StoreInt32(&enabled, 1)
 	return nil
 }
@@ -191,6 +238,36 @@ func RecordTokenUsage(ctx context.Context, prompt, completion, total int64) {
 	tokenTotal.Add(total)
 }
 
+// RecordLoopRun 在每次自主 Loop（cron/webhook 触发）开始运行时记录一次，
+// 供 M7-04「Loop 失败率」告警（与 codeagent_loop_failures_total 配合算比率）。
+func RecordLoopRun(ctx context.Context) {
+	if !Enabled() {
+		return
+	}
+	loopRunsCounter.Add(ctx, 1)
+	loopRuns.Add(1)
+}
+
+// RecordLoopFailure 在每次自主 Loop 运行失败时记录一次（与 RecordLoopRun 配对），
+// 供 M7-04「Loop 失败率」告警。
+func RecordLoopFailure(ctx context.Context) {
+	if !Enabled() {
+		return
+	}
+	loopFailuresCounter.Add(ctx, 1)
+	loopFailures.Add(1)
+}
+
+// RecordBudgetExhausted 在「平台级预算耗尽拦截」发生时记录一次（M3-04 / M4-06 护栏触发），
+// 供 M7-04「预算耗尽」告警（increase(codeagent_budget_exhausted_total[15m]) > 0）。
+func RecordBudgetExhausted(ctx context.Context) {
+	if !Enabled() {
+		return
+	}
+	budgetExhaustedCounter.Add(ctx, 1)
+	budgetExhausted.Add(1)
+}
+
 // Summary 返回当前进程内的指标聚合快照，供前端「运行监控」概览卡片消费。
 func Summary() Overview {
 	return Overview{
@@ -202,6 +279,9 @@ func Summary() Overview {
 		TokenPrompt:     tokenPrompt.Load(),
 		TokenCompletion: tokenCompletion.Load(),
 		TokenTotal:      tokenTotal.Load(),
+		LoopRuns:        loopRuns.Load(),
+		LoopFailures:    loopFailures.Load(),
+		BudgetExhausted: budgetExhausted.Load(),
 	}
 }
 
@@ -220,7 +300,16 @@ func Handler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(renderPrometheus(&rm)))
+		var b strings.Builder
+		b.WriteString(renderPrometheus(&rm))
+		// M7-04：附加进程启动时间静态 gauge（Prometheus 约定指标），供「进程频繁重启」告警。
+		// 以固定值渲染，避免依赖 OTel 一次性 gauge 在 ManualReader 下的采集不确定性。
+		b.WriteString("# HELP process_start_time_seconds Unix time of process start\n")
+		b.WriteString("# TYPE process_start_time_seconds gauge\n")
+		b.WriteString("process_start_time_seconds ")
+		b.WriteString(strconv.FormatFloat(processStartTimeSeconds, 'g', -1, 64))
+		b.WriteByte('\n')
+		_, _ = w.Write([]byte(b.String()))
 	})
 }
 

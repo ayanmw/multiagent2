@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ayanmw/multiagent2/server/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/notify"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
@@ -183,6 +184,9 @@ func (h *WebhookHandler) runLoop(a *model.Automation, sessionKey, clientIP strin
 	defer h.running.Delete(a.ID)
 	now := time.Now()
 
+	// M7-04：记录一次自主 Loop 运行（webhook 触发，供「Loop 失败率」告警）。
+	metrics.RecordLoopRun(context.Background())
+
 	// M4-05：记录本次自动化运行（status=running），供进程重启后「跨天恢复」扫描续跑。
 	// 建表失败（如测试库未迁移）时仅告警，不阻断本次运行（恢复能力降级）。
 	run := &model.AutomationRun{
@@ -207,6 +211,8 @@ func (h *WebhookHandler) runLoop(a *model.Automation, sessionKey, clientIP strin
 	auditor := repo.NewDBAuditor(h.db, a.UserID)
 	if err != nil {
 		// M4-05：运行失败 → 标记 failed。
+		// M7-04：本次自主 Loop 运行失败，记录失败指标。
+		metrics.RecordLoopFailure(context.Background())
 		if run != nil && run.ID != 0 {
 			if merr := repo.MarkAutomationRunStatus(h.db, run.ID, model.RunStatusFailed, err.Error(), run.Attempts); merr != nil {
 				fmt.Printf("[WEBHOOK] automation %d 标记运行 failed 失败: %v\n", a.ID, merr)

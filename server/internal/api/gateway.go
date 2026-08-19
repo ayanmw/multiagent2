@@ -110,6 +110,8 @@ func (g *Gateway) maybeNotifyBudget(uid uint, ev repo.BudgetEvaluation) {
 	if g.cfg.Notifier == nil || !ev.Blocked {
 		return
 	}
+	// M7-04：平台级预算耗尽拦截发生时记录指标（供「预算耗尽」告警）。
+	metrics.RecordBudgetExhausted(context.Background())
 	now := time.Now()
 	g.budgetNotifyMu.Lock()
 	last, ok := g.budgetNotifyLast[uid]

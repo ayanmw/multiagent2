@@ -157,6 +157,20 @@ func NewBudgetExhausted(userID uint, scope string, used, max int64) *model.Notif
 	}
 }
 
+// NewAlert 构造「Prometheus/Alertmanager 平台告警」通知（M7-04）。
+// 由 /api/alerts 接收端点把 Alertmanager 推送的 firing 告警转为站内信，
+// 复用统一通知出口（M4-07）。alertName 取自告警 labels.alertname，detail 为告警描述/摘要。
+func NewAlert(userID uint, alertName, detail string) *model.Notification {
+	return &model.Notification{
+		UserID:  userID,
+		Type:    model.NotificationTypeAlert,
+		Title:   fmt.Sprintf("平台告警：%s", alertName),
+		Message: detail,
+		RefKind: model.NotificationRefAlert,
+		RefID:   alertName,
+	}
+}
+
 // shortReply 截断过长的结果正文，避免一条通知塞入整段 Loop 输出。
 func shortReply(reply string) string {
 	const max = 200

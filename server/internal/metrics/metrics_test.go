@@ -2,8 +2,10 @@ package metrics
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +87,65 @@ func TestMetricsEnabledFlow(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "codeagent_token_total") {
 		t.Errorf("handler body missing token_total:\n%s", w.Body.String())
+	}
+}
+
+// TestMetricsLoopBudgetAndProcessStart 验证 M7-04 新增的三类告警相关指标：
+//   - codeagent_loop_runs_total / codeagent_loop_failures_total（自主 Loop 运行/失败）
+//   - codeagent_budget_exhausted_total（平台级预算耗尽）
+//   - process_start_time_seconds（进程启动时间，供「频繁重启」告警）
+// 既出现在 /metrics 文本输出，也反映在 Summary 聚合快照中。
+func TestMetricsLoopBudgetAndProcessStart(t *testing.T) {
+	if err := Init(Config{Enabled: true}); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	ctx := context.Background()
+	RecordLoopRun(ctx)
+	RecordLoopFailure(ctx)
+	RecordBudgetExhausted(ctx)
+
+	s := Summary()
+	if s.LoopRuns != 1 {
+		t.Errorf("LoopRuns=%d want 1", s.LoopRuns)
+	}
+	if s.LoopFailures != 1 {
+		t.Errorf("LoopFailures=%d want 1", s.LoopFailures)
+	}
+	if s.BudgetExhausted != 1 {
+		t.Errorf("BudgetExhausted=%d want 1", s.BudgetExhausted)
+	}
+
+	// /metrics 文本输出应包含新增计数器与进程启动时间 gauge。
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handler status=%d want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, name := range []string{
+		"codeagent_loop_runs_total",
+		"codeagent_loop_failures_total",
+		"codeagent_budget_exhausted_total",
+		"process_start_time_seconds",
+	} {
+		if !strings.Contains(body, name) {
+			t.Errorf("prometheus output missing metric %q:\n%s", name, body)
+		}
+	}
+	if !strings.Contains(body, "# TYPE process_start_time_seconds gauge") {
+		t.Errorf("process_start_time_seconds not typed as gauge:\n%s", body)
+	}
+	// 进程启动时间应为合法的正数（> 1e9 即 2001 年之后的 Unix 秒）。
+	// 用正则精确匹配「样本行」而非 HELP/TYPE 行（避免误匹配 HELP 行中的同名前缀）。
+	re := regexp.MustCompile(`process_start_time_seconds ([0-9.eE+-]+)`)
+	m := re.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("process_start_time_seconds sample line not found:\n%s", body)
+	}
+	var val float64
+	if _, err := fmt.Sscanf(m[1], "%f", &val); err != nil || val < 1e9 {
+		t.Errorf("process_start_time_seconds value invalid: %q", m[1])
 	}
 }
 

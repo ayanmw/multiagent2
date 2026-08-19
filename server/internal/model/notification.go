@@ -35,6 +35,7 @@ const (
 	NotificationTypeFailure    = "failure"
 	NotificationTypeCheckpoint = "checkpoint"
 	NotificationTypeBudget     = "budget" // 平台级预算耗尽告警（M6-05）
+	NotificationTypeAlert      = "alert"  // Prometheus/Alertmanager 平台告警（M7-04）
 )
 
 // 通知来源类型（RefKind）。
@@ -43,4 +44,5 @@ const (
 	NotificationRefAutomationRun = "automation_run"
 	NotificationRefCheckpoint    = "checkpoint"
 	NotificationRefBudget        = "budget" // 预算护栏来源（M6-05）
+	NotificationRefAlert         = "alert"  // Prometheus/Alertmanager 告警来源（M7-04）
 )

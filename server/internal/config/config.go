@@ -98,6 +98,12 @@ type Config struct {
 	// Webhook 入站签名密钥（M6-05）：非空时启用 HMAC-SHA256 校验（X-Webhook-Signature），
 	// 外部系统在调用 /api/webhooks/:token 时需携带按此密钥对 body 计算的签名；空=关闭校验（向后兼容）。
 	webhookSignSecret string // 入站 webhook 签名密钥（env WEBHOOK_SIGN_SECRET，默认空=关闭）
+	// 告警接收端点共享密钥（M7-04）：非空时 /api/alerts 要求携带此密钥（Authorization: Bearer
+	// 或 X-Alert-Token）才接受 Alertmanager 推送；空=关闭校验（向后兼容，生产建议配置）。
+	alertWebhookToken string // 告警接收端点共享密钥（env ALERT_WEBHOOK_TOKEN，默认空=关闭）
+	// 告警通知目标用户 ID 列表（M7-04）：Prometheus/Alertmanager 平台告警经统一通知出口
+	// 投递到这些管理员用户（逗号分隔，env ALERT_NOTIFY_USER_IDS，默认 "1"）。
+	alertNotifyUserIDs []uint // 告警通知目标用户 ID 列表（env ALERT_NOTIFY_USER_IDS，默认 [1]）
 	// 安全加固（MX-07）：CORS 精细化允许的前端源列表（env CORS_ALLOWED_ORIGINS，逗号分隔），
 	// 仅放行白名单内的跨域源；缺省为本地 Vite 开发源。特殊值 "*" 放开全部（仅公开非凭证接口用）。
 	corsAllowedOrigins []string
@@ -363,6 +369,11 @@ func Load() *Config {
 	// 出站 webhook 通知回调地址（M4-07）：为空表示只发站内信，不发外部回调。
 	cfg.webhookNotifyURL = envOrDefault("WEBHOOK_NOTIFY_URL", "")
 	cfg.webhookSignSecret = envOrDefault("WEBHOOK_SIGN_SECRET", "")
+
+	// 告警接收端点共享密钥（M7-04）：空=关闭校验。
+	cfg.alertWebhookToken = envOrDefault("ALERT_WEBHOOK_TOKEN", "")
+	// 告警通知目标用户 ID 列表（M7-04）：默认投递到 ID=1（首个管理员）。
+	cfg.alertNotifyUserIDs = parseUintList(envOrDefault("ALERT_NOTIFY_USER_IDS", "1"))
 
 	// 安全加固（MX-07）：CORS 精细化允许源。缺省本地 Vite 开发源；生产用
 	// CORS_ALLOWED_ORIGINS 显式配置前端域名（逗号分隔）。特殊值 "*" 放开全部
@@ -648,6 +659,40 @@ func (c *Config) WebhookSignSecret() string {
 		return ""
 	}
 	return c.webhookSignSecret
+}
+
+// AlertWebhookToken returns the shared secret for the /api/alerts receiver (M7-04).
+// Empty means token verification is disabled (backward compatible).
+func (c *Config) AlertWebhookToken() string {
+	if c == nil {
+		return ""
+	}
+	return c.alertWebhookToken
+}
+
+// AlertNotifyUserIDs returns the admin user IDs that platform alerts are delivered to (M7-04).
+// Falls back to [1] when unset or invalid.
+func (c *Config) AlertNotifyUserIDs() []uint {
+	if c == nil || len(c.alertNotifyUserIDs) == 0 {
+		return []uint{1}
+	}
+	return c.alertNotifyUserIDs
+}
+
+// parseUintList splits a comma-separated string into a slice of uints, skipping
+// any non-numeric tokens (used for ALERT_NOTIFY_USER_IDS).
+func parseUintList(s string) []uint {
+	parts := splitAndTrim(s, ",")
+	out := make([]uint, 0, len(parts))
+	for _, p := range parts {
+		if n, err := strconv.ParseUint(p, 10, 64); err == nil && n > 0 {
+			out = append(out, uint(n))
+		}
+	}
+	if len(out) == 0 {
+		return []uint{1}
+	}
+	return out
 }
 
 // EvolutionEnabled reports whether the background skill-evolution scanner (M5-03)

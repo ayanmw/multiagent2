@@ -19,6 +19,7 @@ import (
 
 	"github.com/ayanmw/multiagent2/server/internal/cron"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/notify"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
@@ -153,11 +154,16 @@ func (s *Scheduler) scan(ctx context.Context, sync bool) int {
 func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 	defer s.running.Delete(a.ID)
 
+	// M7-04：记录一次自主 Loop 运行（供「Loop 失败率」告警，与下方失败记录配对）。
+	metrics.RecordLoopRun(ctx)
+
 	// 调度器预先创建会话，使「自动建 session」可观测（验证要求）。
 	sessionKey := repo.NewSessionKey()
 	if _, err := repo.GetOrCreateSession(s.DB, a.UserID, sessionKey); err != nil {
 		s.logger.Printf("[SCHED] automation %d 创建会话失败: %v", a.ID, err)
 		s.recordFailure(a, sessionKey, fmt.Errorf("创建会话失败: %w", err), 0)
+		// M7-04：会话建不起来等同本次 Loop 失败，记录失败指标。
+		metrics.RecordLoopFailure(ctx)
 		s.advanceNext(a, false)
 		return
 	}
@@ -220,6 +226,8 @@ func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 		}
 		// M4-07：失败 → 站内信通知（best-effort）。
 		s.notify(context.Background(), notify.NewFailure(a.UserID, a.ID, a.Name, runErr.Error()))
+		// M7-04：本次自主 Loop 运行失败，记录失败指标（与开头的 RecordLoopRun 配对）。
+		metrics.RecordLoopFailure(ctx)
 	}
 	s.advanceNext(a, runErr == nil)
 }
