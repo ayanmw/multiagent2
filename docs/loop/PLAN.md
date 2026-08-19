@@ -195,7 +195,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | M7-04 | **告警规则（Prometheus Alertmanager）**：基于 M3-09 `/metrics` 写规则——LLM 错误率、工具失败率、Loop 失败率、预算耗尽、进程频繁重启、P99 时延；路由到通知渠道（复用 M4-07） | ✅ | 人为制造高错误率 → 触发告警 → 通知中心/外部渠道收到 | M3-09 |
 | M7-05 | **Grafana 看板**：运行监控概览（调用量/时延/错误率/Token 用量/Active Loops/检查点堆积）；前端「运行监控」可内嵌或外链 | ✅ | 跑几轮对话后看板有实时数据 | M3-09 |
 | M7-06 | **日志聚合 + trace 贯通**：OTel `traceID` 贯通 Gateway→Runner→工具调用；结构化 JSON 日志 + 集中采集（文档化 OTel Collector/Loki）；统一 `requestID` | ✅ | 一次对话 trace 可在日志串联；错误可下钻到具体工具调用 | M3-09, M4 |
-| M7-07 | **部署文档与 quickstart（运维向）**：README 增补「生产部署」专节（CI/CD、K8s、Prometheus+Grafana、日志/trace、密钥管理）；`.env.example` 补全运维变量 | ○ | 新人按文档独立 K8s 部署并看到监控 | M7-01~06 |
+| M7-07 | **部署文档与 quickstart（运维向）**：README 增补「生产部署」专节（CI/CD、K8s、Prometheus+Grafana、日志/trace、密钥管理）；`.env.example` 补全运维变量 | ✅ | 新人按文档独立 K8s 部署并看到监控 | M7-01~06 |
 
 ---
 
