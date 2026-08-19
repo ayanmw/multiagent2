@@ -59,18 +59,24 @@ type WorkerResolver struct {
 //   - 作为 inprocess.Observer 在子任务终态（completed/failed/canceled）时
 //     merge 回主分支并清理 worktree（或冲突保留分支交人工）。
 //
+// 关联键（重要，v1.10.0 适配）：子任务唯一键取 run.ID（框架经
+// RuntimeStateKeyRunID 注入 worker AgentFactory 的 ro.RuntimeState，Observer 侧
+// 用 run.ID 可复现同一键），与 Create/OnRunUpdate 两侧统一；为兼容历史测试
+// （直接以 childSessionID 为键调用），OnRunUpdate 在 run.ID 查不到时回退
+// childSessionID 再查。
+//
 // Enabled=false 或 Manager=nil 时本钩子为空操作，taskrun 行为与 M2-04 一致。
 type WorktreeHook struct {
 	Enabled bool
 	Manager *worktree.Manager
 }
 
-// Create 为指定 childSessionID 创建隔离 worktree；返回实际工作目录（失败回退主目录时返回空串）。
-func (h *WorktreeHook) Create(ctx context.Context, repoDir, childSessionID string) (string, error) {
+// Create 为指定 runID 创建隔离 worktree；返回实际工作目录（失败回退主目录时返回空串）。
+func (h *WorktreeHook) Create(ctx context.Context, repoDir, runID string) (string, error) {
 	if !h.Enabled || h.Manager == nil {
 		return "", nil
 	}
-	return h.Manager.Create(ctx, repoDir, childSessionID)
+	return h.Manager.Create(ctx, repoDir, runID)
 }
 
 // OnRunUpdate 实现 taskrun.Observer：在子任务终态时 merge 回主分支并清理 worktree。
@@ -81,13 +87,31 @@ func (h *WorktreeHook) OnRunUpdate(ctx context.Context, run taskrunruntime.Run) 
 	if !run.Status.IsTerminal() {
 		return
 	}
-	h.Manager.Finalize(ctx, run.ChildSessionID, string(run.Status))
+	// 键解析：优先 run.ID（v1.10.0 下 Create 侧用 runID 注册）；历史调用以
+	// ChildSessionID 为键注册的 entry 也能命中（向后兼容）。
+	key := run.ID
+	if key == "" || !h.Manager.Lookup(key) {
+		if run.ChildSessionID != "" {
+			key = run.ChildSessionID
+		}
+	}
+	h.Manager.Finalize(ctx, key, string(run.Status))
 }
 
 // BuildAgentFactory 构造框架 AgentFactory：每次 spawn 时从 invocation 上下文取出
 // OwnerUserID，经闭包解析模型 + 工作目录后构建 Coder 子代理。
-// 注意：worker Runner 的 AgentFactory 签名不含 UserID，因此从
-// agent.InvocationFromContext(ctx).Session.UserID 取（= OwnerUserID）。
+//
+// 注意（v1.10.0 适配，重要）：worker Runner 的 AgentFactory 签名不含 UserID，且
+// runner.Run 是先 selectAgent（调用本工厂）后 NewInvocation——即工厂被调用时 ctx 里
+// 还没有 invocation（框架行为，见 LEARNINGS）。因此身份来源做多级回退：
+//  1. agent.InvocationFromContext(ctx)（若框架调整顺序或个别路径已创建 invocation）；
+//  2. ctx 显式注入（调用方用 WithWorkerIdentity 包装 Controller，经 SpawnRequest
+//     RunContext 钩子把父会话用户身份透传到 worker 运行上下文）。
+//
+// 子任务唯一键（worktree / checkpoint 用）取 ro.RuntimeState["taskrun.run_id"]
+// （框架 inprocess 注入的 run.ID，Observer 侧可用 run.ID 复现同一键），而非
+// invocation.Session.ID——工厂阶段拿不到 child session，且 runID 保证每次派生唯一。
+//
 // executorMode 为 worker 子代理的执行器运行模式（M4-06）：后台任务本质上是无人值守场景，
 // 调用方应传入 executor.ModeUnattended（ask 危险命令生成人工检查点排队），保证 24h 自主
 // Loop 派生的子任务同样受护栏约束、命中 ask 时落检查点而非卡死或盲目放行。
@@ -105,11 +129,17 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver, 
 		}
 	}
 	return func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
-		inv, ok := agent.InvocationFromContext(ctx)
-		if !ok || inv == nil || inv.Session == nil {
-			return nil, fmt.Errorf("taskrun: 无法从上下文获取 worker 调用的用户身份")
+		// 身份解析（见函数头注释：v1.10.0 下工厂阶段无 invocation，多级回退）。
+		uid := ""
+		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.Session != nil {
+			uid = inv.Session.UserID
 		}
-		uid := inv.Session.UserID
+		if uid == "" {
+			uid = workerUserIDFromContext(ctx)
+		}
+		if uid == "" {
+			return nil, fmt.Errorf("taskrun: 无法获取 worker 调用的用户身份（请用 WithWorkerIdentity 包装 Controller，或在含 invocation 的上下文派生）")
+		}
 		m, err := resolveModel(ctx, uid)
 		if err != nil {
 			return nil, fmt.Errorf("taskrun: 解析 worker 模型失败: %w", err)
@@ -118,8 +148,16 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver, 
 		if err != nil {
 			return nil, fmt.Errorf("taskrun: 解析 worker 工作目录失败: %w", err)
 		}
+		// 子任务唯一键：优先 ro.RuntimeState 的 run_id（框架注入），保证 Observer
+		// 侧用 run.ID 可复现；兜底取注入的父会话 id（仅作 key，语义为「本次派生」）。
+		childKey := workerParentSessionFromContext(ctx)
+		if v, ok := ro.RuntimeState[taskrunruntime.RuntimeStateKeyRunID]; ok {
+			if s, isStr := v.(string); isStr && s != "" {
+				childKey = s
+			}
+		}
 		// M3-01：构造落库审计器，使 worker 子代理执行的命令写入该 owner 名下的审计日志。
-		// inv.Session.UserID 为字符串形式的用户 id（与入口 uid 一致），解析失败则回落系统（0）。
+		// uid 为字符串形式的用户 id（与入口 uid 一致），解析失败则回落系统（0）。
 		var auditor executor.Auditor
 		// M3-05：后台任务无人值守，命中 ask 危险命令时生成人工检查点并暂停（而非直接 deny）。
 		var checkpointer executor.Checkpointer
@@ -128,13 +166,13 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver, 
 				auditor = res.NewAuditor(uint(uidNum))
 			}
 			if res.NewCheckpointer != nil {
-				checkpointer = res.NewCheckpointer(uint(uidNum), inv.Session.ID)
+				checkpointer = res.NewCheckpointer(uint(uidNum), childKey)
 			}
 		}
 		// M2-05：若开启 worktree 隔离，把子代理的执行目录切换到独立 worktree（独立分支），
 		// 使其改动不污染主分支工作区；创建失败则回退主目录（不阻断任务）。
 		if res.Worktree != nil {
-			if wt, werr := res.Worktree.Create(ctx, wd, inv.Session.ID); werr == nil && wt != "" {
+			if wt, werr := res.Worktree.Create(ctx, wd, childKey); werr == nil && wt != "" {
 				wd = wt
 			}
 		}
@@ -189,4 +227,104 @@ func Tools(controller taskrunruntime.Controller, sessionSvc session.Service, def
 	}
 	tr := taskruntool.NewTools(controller, opts...)
 	return tr.All()
+}
+
+// ---------------------------------------------------------------------------
+// worker 身份透传（v1.10.0 适配，M7.5-02 真实模型 E2E 暴露）
+// ---------------------------------------------------------------------------
+//
+// 背景：框架 v1.10.0 的 inprocess.Service 用 baseCtx（NewController 注入的 ctx）启动
+// 后台 goroutine，worker Runner.Run 的 selectAgent 阶段先于 NewInvocation——即
+// worker 的 AgentFactory 被调用时，ctx 里**没有**框架 invocation，拿不到 OwnerUserID。
+// 因此 BuildAgentFactory 改为多级取身份（invocation → ctx 注入），调用方用
+// WithWorkerIdentity 包装 Controller：在 spawn 工具调用（ctx 含父 Orchestrator 的
+// invocation）时，把父会话的用户身份经 SpawnRequest.RunContext 钩子写入 worker 的
+// 运行上下文，工厂即可经 workerUserIDFromContext 取到。
+
+// workerCtxKey 是注入 worker 运行上下文的身份键。
+type workerCtxKey int
+
+const (
+	workerCtxUserID workerCtxKey = iota
+	workerCtxParentSession
+)
+
+// WithWorkerUserID 把后台子任务的归属用户注入运行上下文（供 BuildAgentFactory 读取；
+// 由 WithWorkerIdentity 自动注入，一般无需手动调用）。
+func WithWorkerUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, workerCtxUserID, userID)
+}
+
+// WithWorkerParentSession 把父会话 id 注入运行上下文（作为子任务唯一键的兜底来源）。
+func WithWorkerParentSession(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, workerCtxParentSession, sessionID)
+}
+
+func workerUserIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(workerCtxUserID).(string); ok {
+		return v
+	}
+	return ""
+}
+
+func workerParentSessionFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(workerCtxParentSession).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// WithWorkerIdentity 包装后台任务 Controller，在每次 spawn 时把父会话的用户身份
+// 注入 worker 运行上下文（见上方背景说明）。
+//
+// 用法：taskRunController = taskrun.WithWorkerIdentity(taskRunController)
+// 之后把包装后的 controller 同时传给 taskrun.Tools 与 engine.ModelConfig.TaskRunController，
+// 使 worker 子代理（Coder）能解析到归属用户（模型/工作目录/审计/检查点）。
+func WithWorkerIdentity(inner taskrunruntime.Controller) taskrunruntime.Controller {
+	if inner == nil {
+		return nil
+	}
+	return &workerIdentityController{inner: inner}
+}
+
+// workerIdentityController 实现 taskrunruntime.Controller 的包装器。
+type workerIdentityController struct {
+	inner taskrunruntime.Controller
+}
+
+func (c *workerIdentityController) Spawn(ctx context.Context, req taskrunruntime.SpawnRequest) (taskrunruntime.Run, error) {
+	// spawn 工具执行 ctx 含父 Orchestrator 的 invocation（框架 currentContext 同源）。
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.Session != nil && inv.Session.UserID != "" {
+		uid, sid := inv.Session.UserID, inv.Session.ID
+		base := req.RunContext
+		req.RunContext = func(runCtx context.Context) context.Context {
+			runCtx = WithWorkerUserID(runCtx, uid)
+			if sid != "" {
+				runCtx = WithWorkerParentSession(runCtx, sid)
+			}
+			if base != nil {
+				if enriched := base(runCtx); enriched != nil {
+					runCtx = enriched
+				}
+			}
+			return runCtx
+		}
+	}
+	return c.inner.Spawn(ctx, req)
+}
+
+func (c *workerIdentityController) List(ctx context.Context, filter taskrunruntime.ListFilter) ([]taskrunruntime.Run, error) {
+	return c.inner.List(ctx, filter)
+}
+
+func (c *workerIdentityController) Get(ctx context.Context, runID string) (*taskrunruntime.Run, error) {
+	return c.inner.Get(ctx, runID)
+}
+
+func (c *workerIdentityController) Cancel(ctx context.Context, runID string) (*taskrunruntime.Run, bool, error) {
+	return c.inner.Cancel(ctx, runID)
+}
+
+func (c *workerIdentityController) Wait(ctx context.Context, runID string) (*taskrunruntime.Run, error) {
+	return c.inner.Wait(ctx, runID)
 }

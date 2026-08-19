@@ -101,13 +101,24 @@ func startLLM(t *testing.T, marker string) *llmStub {
 	return &llmStub{baseURL: srv.URL, apiKey: "test-key", system: &captured, stop: srv.Close}
 }
 
+// smokeModelID 返回冒烟测试使用的模型 id（M7.5-02）：
+// 读 SMOKE_LLM_MODEL 环境变量——真实网关路径下应设为网关认识的模型 id（如 auto 或
+// deepseek-v4-pro，网关把未知 id 当显式模型、失败不回退，故不能用 mock-model）；
+// 未设置时回落 "mock-model"（Mock 路径语义不变）。
+func smokeModelID() string {
+	if v := os.Getenv("SMOKE_LLM_MODEL"); v != "" {
+		return v
+	}
+	return "mock-model"
+}
+
 // resolver 返回把任意模型 id 解析到本 Mock/真实端点的 ModelResolver（promptiter 评估
 // 经此真正走引擎 → LLM，复现生产评估路径）。
 func (st *llmStub) resolver() eval.ModelResolver {
 	base := st.baseURL
 	key := st.apiKey
 	return func(_ context.Context, _ uint, _ string) (engine.ModelConfig, error) {
-		return engine.ModelConfig{ModelID: "mock-model", BaseURL: base, APIKey: key, Protocol: "openai"}, nil
+		return engine.ModelConfig{ModelID: smokeModelID(), BaseURL: base, APIKey: key, Protocol: "openai"}, nil
 	}
 }
 
@@ -201,7 +212,7 @@ func TestSmoke_PromptIterWriteBackDoesNotBreakDialog(t *testing.T) {
 
 	// 生产对话：用写回指令作为 InstructionOverride 建引擎，跑一轮对话。
 	eng, eerr := engine.New(engine.ModelConfig{
-		ModelID: "mock-model", BaseURL: stub.baseURL, APIKey: stub.apiKey,
+		ModelID: smokeModelID(), BaseURL: stub.baseURL, APIKey: stub.apiKey,
 		Protocol: "openai", InstructionOverride: content,
 	})
 	if eerr != nil {
@@ -226,7 +237,7 @@ func TestSmoke_PromptIterWriteBackDoesNotBreakDialog(t *testing.T) {
 	}
 	after, _ := repo.GetInstructionContent(db, uid, name) // 改前为空 → ""
 	eng2, eerr2 := engine.New(engine.ModelConfig{
-		ModelID: "mock-model", BaseURL: stub.baseURL, APIKey: stub.apiKey,
+		ModelID: smokeModelID(), BaseURL: stub.baseURL, APIKey: stub.apiKey,
 		Protocol: "openai", InstructionOverride: after,
 	})
 	if eerr2 != nil {

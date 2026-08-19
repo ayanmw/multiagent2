@@ -543,7 +543,7 @@ func main() {
 		},
 	}
 	workerFactory := taskrun.BuildAgentFactory(cfg.GuardrailConfig(), workerResolver, executor.ModeUnattended)
-	taskRunController, ctrlErr := taskrun.NewController(
+	rawTaskRunController, ctrlErr := taskrun.NewController(
 		context.Background(),
 		codeagent.RoleCoder,
 		workerFactory,
@@ -554,6 +554,11 @@ func main() {
 	if ctrlErr != nil {
 		log.Fatalf("Failed to initialize taskrun controller: %v", ctrlErr)
 	}
+	// M7.5-02：包装 Controller 透传 worker 用户身份——v1.10.0 下 worker 的
+	// AgentFactory 在 selectAgent 阶段拿不到框架 invocation（先 selectAgent 后
+	// NewInvocation），必须经 RunContext 钩子把父会话身份注入 worker 运行上下文，
+	// 否则后台子任务派生即报「无法获取 worker 调用用户身份」。
+	taskRunController := taskrun.WithWorkerIdentity(rawTaskRunController)
 
 	// 统一网关（M4-04）：Web 对话 / SSE / 定时 / Webhook 全部经此 Gateway，共享同一会话
 	// 串行锁与同一套引擎构造（Team 取 Web 默认配置；自主化 Loop 通过 TeamOverride 强制

@@ -47,6 +47,18 @@ func NewManager() *Manager {
 	return &Manager{entries: make(map[string]*Entry)}
 }
 
+// Lookup 报告指定 key 是否已登记 worktree（供 taskrun.WorktreeHook 在
+// run.ID / run.ChildSessionID 两种键之间做兼容回退，M7.5-02）。
+func (m *Manager) Lookup(key string) bool {
+	if key == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.entries[key]
+	return ok
+}
+
 // sanitizeName 把任意标识（childSessionID / runID）规整为安全目录与分支名：
 // 仅保留 [a-zA-Z0-9_-]，其余字符统一替换为 _，并裁掉首尾 _。
 // git 分支名与目录名均不允许 : / \ 等字符，故必须规整。

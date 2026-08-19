@@ -267,3 +267,19 @@ server/
 - **越权先于解密**：`GetMCPServerByID` 的 owner 校验必须放在 `OpenSecrets` **之前**，越权者连密文都不解开；错误密钥解密要 fail loud（返回 error），不能静默返回空 map——否则会带着缺失的鉴权头去连上游，产生难排查的 401。
 - **遗留数据迁移**：`repo.NewDB` 内 `migrateMCPSecretEncryption` 在 AutoMigrate 之后运行，用 `sqlite_master` 的建表 DDL 里是否含反引号包裹的 `` `env` ``（可精确区分新列 `env_enc`）判断遗留列是否存在，仅对「遗留列非空且密文列为空」的行就地加密并把遗留列置 NULL；全新库为 no-op、二次运行幂等。注意 SQLite/GORM 不会自动删除废弃列，遗留列会残留在表结构中（内容已清空）——彻底删列留给 M3-08 的正式迁移机制。
 
+### 2026-08-20 | 框架 | taskrun worker 工厂在 v1.10.0 拿不到 invocation（M7.5-02 真实模型 E2E 暴露并修复）
+- **现象**：真实 E2E 跑「Orchestrator→start_task_run→worker」时 worker 立即失败：`taskrun: 无法从上下文获取 worker 调用的用户身份`。
+- **根因（框架行为，非实现失误）**：v1.10.0 的 `runner.Run` 流程是 **先 `selectAgent`（此刻调用 AgentFactory）后 `agent.NewInvocation`**；而 `inprocess.Service` 用 `baseCtx`（NewController 注入的 ctx）启动后台 goroutine，worker 的 Run ctx 里根本没有 invocation。`BuildAgentFactory` 里 `agent.InvocationFromContext(ctx)` 必然失败——M2-04 验收时该路径未被端到端覆盖（taskrun_test.go 只测 Tools 装配与 hook），属于隐藏 bug。
+- **修复（internal/taskrun/taskrun.go）**：
+  - 身份多级获取：invocation → ctx 注入（`workerUserIDFromContext`）→ 报错。
+  - 新增 `WithWorkerIdentity(controller)` 包装：在 spawn 工具调用（ctx 含父 Orchestrator invocation）时，把 `OwnerUserID` 经 `SpawnRequest.RunContext` 钩子写入 worker 运行上下文；`main.go` 在 `NewController` 后一行包装（`taskRunController = taskrun.WithWorkerIdentity(taskRunController)`）。
+  - **子任务唯一键改用 run.ID**：worker 工厂在 selectAgent 阶段拿不到 child session，但框架把 `run.ID` 注入 `ro.RuntimeState["taskrun.run_id"]`（`taskrunruntime.RuntimeStateKeyRunID`），Observer 侧 `run.ID` 可复现同一键——`WorktreeHook` 的 Create/OnRunUpdate 统一用它（OnRunUpdate 先按 run.ID 查、查不到回退 run.ChildSessionID，兼容旧测试）；`worktree.Manager` 补 `Lookup(key)`。
+- **验证**：`TestSmoke_Loop_GoalTaskrunWorktreeMerge`（loop-1/loop-2 双成功）真实验证「worktree add → worker 写文件 commit → merge --no-ff → worktree remove/prune → goal=complete」全链路。
+
+### 2026-08-20 | 外部依赖 | WorkBuddy 本地网关不支持 function calling（影响真实模型端到端冒烟）
+- **实测**：经 `tool/workbuddyLLMAPI`（codebuddy 后端，ACP 直连本机守护进程 18765）请求带 `tools` 的 chat/completions，模型回复声称「实际可调用工具只有 Agent/Skill/SendMessage」——**我们传入的工具定义被忽略**。
+- **根因**：网关 `internal/backend/codebuddy.go` 的 `session/prompt` 只发送 `prompt:[{type:text,text}]`，**不转发 tools**；ACP 守护进程的 agent 使用平台自有工具（Agent/Skill/SendMessage），不响应 OpenAI 协议 function calling。这是平台能力边界，改网关也无法让 daemon agent 使用自定义工具。
+- **影响**：凡依赖 Agent 工具调用（goal/taskrun/worktree/git 等）的真实模型端到端测试，**无法经 WorkBuddy 网关达成**；真实模型只能做纯文本对话冒烟。
+- **对策**：冒烟套件真实路径（`SMOKE_LLM_BASE_URL` 指向网关）聚焦文本层（promptiter 写回/回滚对话、eval、evolution 门控均实测通过）；工具链 E2E 用脚本化 mock 驱动 LLM 决策（taskrun/worktree/git/goal 全部**真实执行**），并预留 `SMOKE_LLM_BASE_URL` 切换——未来接入支持 function calling 的端点后，同一测试直接切真实。**注意**：真实路径下目标契约会关闭流式（goal enforcer beforeModel），mock 桩必须同时支持流式(SSE)/非流式(单对象 JSON)双模式（与 2026-08-03 goal 测试同款约定）。
+- **模型选择**：网关默认模型 hy3 实测不可用（「所有候选模型均返回空结果」），显式 `deepseek-v4-pro`/`glm-5.1`/`auto` 可用；冒烟套件经 `SMOKE_LLM_MODEL` 指定（建议 `auto` 或具体模型 id，**未知 id 会被当显式模型、失败不回退**，故不能用 `mock-model`）。
+

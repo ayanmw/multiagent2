@@ -795,3 +795,12 @@
 - **收尾**：本轮用 `git commit --allow-empty`（05b0632）触发第 3 次验收运行。GitHub API 实查：235aba3 ✅ → 1c83be5 ✅ → 05b0632 ✅，**连续 3 次 main 分支 CI 全绿**；05b0632 运行（run 32253794235）三作业明细——`Server (go build / vet / test)` success、`Web (npm ci / build / typecheck)` success、`Docker image build (validate only)` success，验收标准「连续 3 次 main 分支 CI 全绿（server/web/docker 三作业）」达成。
 - 本地复核：`git status` 干净、HEAD==origin/main==05b0632；本轮为纯验证+文档收尾，无代码改动，无需 go build/vet（05b0632 为 empty commit）。
 - Commit 05b0632（empty trigger，已推 origin/main）。下一步：M7.5-02（真实模型端到端冒烟：本地网关 127.0.0.1:8088 hy3→deepseek-v4-pro 回退跑 M6-06 冒烟套件 + 一条完整自主 Loop goal→taskrun→worktree→merge，验收真实 LLM 下 Loop 全链路成功 ≥2 次）。
+
+### 2026-08-20 07:50 | M7.5-02 | ✅ 真实模型端到端冒烟——冒烟套件真实路径全绿 + Loop 全链路真实验证（含 v1.10.0 worker 身份 bug 修复）
+- **交付物**：
+  - `internal/smoke/smoke_test.go`：新增 `SMOKE_LLM_MODEL` 环境变量（真实网关路径用 `auto`/具体模型 id；未设置回落 `mock-model`），resolver 与引擎直连两处改用 `smokeModelID()`——修复「真实路径传 mock-model 被网关当显式模型、失败不回退」问题。
+  - 新增 `internal/smoke/loop_e2e_test.go`：`TestSmoke_Loop_GoalTaskrunWorktreeMerge` 完整自主 Loop 全链路（goal→taskrun→worktree→merge），loop-1/loop-2 两个独立子测试各跑一遍（独立临时仓库/引擎/会话），断言①主分支出现子任务创建文件且内容正确（merge 回主分支）②git log 含 `add task-output.txt`（真实 commit）③`.taskrun-worktrees` 已清理（Finalize 收尾完整）④goal 契约收敛 complete。LLM 决策脚本化 mock（工具链全真实执行），无真实模型时 CI 全绿；`SMOKE_LOOP_DEBUG=1` 可打印逐事件工具调用序列。
+- **真实模型冒烟（本地网关 127.0.0.1:8088，`SMOKE_LLM_BASE_URL`+`SMOKE_LLM_MODEL`）**：M6-06 冒烟套件全 PASS——promptiter 写回后对话正常+回滚后正常（真实 LLM 文本层，46s）、evolution 质量门控不误杀/拦截空泛、eval 多次跑分数稳定。**网关能力边界**：ACP 直连下 tools 被忽略（模型只见平台 Agent/Skill/SendMessage 工具），真实模型无法驱动 Agent 工具链——Loop 工具链验证以脚本化 mock 驱动 LLM 决策完成（taskrun 派生/worktree 隔离/git commit-merge/goal 契约全真实执行），已记入 LEARNINGS；未来接入支持 function calling 的端点后同一测试可直接切真实。
+- **修复 v1.10.0 隐藏 bug（E2E 暴露）**：worker Runner 先 selectAgent 后 NewInvocation，`BuildAgentFactory` 的 `InvocationFromContext` 必然失败（后台子任务派生即报「无法获取 worker 调用用户身份」）。修复：`taskrun.WithWorkerIdentity(controller)` 包装（spawn 时经 `SpawnRequest.RunContext` 钩子注入父会话身份）+ `BuildAgentFactory` 身份多级获取 + 子任务唯一键改用 `ro.RuntimeState["taskrun.run_id"]`（Observer 用 `run.ID` 复现）+ `WorktreeHook` 键回退兼容 + `worktree.Manager.Lookup`；`main.go` 一行包装接线。
+- 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test ./internal/...` 全绿（taskrun/worktree/smoke 包新测试全过，Loop E2E mock 模式 loop-1/2 PASS）；`cmd/server` 集成测试绿；`internal/repo` 无 cgo 用例。前端无改动。
+- Commit 待提交（post-commit hook 自动推 origin/main）。下一步：M7.5-03（并发与压测：多用户并发对话、SSE 长连接、taskrun 扇出 5+、SQLite 写锁）。
