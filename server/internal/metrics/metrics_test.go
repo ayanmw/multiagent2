@@ -149,6 +149,50 @@ func TestMetricsLoopBudgetAndProcessStart(t *testing.T) {
 	}
 }
 
+// TestMetricsLiveGauges 验证 M7-05 新增的实时 gauge：
+//   - codeagent_active_loops / codeagent_pending_checkpoints 作为 gauge 暴露；
+//   - SetActiveLoops / SetPendingCheckpoints 设负值被钳为 0；
+//   - Summary 快照包含这两个字段。
+func TestMetricsLiveGauges(t *testing.T) {
+	if err := Init(Config{Enabled: true}); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	SetActiveLoops(-5) // 负值应钳为 0
+	SetPendingCheckpoints(-1)
+	if Summary().ActiveLoops != 0 || Summary().PendingCheckpoints != 0 {
+		t.Errorf("negative values should clamp to 0: %+v", Summary())
+	}
+	SetActiveLoops(3)
+	SetPendingCheckpoints(7)
+
+	s := Summary()
+	if s.ActiveLoops != 3 {
+		t.Errorf("ActiveLoops=%d want 3", s.ActiveLoops)
+	}
+	if s.PendingCheckpoints != 7 {
+		t.Errorf("PendingCheckpoints=%d want 7", s.PendingCheckpoints)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handler status=%d want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, name := range []string{
+		"codeagent_active_loops",
+		"codeagent_pending_checkpoints",
+	} {
+		if !strings.Contains(body, "# TYPE "+name+" gauge") {
+			t.Errorf("metric %q not exposed as gauge:\n%s", name, body)
+		}
+		if !strings.Contains(body, name+" ") {
+			t.Errorf("metric %q sample line missing:\n%s", name, body)
+		}
+	}
+}
+
 func TestDisabledNoopAnd404(t *testing.T) {
 	if err := Init(Config{Enabled: false}); err != nil {
 		t.Fatalf("Init(false) failed: %v", err)

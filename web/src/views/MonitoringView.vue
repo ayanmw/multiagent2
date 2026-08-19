@@ -11,9 +11,10 @@ import {
   NEmpty,
   NResult,
   NText,
+  NBadge,
   useMessage,
 } from 'naive-ui'
-import { getMonitoringOverview, type MonitoringOverview } from '@/api/monitoring'
+import { getMonitoringOverview, GRAFANA_URL, type MonitoringOverview } from '@/api/monitoring'
 
 const message = useMessage()
 const loading = ref(false)
@@ -31,6 +32,21 @@ const llmFailRate = computed(() =>
 const toolFailRate = computed(() =>
   data.value ? pct(data.value.tool_errors, data.value.tool_calls) : '0.00%',
 )
+const loopFailRate = computed(() =>
+  data.value ? pct(data.value.loop_failures, data.value.loop_runs) : '0.00%',
+)
+// 检查点堆积告警色：0 绿、>0 黄、>=10 红。
+const checkpointType = computed(() => {
+  const n = data.value?.pending_checkpoints ?? 0
+  if (n >= 10) return 'error' as const
+  if (n > 0) return 'warning' as const
+  return 'success' as const
+})
+// 并发 Loop 告警色：0 绿、>=1 橙。
+const activeLoopsType = computed(() => {
+  const n = data.value?.active_loops ?? 0
+  return n > 0 ? ('warning' as const) : ('success' as const)
+})
 
 async function load() {
   loading.value = true
@@ -52,10 +68,15 @@ onMounted(load)
       <div>
         <h2 class="text-lg font-semibold m-0">运行监控</h2>
         <span class="text-sm text-gray-500 dark:text-gray-400">
-          OpenTelemetry 指标快照（M3-09）· 进程内累计，重启清零
+          OpenTelemetry 指标快照（M3-09 / M7-05）· 进程内累计，重启清零
         </span>
       </div>
-      <n-button class="ml-auto" :loading="loading" @click="load">刷新</n-button>
+      <n-space class="ml-auto">
+        <n-button tag="a" :href="GRAFANA_URL" target="_blank" secondary>
+          打开 Grafana 看板
+        </n-button>
+        <n-button :loading="loading" @click="load">刷新</n-button>
+      </n-space>
     </div>
 
     <!-- 指标未启用：后端 METRICS_ENABLED=false 或尚未初始化 -->
@@ -75,6 +96,38 @@ onMounted(load)
     />
 
     <template v-else-if="data && data.enabled">
+      <!-- 实时 gauge：Active Loops / 检查点堆积（M7-05） -->
+      <n-grid :cols="4" :x-gap="12" class="mb-3">
+        <n-gi>
+          <n-card :bordered="true" size="small">
+            <n-statistic label="并发自主 Loop" :value="data.active_loops">
+              <template #prefix>
+                <n-badge :type="activeLoopsType" dot />
+              </template>
+            </n-statistic>
+          </n-card>
+        </n-gi>
+        <n-gi>
+          <n-card :bordered="true" size="small">
+            <n-statistic label="待审批检查点" :value="data.pending_checkpoints">
+              <template #prefix>
+                <n-badge :type="checkpointType" dot />
+              </template>
+            </n-statistic>
+          </n-card>
+        </n-gi>
+        <n-gi>
+          <n-card :bordered="true" size="small">
+            <n-statistic label="自主 Loop 失败率" :value="loopFailRate" />
+          </n-card>
+        </n-gi>
+        <n-gi>
+          <n-card :bordered="true" size="small">
+            <n-statistic label="预算耗尽拦截" :value="data.budget_exhausted" />
+          </n-card>
+        </n-gi>
+      </n-grid>
+
       <!-- LLM 调用概览 -->
       <n-grid :cols="4" :x-gap="12" class="mb-3">
         <n-gi>
@@ -150,7 +203,7 @@ onMounted(load)
           工具失败 {{ data.tool_errors }} / {{ data.tool_calls }}
         </n-tag>
         <n-text depth="3" class="text-xs">
-          失败原因分类（allowed/denied/checkpoint/failed）见后端 /metrics 的 codeagent_tool_errors_total 标签
+          失败原因分类（allowed/denied/checkpoint/failed）见后端 /metrics 的 codeagent_tool_errors_total 标签；Grafana 看板含 P99 时延、Loop、预算与进程重启曲线。
         </n-text>
       </n-space>
     </template>

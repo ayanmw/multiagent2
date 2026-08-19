@@ -745,3 +745,21 @@
 - 配置交付：`monitoring/` 目录提供 `prometheus.yml`（抓取 `server:8080/metrics` + 加载规则）、`alert-rules.yml`（六条规则，阈值可调）、`alertmanager.yml`（路由到 `http://server:8080/api/alerts` webhook 接收器）、`docker-compose.monitoring.yml`（本地一键拉起 Prometheus+Alertmanager）。
 - 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`internal/metrics` 单测（新增指标 + process_start_time_seconds 出现在 /metrics 与 Summary）PASS；`internal/api` 的 alerts_test（告警转通知 + 密钥 401/200 校验）PASS；新增 `alertrules_test.go` 解析 `alert-rules.yml` 确认每条 expr 引用的指标均在 `KnownMetricNames`（含 `_bucket/_sum/_count` 后缀剥离）；`internal/repo` 仍因沙箱无 gcc（go-sqlite3 需 cgo）stub 失败，属环境豁免，与本次无关；`cmd/server` 集成测试绿。
 - Commit a4d1a45（已推 origin/main）。下一步：M7-05（Grafana 看板，依赖 M3-09）。
+
+---
+
+### 2026-08-19 11:38 | M7-05 | ✅ Grafana 看板（运行监控概览）
+- 可观测可视化闭环（M3-09 /metrics 的数据落地为看板）：交付 Grafana 看板 + 供应配置 + 一键编排，并把「Active Loops / 检查点堆积」两个实时 gauge 补进后端指标与前端概览。
+- 后端指标补全（M7-05 两个 gauge）：
+  - `metrics.go` 新增 `codeagent_active_loops`（gauge，in-process 并发自主 Loop 数）与 `codeagent_pending_checkpoints`（gauge，待审批检查点堆积数）；二者均经 `SetActiveLoops/SetPendingCheckpoints`（负值钳 0）写入，并在 `Summary()` 暴露 `active_loops`/`pending_checkpoints` 字段、`/metrics` 渲染为 gauge 行。
+  - `scheduler.runAutomation` 入/出运行态时以 `activeCount` 原子计数刷新 `SetActiveLoops`（来源 = scheduler running 锁，精确反映并发 Loop 负载）。
+  - `repo.CountPendingCheckpoints` 新增（查 `status=pending` 计数，失败回 0）；`api.MonitoringOverviewHandler(db)` 在返回快照前实时回填 `SetPendingCheckpoints`（使看板与前端概览读到的堆积数一致）。`KnownMetricNames` 同步登记两个新 gauge。
+- 看板与供应（monitoring/）：
+  - `grafana/dashboards/codeagent-overview.json`：12 面板运行监控概览——4 张 Stat 卡（Active Loops / 待审批检查点 / LLM 成功率 / 工具成功率）+ LLM 调用量 + LLM P99 时延 + 工具调用/失败 + Token 用量 + 自主 Loop 运行/失败 + 预算耗尽 + 进程启动时间；datasource 经 `${DS_PROMETHEUS}` 变量（provisioning 命名为 `Prometheus`），`refresh=15s`。
+  - `grafana/provisioning/dashboards/dashboard.yml` + `grafana/provisioning/datasources/datasource.yml`：看板与 Prometheus 数据源自动供应（容器挂载即生效，无需手工 import）。
+  - `docker-compose.monitoring.yml`：新增 `grafana` 服务（:3000，默认 admin/admin），与 Prometheus/Alertmanager 同编排；更新头部使用说明。
+- 前端（web/）：
+  - `api/monitoring.ts`：`MonitoringOverview` 接口补 `loop_runs/loop_failures/budget_exhausted/active_loops/pending_checkpoints` 字段，新增 `GRAFANA_URL`（默认 `http://localhost:3000`，可由 `VITE_GRAFANA_URL` 覆盖）。
+  - `views/MonitoringView.vue`：新增一行实时 gauge（并发自主 Loop / 待审批检查点 / 自主 Loop 失败率 / 预算耗尽拦截）带颜色告警（Badge），并加「打开 Grafana 看板」外链按钮。
+- 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`internal/metrics`（新增 `TestMetricsLiveGauges`：gauge 暴露 + 负值钳 0 + Summary 字段）/`internal/api`/`internal/scheduler` 单测全 PASS；`internal/repo` 仍因沙箱无 gcc 的 cgo 用例 stub 失败（环境豁免）；`npm run build` + `vue-tsc --noEmit` 全绿。
+- Commit（待提交，post-commit hook 自动推 origin/main）。下一步：M7-06（日志聚合 + trace 贯通，依赖 M3-09/M4）。

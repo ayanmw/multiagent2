@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ayanmw/multiagent2/server/internal/cron"
@@ -51,6 +52,7 @@ type Scheduler struct {
 	OnBackoff func(attempt int, d time.Duration)
 
 	running sync.Map // automation id -> true，防止同一自动化并发重入
+	activeCount atomic.Int64 // 当前正在运行的自主 Loop 数（M7-05「Active Loops」gauge 数据源）
 	logger  *log.Logger
 }
 
@@ -153,6 +155,15 @@ func (s *Scheduler) scan(ctx context.Context, sync bool) int {
 // runAutomation 执行单个自动化的完整编排：建会话 → 重试运行 → 更新时间戳。
 func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 	defer s.running.Delete(a.ID)
+
+	// M7-05：进入运行态——并发计数 +1，并即时刷新 metrics 的 Active Loops gauge
+	//（供 Grafana 看板「Active Loops」展示此刻并发的自主化负载）。
+	cur := s.activeCount.Add(1)
+	metrics.SetActiveLoops(cur)
+	defer func() {
+		left := s.activeCount.Add(-1)
+		metrics.SetActiveLoops(left)
+	}()
 
 	// M7-04：记录一次自主 Loop 运行（供「Loop 失败率」告警，与下方失败记录配对）。
 	metrics.RecordLoopRun(ctx)

@@ -25,7 +25,7 @@ func callMonitoringOverview(t *testing.T, authed bool, uid uint, role string) (i
 	}
 	c.Request, _ = http.NewRequest(http.MethodGet, "/api/monitoring/overview", nil)
 
-	MonitoringOverviewHandler()(c)
+	MonitoringOverviewHandler(nil)(c)
 
 	var out metrics.Overview
 	if w.Code == http.StatusOK {

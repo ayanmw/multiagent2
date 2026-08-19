@@ -66,3 +66,14 @@ func ResolveCheckpoint(db *gorm.DB, id uint, status, comment string, resolvedBy 
 		"updated_at":  time.Now(),
 	}).Error
 }
+
+// CountPendingCheckpoints 返回待审批（status=pending）检查点总数，供 M7-05 Grafana 看板
+// 的「检查点堆积」gauge 实时回填（与 ListCheckpoints 的 status 过滤同源）。
+// 计数失败（如未迁移）返回 0，不阻断概览接口。
+func CountPendingCheckpoints(db *gorm.DB) int64 {
+	var n int64
+	if err := db.Model(&model.Checkpoint{}).Where("status = ?", model.CheckpointPending).Count(&n).Error; err != nil {
+		return 0
+	}
+	return n
+}

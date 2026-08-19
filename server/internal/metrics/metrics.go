@@ -55,6 +55,9 @@ type Overview struct {
 	LoopRuns        int64 `json:"loop_runs"`
 	LoopFailures    int64 `json:"loop_failures"`
 	BudgetExhausted int64 `json:"budget_exhausted"`
+	// 以下为 M7-05 Grafana 看板所需的实时 gauge 维度（Active Loops / 检查点堆积）。
+	ActiveLoops        int64 `json:"active_loops"`
+	PendingCheckpoints int64 `json:"pending_checkpoints"`
 }
 
 // KnownMetricNames 是本包 /metrics 端点会对外暴露的全部指标名（含派生后缀前的基名）。
@@ -72,6 +75,8 @@ var KnownMetricNames = []string{
 	"codeagent_loop_runs_total",
 	"codeagent_loop_failures_total",
 	"codeagent_budget_exhausted_total",
+	"codeagent_active_loops",
+	"codeagent_pending_checkpoints",
 	"process_start_time_seconds",
 }
 
@@ -95,6 +100,11 @@ var (
 	loopRuns        atomic.Int64
 	loopFailures    atomic.Int64
 	budgetExhausted atomic.Int64
+	// M7-05：Grafana 看板所需的实时 gauge——当前正在运行的自主 Loop 数（in-process，
+	// 由 scheduler 在 runAutomation 开始/结束时设值）与待审批检查点堆积数（由 HTTP
+	// 概览接口按 DB 实时查询后回填，非累计计数器）。
+	activeLoops        atomic.Int64
+	pendingCheckpoints atomic.Int64
 )
 
 // OpenTelemetry instruments（启用时非 nil）。
@@ -268,6 +278,26 @@ func RecordBudgetExhausted(ctx context.Context) {
 	budgetExhausted.Add(1)
 }
 
+// SetActiveLoops 设置「当前正在运行的自主 Loop 数」即时 gauge（M7-05 Grafana 看板）。
+// 由 scheduler 在 runAutomation 入/出时调用（精确等于 running 锁中的自动化数），
+// 反映平台此刻的并发自主化负载。该值为快照型（非累计），故直接 store 而非累加。
+func SetActiveLoops(n int64) {
+	if n < 0 {
+		n = 0
+	}
+	activeLoops.Store(n)
+}
+
+// SetPendingCheckpoints 设置「待审批检查点堆积数」即时 gauge（M7-05 Grafana 看板）。
+// 由 /api/monitoring/overview 按 DB 实时查询后回填，反映无人值守模式下等待人工裁决的
+// 危险操作量（积压越多代表人工介入越滞后）。该值为快照型，直接 store。
+func SetPendingCheckpoints(n int64) {
+	if n < 0 {
+		n = 0
+	}
+	pendingCheckpoints.Store(n)
+}
+
 // Summary 返回当前进程内的指标聚合快照，供前端「运行监控」概览卡片消费。
 func Summary() Overview {
 	return Overview{
@@ -282,6 +312,8 @@ func Summary() Overview {
 		LoopRuns:        loopRuns.Load(),
 		LoopFailures:    loopFailures.Load(),
 		BudgetExhausted: budgetExhausted.Load(),
+		ActiveLoops:     activeLoops.Load(),
+		PendingCheckpoints: pendingCheckpoints.Load(),
 	}
 }
 
@@ -308,6 +340,17 @@ func Handler() http.Handler {
 		b.WriteString("# TYPE process_start_time_seconds gauge\n")
 		b.WriteString("process_start_time_seconds ")
 		b.WriteString(strconv.FormatFloat(processStartTimeSeconds, 'g', -1, 64))
+		b.WriteByte('\n')
+		// M7-05：附加实时 gauge——当前并发自主 Loop 数与待审批检查点堆积数（供 Grafana 看板）。
+		b.WriteString("# HELP codeagent_active_loops Number of autonomous loops currently running\n")
+		b.WriteString("# TYPE codeagent_active_loops gauge\n")
+		b.WriteString("codeagent_active_loops ")
+		b.WriteString(strconv.FormatInt(activeLoops.Load(), 10))
+		b.WriteByte('\n')
+		b.WriteString("# HELP codeagent_pending_checkpoints Number of pending human-in-the-loop checkpoints\n")
+		b.WriteString("# TYPE codeagent_pending_checkpoints gauge\n")
+		b.WriteString("codeagent_pending_checkpoints ")
+		b.WriteString(strconv.FormatInt(pendingCheckpoints.Load(), 10))
 		b.WriteByte('\n')
 		_, _ = w.Write([]byte(b.String()))
 	})

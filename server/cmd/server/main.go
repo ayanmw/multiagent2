@@ -177,7 +177,7 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// 可观测性概览（M3-09）：返回进程内 OpenTelemetry 指标聚合快照
 		// （LLM 调用/失败、工具调用/失败、token 用量），供前端「运行监控」概览卡片。
 		// 与 usage 同级保护（usage:read，RBAC）。
-		protected.GET("/monitoring/overview", middleware.RequirePermission(db.DB, "usage", "read"), api.MonitoringOverviewHandler())
+		protected.GET("/monitoring/overview", middleware.RequirePermission(db.DB, "usage", "read"), api.MonitoringOverviewHandler(db.DB))
 
 		// 平台级预算护栏（M3-04）：管理员设定 / 查询预算策略（user/session/automation 三级阈值）。
 		// 读操作需 budgets:read，写（upsert / 删除）需 budgets:write（RBAC）。

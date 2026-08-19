@@ -1,0 +1,17 @@
+# Grafana 数据源供应配置（M7-05）
+#
+# 定义名为 "Prometheus" 的 Prometheus 数据源，指向同 compose 网络中的 prometheus 服务。
+# 看板 JSON（grafana/dashboards/codeagent-overview.json）通过 ${DS_PROMETHEUS} 变量引用它，
+# 故 datasource 的 name 必须为 "Prometheus"（与看板 __inputs 对齐）。
+#
+# K8s 部署时把后端 Service 名改为 http://server:8080（见 k8s/backend-service.yaml）。
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

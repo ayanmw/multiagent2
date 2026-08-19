@@ -1,0 +1,21 @@
+# Grafana 看板供应配置（M7-05）
+#
+# 本文件随 Grafana 容器挂载（见 monitoring/docker-compose.monitoring.yml 的 grafana 卷），
+# 让 Grafana 自动加载 monitoring/grafana/dashboards/ 下的 JSON 看板，无需手工 import。
+#
+# 部署说明：
+#   - 本地 docker-compose：Grafana 容器内 /etc/grafana/provisioning 为此目录挂载点。
+#   - K8s：把本目录打成 ConfigMap 挂进 Grafana（参考 k8s/ 中的 grafana 供应约定）。
+
+apiVersion: 1
+
+providers:
+  - name: codeagent-dashboards
+    orgId: 1
+    folder: CodeAgent
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

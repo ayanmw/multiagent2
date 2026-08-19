@@ -13,8 +13,19 @@ export interface MonitoringOverview {
   token_prompt: number // 提示 token 累计
   token_completion: number // 补全 token 累计
   token_total: number // 总 token 累计
+  loop_runs: number // 自主 Loop 运行总数
+  loop_failures: number // 自主 Loop 失败总数
+  budget_exhausted: number // 平台级预算耗尽拦截次数
+  active_loops: number // 当前并发运行的自主 Loop 数（M7-05）
+  pending_checkpoints: number // 待审批检查点堆积数（M7-05）
 }
 
 export async function getMonitoringOverview(): Promise<MonitoringOverview> {
   return request<MonitoringOverview>('/monitoring/overview')
 }
+
+// Grafana 看板地址（运维侧配置，前端「运行监控」内嵌/外链使用，M7-05）。
+// 默认指向本地 docker-compose 暴露的 3000 端口；生产可由 .env 注入 VITE_GRAFANA_URL 覆盖。
+export const GRAFANA_URL =
+  (import.meta.env.VITE_GRAFANA_URL as string | undefined) || 'http://localhost:3000'
+
