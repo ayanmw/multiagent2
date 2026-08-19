@@ -762,4 +762,14 @@
   - `api/monitoring.ts`：`MonitoringOverview` 接口补 `loop_runs/loop_failures/budget_exhausted/active_loops/pending_checkpoints` 字段，新增 `GRAFANA_URL`（默认 `http://localhost:3000`，可由 `VITE_GRAFANA_URL` 覆盖）。
   - `views/MonitoringView.vue`：新增一行实时 gauge（并发自主 Loop / 待审批检查点 / 自主 Loop 失败率 / 预算耗尽拦截）带颜色告警（Badge），并加「打开 Grafana 看板」外链按钮。
 - 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`internal/metrics`（新增 `TestMetricsLiveGauges`：gauge 暴露 + 负值钳 0 + Summary 字段）/`internal/api`/`internal/scheduler` 单测全 PASS；`internal/repo` 仍因沙箱无 gcc 的 cgo 用例 stub 失败（环境豁免）；`npm run build` + `vue-tsc --noEmit` 全绿。
-- Commit（待提交，post-commit hook 自动推 origin/main）。下一步：M7-06（日志聚合 + trace 贯通，依赖 M3-09/M4）。
+- Commit 17ccfb4（已推 origin/main，上轮中断后补交）。下一步：M7-06（日志聚合 + trace 贯通，依赖 M3-09/M4）。
+
+---
+
+### 2026-08-19 17:05 | M7-06 | ✅ 日志聚合 + trace 贯通（结构化 JSON + W3C trace 贯通 + 统一 requestID）
+- **可观测日志基础设施（新包 `server/internal/obslog/`）**：基于标准库 `log/slog` 的结构化 JSON 日志（`LOG_FORMAT=json|text`、`LOG_LEVEL=debug|info|warn|error`，默认 json/info）；标准 `log` 包输出经 `log.SetOutput(slog.NewLogLogger)` 重定向进同一 handler（存量 log.Printf 也产 JSON 行）；ctx 携带 W3C 格式 `trace_id`（32hex）/`request_id`/`span_id`（16hex）；`StartSpan(ctx,name,attrs...)` 近似 OTel span——生成子 span_id 挂 ctx、记录 parent_span_id、结束写 `span.end` JSON（span_name/duration_ms/status/err），字段语义与 W3C traceparent 兼容，未来升级 OTel SDK 无需改业务代码。
+- **统一 requestID + trace 入口（`middleware/requestid.go`）**：每个 HTTP 请求分配/透传 `X-Request-ID` 与 `traceparent`（客户端可透传，响应头回显，`traceparent` 输出 `00-<trace>-<span>-01`）；注入 gin context 与请求 ctx。挂载在 `SecureLogger` 之前（main.go buildRouter 首位），使访问日志自动携带。
+- **trace 贯通五层 span**：`http.request`（访问日志，改 slog 结构化）→ `gateway.run/stream`（api/gateway.go：channel/session_key/user_id）→ `engine.llm_run`（engine/engine.go：model/session_id，流内非熔断错误事件记 `engine.run.error`）→ `executor.run`（executor/policy.go：command 截断 300/workdir/decision/exit_code——deny/checkpoint/失败可下钻）→ `automation.run`（scheduler.go：cron 自主 Loop 根 span，automation_id/name/attempts，成功/失败统一 status）。config 增 `LogFormat()/LogLevel()`。
+- **集中采集（monitoring/）**：`docker-compose.monitoring.yml` 新增 `loki`（:3100）+ `promtail`（docker.sock 服务发现，采集 gm-server/gm-web/gm-gateway/codeagent-* 容器日志，pipeline `docker` stage）；`monitoring/promtail/promtail.yml` 新配置；`monitoring/logging.md` 新文档（日志字段说明、LogQL 按 trace_id/request_id 串联一次对话、`decision="denied"` 下钻被拒命令、OTel Collector 升级路径）。
+- 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；新增测试全 PASS——`obslog`（JSON/Text 格式、ParseLevel、trace ctx、StartSpan ok/error/parent-chain、标准 log 重定向，9 用例）、`middleware` requestid（生成/回显/透传/traceparent 解析）、`executor` trace_test（allow→status=ok+exit_code、deny→status=error+decision=denied、parent_span_id 继承）、`scheduler` trace_test（automation.run 成功 status=ok / 失败 status=error+err）、`config` LogFormat/LogLevel（默认/显式/非法回落）；engine/api/scheduler/metrics 既有单测全绿；`internal/repo` 仍因沙箱 `CGO_ENABLED=0` 下 go-sqlite3 stub 失败（环境豁免，与本次无关）。**运行时冒烟**：起服务 curl `/health` → 响应头 `X-Request-Id`/`traceparent` 回显、客户端透传生效、访问日志为 JSON 且带 trace_id/request_id（`{"msg":"http.request","trace_id":"...","request_id":"...","method":"GET","path":"/health","status":200,...}`）。
+- Commit（待提交，post-commit hook 自动推 origin/main）。下一步：M7-07（部署文档与 quickstart，依赖 M7-01~06）。

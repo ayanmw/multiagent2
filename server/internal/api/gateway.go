@@ -19,6 +19,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/notify"
+	"github.com/ayanmw/multiagent2/server/internal/obslog"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	codectool "github.com/ayanmw/multiagent2/server/internal/tool"
 	"github.com/gin-gonic/gin"
@@ -362,7 +363,13 @@ func (g *Gateway) Run(ctx context.Context, req Request) (*Result, error) {
 	return g.run(ctx, req, sessionKey)
 }
 
-func (g *Gateway) run(ctx context.Context, req Request, sessionKey string) (*Result, error) {
+func (g *Gateway) run(ctx context.Context, req Request, sessionKey string) (res *Result, err error) {
+	// M7-06：对话级 trace span——Gateway→Runner→工具调用共用同一 trace_id，
+	// 使一次对话的日志可按 trace 串联（含跨 Channel 的自主 Loop）。
+	ctx, end := obslog.StartSpan(ctx, "gateway.run",
+		"channel", channelKind(req.Channel), "session_key", sessionKey, "user_id", req.UserID)
+	defer func() { end(err) }()
+
 	pr, err := g.prepareRun(ctx, req, sessionKey)
 	if err != nil {
 		return nil, err
@@ -376,6 +383,8 @@ func (g *Gateway) run(ctx context.Context, req Request, sessionKey string) (*Res
 		return nil, err
 	}
 	g.finalize(req, pr, reply)
+	obslog.Ctx(ctx).Info("gateway.run.complete",
+		"session_key", sessionKey, "model", pr.m.Name, "reply_chars", len(reply))
 	return &Result{SessionKey: sessionKey, Reply: reply, ModelID: pr.m.ID, ModelName: pr.m.Name, Session: pr.sess}, nil
 }
 
@@ -388,7 +397,12 @@ func (g *Gateway) Stream(ctx context.Context, req Request, emit func(string, gin
 	return g.stream(ctx, req, sessionKey, emit)
 }
 
-func (g *Gateway) stream(ctx context.Context, req Request, sessionKey string, emit func(string, gin.H)) (*Result, error) {
+func (g *Gateway) stream(ctx context.Context, req Request, sessionKey string, emit func(string, gin.H)) (res *Result, err error) {
+	// M7-06：流式对话同样以 gateway.stream span 贯通 trace（见 run 注释）。
+	ctx, end := obslog.StartSpan(ctx, "gateway.stream",
+		"channel", channelKind(req.Channel), "session_key", sessionKey, "user_id", req.UserID)
+	defer func() { end(err) }()
+
 	pr, err := g.prepareRun(ctx, req, sessionKey)
 	if err != nil {
 		return nil, err
@@ -407,7 +421,22 @@ func (g *Gateway) stream(ctx context.Context, req Request, sessionKey string, em
 		g.finalize(req, pr, text)
 	}
 	metrics.RecordLLMCall(ctx, pr.p.Name, pr.m.Name, time.Since(llmStart), convErr)
-	return &Result{SessionKey: sessionKey, Reply: text, ModelID: pr.m.ID, ModelName: pr.m.Name, Session: pr.sess}, convErr
+	if convErr != nil {
+		obslog.Ctx(ctx).Error("gateway.stream.complete",
+			"session_key", sessionKey, "model", pr.m.Name, "error", convErr.Error(), "partial_chars", len(text))
+		return &Result{SessionKey: sessionKey, Reply: text, ModelID: pr.m.ID, ModelName: pr.m.Name, Session: pr.sess}, convErr
+	}
+	obslog.Ctx(ctx).Info("gateway.stream.complete",
+		"session_key", sessionKey, "model", pr.m.Name, "reply_chars", len(text))
+	return &Result{SessionKey: sessionKey, Reply: text, ModelID: pr.m.ID, ModelName: pr.m.Name, Session: pr.sess}, nil
+}
+
+// channelKind 取 Channel 的稳定标识；nil Channel 回退 "unknown"（兼容直接调用/测试）。
+func channelKind(ch Channel) string {
+	if ch == nil {
+		return "unknown"
+	}
+	return ch.Kind()
 }
 
 // finalize 在对话正常结束或护栏熔断（partial）后记录 token 用量并落库助手消息。

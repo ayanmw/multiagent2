@@ -32,6 +32,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/notify"
+	"github.com/ayanmw/multiagent2/server/internal/obslog"
 	"github.com/ayanmw/multiagent2/server/internal/promptiter"
 	"github.com/ayanmw/multiagent2/server/internal/provider"
 	"github.com/ayanmw/multiagent2/server/internal/regression"
@@ -50,6 +51,9 @@ import (
 // 传 nil 表示不挂载延迟工具箱（如集成测试）。
 func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, stateStore artifact.Store, enableState bool, taskRunController taskrunruntime.Controller, taskRunSession session.Service, toolSearchProvider engine.ToolSearchProvider, gw *api.Gateway) *gin.Engine {
 	r := gin.New()
+	// M7-06：统一 request_id / trace_id 注入（须在访问日志之前，使日志自动携带）。
+	// 客户端可透传 X-Request-ID / traceparent，响应头回显，便于跨端关联。
+	r.Use(middleware.RequestID())
 	// 安全加固（MX-07）：CORS 精细化白名单（仅放行前端域）+ 不泄露敏感信息的访问日志。
 	r.Use(middleware.CORS(middleware.CORSOptions{
 		AllowedOrigins:   cfg.CORSAllowedOrigins(),
@@ -416,6 +420,16 @@ func main() {
 	// Load configuration
 	cfg := config.Load()
 
+	// M7-06：初始化结构化日志（默认 JSON）。全局 slog 与标准 log 包输出统一进同一
+	// handler，使存量 log.Printf 也产出 JSON 行；trace_id/request_id 由 RequestID
+	// 中间件注入 ctx，业务层经 obslog.Ctx(ctx) 自动携带（见各 span 记录点）。
+	if err := obslog.Init(obslog.Config{
+		Format: obslog.Format(cfg.LogFormat()),
+		Level:  obslog.ParseLevel(cfg.LogLevel()),
+	}); err != nil {
+		log.Fatalf("Failed to initialize structured logging: %v", err)
+	}
+
 	// 可观测性（M3-09）：初始化 OpenTelemetry MeterProvider 并开放 /metrics。
 	// METRICS_ENABLED=false 时不初始化，Record* 均为空操作、/metrics 返回 404。
 	if err := metrics.Init(metrics.Config{Enabled: cfg.MetricsEnabled()}); err != nil {
@@ -739,6 +753,8 @@ func main() {
 	}()
 
 	log.Printf("Server starting on :%s", cfg.Port)
+	log.Printf("[INFO] runtime: mode=%s agent_mode=%s metrics=%v log_format=%s log_level=%s",
+		cfg.RunModeString(), cfg.AgentMode, cfg.MetricsEnabled(), cfg.LogFormat(), cfg.LogLevel())
 	if err := r.Run(":" + cfg.Port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}

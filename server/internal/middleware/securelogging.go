@@ -1,11 +1,11 @@
 package middleware
 
 import (
-	"log"
 	"net/http"
 	"net/textproto"
 	"time"
 
+	"github.com/ayanmw/multiagent2/server/internal/obslog"
 	"github.com/gin-gonic/gin"
 )
 
@@ -37,6 +37,10 @@ func redactHeaders(h http.Header) http.Header {
 // method / path / status / latency / client IP but NEVER logs request bodies or
 // sensitive header values (Authorization / X-API-Key). This guarantees auth
 // secrets cannot leak through the access log (MX-07).
+//
+// M7-06：输出改为结构化 JSON（经 obslog，自动携带 RequestID 中间件注入的
+// trace_id / request_id），使访问日志可与其他链路日志按同一 trace 串联；
+// 同时保留敏感头掩码防御（redactHeaders），防止未来改动引入泄露。
 func SecureLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -49,13 +53,15 @@ func SecureLogger() gin.HandlerFunc {
 		c.Next()
 
 		latency := time.Since(start)
-		status := c.Writer.Status()
-		clientIP := c.ClientIP()
-		method := c.Request.Method
 		if query != "" {
 			path = path + "?" + query
 		}
-		log.Printf("[HTTP] %s | %3d | %12v | %15s | %-7s %s",
-			start.Format("2006/01/02 15:04:05"), status, latency, clientIP, method, path)
+		obslog.Ctx(c.Request.Context()).Info("http.request",
+			"method", c.Request.Method,
+			"path", path,
+			"status", c.Writer.Status(),
+			"latency_ms", latency.Milliseconds(),
+			"client_ip", c.ClientIP(),
+		)
 	}
 }

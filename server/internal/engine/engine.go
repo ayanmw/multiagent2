@@ -21,6 +21,7 @@ import (
 	codeagent "github.com/ayanmw/multiagent2/server/internal/agent"
 	"github.com/ayanmw/multiagent2/server/internal/artifact"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/obslog"
 	"github.com/ayanmw/multiagent2/server/internal/skillrepo"
 	"github.com/ayanmw/multiagent2/server/internal/toolsearch"
 )
@@ -288,6 +289,10 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 		sessionID = "default"
 	}
 	runCtx, cancel := context.WithTimeout(ctx, e.cfg.Timeout)
+	// M7-06：LLM 调用级 trace span（父 span 为 gateway.run/stream，由 Gateway 注入）：
+	// 一次对话的「引擎 → 框架 Runner → 工具执行」共用同一 trace_id，可按 trace 串联与下钻。
+	runCtx, endLLMRun := obslog.StartSpan(runCtx, "engine.llm_run",
+		"model", e.cfg.ModelID, "session_id", sessionID, "protocol", e.cfg.Protocol)
 	// 显式开启流式：llmagent 默认是非流式（返回整块 Message.Content），
 	// 不开启则上游被当作非流式 JSON 请求，无法产生 token 级增量。
 	// M0 出口标准要求真正的流式对话，故始终以流式模式运行。
@@ -314,6 +319,7 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 	ch, err := e.runner.Run(runCtx, userID, sessionID, model.NewUserMessage(userMessage), runOpts...)
 	if err != nil {
 		cancel()
+		endLLMRun(err)
 		return nil, err
 	}
 
@@ -323,6 +329,8 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 	go func() {
 		defer close(out)
 		defer cancel()
+		// M7-06：流结束（正常/超时/取消）统一收尾 span；流内错误事件单独记日志。
+		defer func() { endLLMRun(nil) }()
 		for ev := range ch {
 			// 累计 token 用量（M3-03）：上游在 Response.Usage 给出 prompt/completion/total，
 			// 通常落在终帧；以「最新非零用量」覆盖，保证取最终累计值。
@@ -330,6 +338,15 @@ func (e *Engine) Stream(ctx context.Context, sessionID, userMessage string, hist
 				e.usageMu.Lock()
 				e.lastUsage = *ev.Response.Usage
 				e.usageMu.Unlock()
+			}
+			// M7-06：非熔断的真实运行错误事件记 error 日志（带 trace 上下文），
+			// 便于按 trace 下钻到出错的具体一轮 LLM 调用/工具调用。
+			if ev != nil && ev.IsError() && !IsCircuitBreakEvent(ev) {
+				msg := "agent error"
+				if ev.Response != nil && ev.Response.Error != nil {
+					msg = ev.Response.Error.Message
+				}
+				obslog.Ctx(runCtx).Error("engine.run.error", "error", msg)
 			}
 			select {
 			case out <- toStreamEvent(ev):

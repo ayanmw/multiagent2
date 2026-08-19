@@ -1,0 +1,47 @@
+# Promtail 配置（M7-06 日志集中采集）
+#
+# 采集对象：docker 容器 stdout（后端 server 容器输出的是结构化 JSON 日志行，
+# 由 M7-06 的 obslog 初始化产出，默认 LOG_FORMAT=json）。经 docker_sd_configs
+# 服务发现 + docker pipeline stage 读取 /var/lib/docker/containers 下的 JSON 日志。
+# 推送目标：本 compose 内的 Loki（http://loki:3100）。
+#
+# 日志字段说明（一次对话的 trace 串联）：
+#   - trace_id / request_id：HTTP 入口由 RequestID 中间件注入（响应头回显），
+#     全链路（http.request → gateway.run → engine.llm_run → executor.run）自动携带；
+#   - span_id / parent_span_id：StartSpan 生成的层级标识，可重建调用树；
+#   - span.end 行含 span_name / duration_ms / status；err 行含 error 信息。
+#
+# 在 Grafana Explore（数据源 Loki）中按 trace 串联一次对话：
+#   {container="gm-server"} | json | trace_id="<从响应头 traceparent 取得的 trace>"
+# 错误下钻到具体工具调用：
+#   {container="gm-server"} | json | trace_id="<trace>" | decision="denied"
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: codeagent-containers
+    # 发现本机 docker 容器（需把 docker.sock 挂载进 promtail 容器）。
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    # 只保留我们的应用容器：gm-server / gm-web / gm-gateway（根 docker-compose.yml）
+    # 与 codeagent-*（monitoring compose 自身）。
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(gm-server|gm-web|gm-gateway|codeagent-.*)"
+        action: keep
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: "container"
+      - source_labels: ["__meta_docker_container_log_stream"]
+        target_label: "stream"
+    # docker stage：按 __meta_docker_container_id 读取容器 JSON 日志文件。
+    pipeline_stages:
+      - docker: {}

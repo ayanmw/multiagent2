@@ -23,6 +23,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/model"
 	"github.com/ayanmw/multiagent2/server/internal/notify"
+	"github.com/ayanmw/multiagent2/server/internal/obslog"
 	"github.com/ayanmw/multiagent2/server/internal/repo"
 	"gorm.io/gorm"
 )
@@ -156,6 +157,20 @@ func (s *Scheduler) scan(ctx context.Context, sync bool) int {
 func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 	defer s.running.Delete(a.ID)
 
+	// M7-06：自主 Loop 根 span（cron 触发）——整条 Loop（建会话→重试→通知）共用
+	// 同一 trace_id；runErr 统一在函数内赋值，defer 结束时按最终结果记 status/attempts。
+	ctx, endLoop := obslog.StartSpan(ctx, "automation.run",
+		"automation_id", a.ID, "automation_name", a.Name, "user_id", a.UserID, "trigger", "cron")
+	var runErr error
+	var run *model.AutomationRun
+	defer func() {
+		attempts := 0
+		if run != nil {
+			attempts = run.Attempts
+		}
+		endLoop(runErr, "attempts", attempts)
+	}()
+
 	// M7-05：进入运行态——并发计数 +1，并即时刷新 metrics 的 Active Loops gauge
 	//（供 Grafana 看板「Active Loops」展示此刻并发的自主化负载）。
 	cur := s.activeCount.Add(1)
@@ -171,8 +186,9 @@ func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 	// 调度器预先创建会话，使「自动建 session」可观测（验证要求）。
 	sessionKey := repo.NewSessionKey()
 	if _, err := repo.GetOrCreateSession(s.DB, a.UserID, sessionKey); err != nil {
+		runErr = fmt.Errorf("创建会话失败: %w", err)
 		s.logger.Printf("[SCHED] automation %d 创建会话失败: %v", a.ID, err)
-		s.recordFailure(a, sessionKey, fmt.Errorf("创建会话失败: %w", err), 0)
+		s.recordFailure(a, sessionKey, runErr, 0)
 		// M7-04：会话建不起来等同本次 Loop 失败，记录失败指标。
 		metrics.RecordLoopFailure(ctx)
 		s.advanceNext(a, false)
@@ -181,7 +197,7 @@ func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 
 	// M4-05：记录本次自动化运行（status=running），供进程重启后「跨天恢复」扫描续跑。
 	// 建表失败（如测试库未迁移）时仅告警，不阻断本次运行（恢复能力降级）。
-	run := &model.AutomationRun{
+	run = &model.AutomationRun{
 		AutomationID: a.ID,
 		UserID:       a.UserID,
 		SessionKey:   sessionKey,
@@ -195,7 +211,6 @@ func (s *Scheduler) runAutomation(ctx context.Context, a *model.Automation) {
 	// 失败重试：最多 MaxRetries 次（共 MaxRetries+1 次尝试），每次重试前指数退避，
 	// 避免瞬时故障（如临时网络抖动/模型限流）把自动化直接判失败；退避封顶 RetryBackoffMax
 	// 防止高重试次数下等待时间爆炸。
-	var runErr error
 	for attempt := 0; attempt <= s.MaxRetries; attempt++ {
 		if attempt > 0 {
 			backoff := s.backoffFor(attempt)

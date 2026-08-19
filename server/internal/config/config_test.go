@@ -169,3 +169,42 @@ func TestDBAutoMigrate_EnvDriven(t *testing.T) {
 		}
 	})
 }
+
+// TestLogFormatLevel_Defaults 验收 M7-06：结构化日志默认 json/info，
+// LOG_FORMAT/LOG_LEVEL 非法取值回落默认。
+func TestLogFormatLevel_Defaults(t *testing.T) {
+	var c Config
+	if got := c.LogFormat(); got != "json" {
+		t.Errorf("零值 LogFormat() = %q, want json", got)
+	}
+	if got := c.LogLevel(); got != "info" {
+		t.Errorf("零值 LogLevel() = %q, want info", got)
+	}
+}
+
+func TestLogFormatLevel_EnvDriven(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		t.Setenv("LOG_FORMAT", "")
+		t.Setenv("LOG_LEVEL", "")
+		c := Load()
+		if c.LogFormat() != "json" || c.LogLevel() != "info" {
+			t.Errorf("默认应为 json/info, got %s/%s", c.LogFormat(), c.LogLevel())
+		}
+	})
+	t.Run("explicit", func(t *testing.T) {
+		t.Setenv("LOG_FORMAT", "text")
+		t.Setenv("LOG_LEVEL", "debug")
+		c := Load()
+		if c.LogFormat() != "text" || c.LogLevel() != "debug" {
+			t.Errorf("应解析为 text/debug, got %s/%s", c.LogFormat(), c.LogLevel())
+		}
+	})
+	t.Run("invalid_falls_back", func(t *testing.T) {
+		t.Setenv("LOG_FORMAT", "yaml")
+		t.Setenv("LOG_LEVEL", "verbose")
+		c := Load()
+		if c.LogFormat() != "json" || c.LogLevel() != "info" {
+			t.Errorf("非法值应回落 json/info, got %s/%s", c.LogFormat(), c.LogLevel())
+		}
+	})
+}

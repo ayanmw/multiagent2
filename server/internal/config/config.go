@@ -86,6 +86,11 @@ type Config struct {
 	// 可观测性（M3-09）：默认开启；初始化 OpenTelemetry MeterProvider 并开放 /metrics
 	// （Prometheus 文本格式）。METRICS_ENABLED=false 可关闭（纯调试 / 不暴露指标端点）。
 	metricsEnabled bool // 是否启用可观测性指标（env METRICS_ENABLED，默认 true），M3-09
+	// 结构化日志（M7-06）：LOG_FORMAT 为 json（默认，生产友好）/ text（本地调试）；
+	// LOG_LEVEL 为 debug/info/warn/error（默认 info）。初始化全局 slog 时使用，
+	// 并使标准 log 包输出一并 JSON 化（集中采集友好）。
+	logFormat string // 日志输出格式（env LOG_FORMAT，默认 json），M7-06
+	logLevel  string // 日志级别（env LOG_LEVEL，默认 info），M7-06
 	// Webhook 速率限制（M4-03）：外部事件入口防刷。按 token 维度、窗口内最多触发 limit 次。
 	webhookRateLimit  int           // 单个 webhook token 在窗口内的触发上限（env WEBHOOK_RATE_LIMIT，默认 10）
 	webhookRateWindow time.Duration // 速率限制窗口（env WEBHOOK_RATE_WINDOW_SECONDS，默认 60s）
@@ -345,6 +350,21 @@ func Load() *Config {
 	// （Prometheus 文本格式）。METRICS_ENABLED=false 可整体关闭指标端点（纯调试）。
 	cfg.metricsEnabled = envOrDefaultBool("METRICS_ENABLED", true)
 
+	// 结构化日志（M7-06）：LOG_FORMAT 默认 json（生产友好，可被 Loki/ELK 集中采集）；
+	// LOG_LEVEL 默认 info。取值非法时回落默认并打印告警。
+	cfg.logFormat = envOrDefault("LOG_FORMAT", "json")
+	if cfg.logFormat != "json" && cfg.logFormat != "text" {
+		log.Printf("[WARN] LOG_FORMAT=%q 非法，使用默认 json", cfg.logFormat)
+		cfg.logFormat = "json"
+	}
+	cfg.logLevel = envOrDefault("LOG_LEVEL", "info")
+	switch cfg.logLevel {
+	case "debug", "info", "warn", "warning", "error":
+	default:
+		log.Printf("[WARN] LOG_LEVEL=%q 非法，使用默认 info", cfg.logLevel)
+		cfg.logLevel = "info"
+	}
+
 	// Webhook 速率限制（M4-03）：外部事件入口防刷。单个 token 在窗口内最多触发 limit 次，
 	// 超出 handler 返回 429。取值非法时回落默认并打印告警。
 	cfg.webhookRateLimit = envOrDefaultInt("WEBHOOK_RATE_LIMIT", 10)
@@ -602,6 +622,24 @@ func (c *Config) DBAutoMigrate() bool {
 // calls are no-ops and /metrics returns 404.
 func (c *Config) MetricsEnabled() bool {
 	return c != nil && c.metricsEnabled
+}
+
+// LogFormat returns the structured log output format ("json" or "text", M7-06).
+// Falls back to "json" when unset or invalid.
+func (c *Config) LogFormat() string {
+	if c == nil || c.logFormat == "" {
+		return "json"
+	}
+	return c.logFormat
+}
+
+// LogLevel returns the structured log level string ("debug"/"info"/"warn"/"error", M7-06).
+// Falls back to "info" when unset or invalid.
+func (c *Config) LogLevel() string {
+	if c == nil || c.logLevel == "" {
+		return "info"
+	}
+	return c.logLevel
 }
 
 // WebhookRateLimit returns the per-token webhook trigger cap within the rate

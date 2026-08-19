@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
+	"github.com/ayanmw/multiagent2/server/internal/obslog"
 )
 
 // Policy 危险命令策略接口：对命令给出 allow/ask/deny 判定与原因。
@@ -162,6 +163,18 @@ func (s *SafeExecutor) Run(ctx context.Context, command string) (res *Result, er
 	}
 	// M3-09：记录工具（代码执行）调用数与失败数（reason=allowed/denied/checkpoint/failed）。
 	defer func() { metrics.RecordToolCall(ctx, toolCallReason(err), err) }()
+	// M7-06：命令执行级 trace span（父 span 为 engine.llm_run / gateway.run）——
+	// 命令、决策、退出码全部挂在同一 trace 下，日志按 trace_id 过滤即可
+	// 「从一次对话下钻到具体哪条命令被拒/失败/生成检查点」。
+	execCtx, end := obslog.StartSpan(ctx, "executor.run",
+		"command", truncateCommand(command), "workdir", s.inner.Workdir())
+	defer func() {
+		if res != nil {
+			end(err, "decision", toolCallReason(err), "exit_code", res.ExitCode)
+		} else {
+			end(err, "decision", toolCallReason(err))
+		}
+	}()
 	decision, reason := s.policy.Evaluate(command)
 	switch decision {
 	case DecisionAllow:
@@ -169,7 +182,7 @@ func (s *SafeExecutor) Run(ctx context.Context, command string) (res *Result, er
 			Timestamp: time.Now(), Command: command, Workdir: s.inner.Workdir(),
 			Decision: DecisionAllow, Reason: "策略放行", Allowed: true,
 		})
-		res, err = s.inner.Run(ctx, command)
+		res, err = s.inner.Run(execCtx, command)
 		return
 	case DecisionDeny:
 		s.auditor.Record(AuditEntry{
@@ -182,7 +195,7 @@ func (s *SafeExecutor) Run(ctx context.Context, command string) (res *Result, er
 		outcome, cpID := s.classifyAsk(command, reason)
 		switch outcome {
 		case askAllow:
-			res, err = s.inner.Run(ctx, command)
+			res, err = s.inner.Run(execCtx, command)
 			return
 		case askCheckpoint:
 			err = &CheckpointError{ID: cpID, Reason: reason}
@@ -192,7 +205,7 @@ func (s *SafeExecutor) Run(ctx context.Context, command string) (res *Result, er
 			return
 		}
 	default:
-		res, err = s.inner.Run(ctx, command)
+		res, err = s.inner.Run(execCtx, command)
 		return
 	}
 }
@@ -262,6 +275,16 @@ func (s *SafeExecutor) RunCommand(ctx context.Context, name string, args ...stri
 	}
 	// M3-09：记录工具（代码执行）调用数与失败数（reason=allowed/denied/checkpoint/failed）。
 	defer func() { metrics.RecordToolCall(ctx, toolCallReason(err), err) }()
+	// M7-06：与 Run 一致的命令执行级 trace span（见 Run 注释）。
+	execCtx, end := obslog.StartSpan(ctx, "executor.run",
+		"command", truncateCommand(command), "workdir", s.inner.Workdir())
+	defer func() {
+		if res != nil {
+			end(err, "decision", toolCallReason(err), "exit_code", res.ExitCode)
+		} else {
+			end(err, "decision", toolCallReason(err))
+		}
+	}()
 	decision, reason := s.policy.Evaluate(command)
 	switch decision {
 	case DecisionAllow:
@@ -269,7 +292,7 @@ func (s *SafeExecutor) RunCommand(ctx context.Context, name string, args ...stri
 			Timestamp: time.Now(), Command: command, Workdir: s.inner.Workdir(),
 			Decision: DecisionAllow, Reason: "策略放行", Allowed: true,
 		})
-		res, err = s.inner.RunCommand(ctx, name, args...)
+		res, err = s.inner.RunCommand(execCtx, name, args...)
 		return
 	case DecisionDeny:
 		s.auditor.Record(AuditEntry{
@@ -284,7 +307,7 @@ func (s *SafeExecutor) RunCommand(ctx context.Context, name string, args ...stri
 		outcome, cpID := s.classifyAsk(command, reason)
 		switch outcome {
 		case askAllow:
-			res, err = s.inner.RunCommand(ctx, name, args...)
+			res, err = s.inner.RunCommand(execCtx, name, args...)
 			return
 		case askCheckpoint:
 			err = &CheckpointError{ID: cpID, Reason: reason}
@@ -294,9 +317,18 @@ func (s *SafeExecutor) RunCommand(ctx context.Context, name string, args ...stri
 			return
 		}
 	default:
-		res, err = s.inner.RunCommand(ctx, name, args...)
+		res, err = s.inner.RunCommand(execCtx, name, args...)
 		return
 	}
+}
+
+// truncateCommand 截断过长的命令字符串（避免把整段脚本塞进日志/指标标签）。
+func truncateCommand(s string) string {
+	const maxLen = 300
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "...(truncated)"
 }
 
 // toolCallReason 把一次受策略保护的执行结果归类为可观测性指标的 reason 维度（M3-09）：
