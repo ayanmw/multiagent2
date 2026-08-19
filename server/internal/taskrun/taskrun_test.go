@@ -45,6 +45,14 @@ func initRepo(t *testing.T, dir string) {
 	if _, err := codectool.GitInit(ctx, ex); err != nil {
 		t.Fatalf("git init: %v", err)
 	}
+	// 显式设置本地 git 身份：CI/全新环境无全局配置，git commit 会因缺 user.name/user.email 失败
+	//（与 internal/tool/git_test.go 同款处理）。worktree 共享主仓库 config，此处设置即可覆盖后续 commit。
+	if _, err := ex.RunCommand(ctx, "git", "config", "user.email", "ci@test.local"); err != nil {
+		t.Fatalf("git config email: %v", err)
+	}
+	if _, err := ex.RunCommand(ctx, "git", "config", "user.name", "ci-tester"); err != nil {
+		t.Fatalf("git config name: %v", err)
+	}
 	if _, err := codectool.GitCommit(ctx, ex, "init"); err != nil {
 		t.Fatalf("git commit: %v", err)
 	}

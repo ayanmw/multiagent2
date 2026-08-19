@@ -38,8 +38,12 @@ func initRepo(t *testing.T, dir string) {
 		t.Fatalf("git executor: %v", err)
 	}
 	ctx := context.Background()
+	// 显式设置本地 git 身份：CI/全新环境无全局配置，git commit 会因缺 user.name/user.email 失败
+	//（与 internal/tool/git_test.go 同款处理）。worktree 共享主仓库 config，此处设置即可覆盖全部 commit。
 	for _, args := range [][]string{
 		{"init"},
+		{"config", "user.email", "ci@test.local"},
+		{"config", "user.name", "ci-tester"},
 		{"add", "-A"},
 		{"commit", "-m", "init"},
 	} {

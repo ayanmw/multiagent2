@@ -99,14 +99,16 @@ func TestEngine_CoderGitCommit_Workspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGitExecutor: %v", err)
 	}
+	if _, err := codectool.GitInit(context.Background(), ex); err != nil {
+		t.Fatalf("GitInit: %v", err)
+	}
+	// 测试环境显式设置本地身份，使 git commit 不依赖机器全局配置。
+	// 必须先 git init：无 --global 的 git config 只写当前仓库 .git/config，对 CI（无全局身份）亦然。
 	if _, err := ex.Run(context.Background(), "git config user.email test@test.local"); err != nil {
 		t.Fatalf("git config email: %v", err)
 	}
 	if _, err := ex.Run(context.Background(), "git config user.name tester"); err != nil {
 		t.Fatalf("git config name: %v", err)
-	}
-	if _, err := codectool.GitInit(context.Background(), ex); err != nil {
-		t.Fatalf("GitInit: %v", err)
 	}
 
 	srv := mockGitServer(t)

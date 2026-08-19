@@ -49,15 +49,17 @@ func TestGitTools_FullChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGitExecutor: %v", err)
 	}
+	if _, err := GitInit(context.Background(), ex); err != nil {
+		t.Fatalf("GitInit: %v", err)
+	}
 	// 测试环境显式设置本地身份，使 git commit 不依赖机器全局配置。
+	// 必须先 git init：无 --global 的 git config 只写当前仓库 .git/config，
+	// 在非 git 目录执行对 CI（无全局身份）无效。
 	if _, err := ex.RunCommand(context.Background(), "git", "config", "user.email", "test@test.local"); err != nil {
 		t.Fatalf("git config email: %v", err)
 	}
 	if _, err := ex.RunCommand(context.Background(), "git", "config", "user.name", "tester"); err != nil {
 		t.Fatalf("git config name: %v", err)
-	}
-	if _, err := GitInit(context.Background(), ex); err != nil {
-		t.Fatalf("GitInit: %v", err)
 	}
 
 	tools, err := NewGitTools(workdir, nil, nil, executor.ModeUnattended)
