@@ -199,6 +199,41 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 
 ---
 
+## M7.5 上线前真实验证（新增 2026-08-19，无新功能，全为「真实验证」）
+
+> 来源：《改进计划-2026-08-19》（.workbuddy/artifacts/）。背景：M7-01~06 交付物仅经语法/本地验证，CI 未在 GitHub 真跑、K8s 未实测、真实模型未端到端冒烟。
+> 原则：先正确性/可验证，再能力深化，最后体验与规模。M7.5-04 需用户目标集群环境，M7.5-01 需观察 CI 实跑结果。
+
+| # | 任务 | 状态 | 验证标准 | 依赖 |
+|---|------|------|----------|------|
+| M7.5-01 | **CI 真跑闭环**：push/PR 触发后观察 GitHub Actions 三作业；修 ubuntu runner 才暴露的问题 | ○ | 连续 3 次 main 分支 CI 全绿（server/web/docker 三作业） | M7-01 |
+| M7.5-02 | **真实模型端到端冒烟**：用本地网关（127.0.0.1:8088，hy3→deepseek-v4-pro 回退）跑 M6-06 冒烟套件 + 一条完整自主 Loop（goal→taskrun→worktree→merge） | ○ | 真实 LLM 下 Loop 全链路成功 ≥2 次 | M6-06, M2-05 |
+| M7.5-03 | **并发与压测**：多用户并发对话、SSE 长连接稳定性、taskrun 扇出 5+ 子任务、SQLite 写锁 | ○ | 压测报告：P99 时延、无死锁、无连接泄漏 | M2-04 |
+| M7.5-04 | **K8s 实测**：按 M7-07 文档 apply 到真实集群；验证 ingress 分流、SSE 不缓冲、崩溃自动重启、PVC 持久化 | ○ | `kubectl apply -f k8s/` 后端到端对话走通 | M7-03, M7-07 |
+| M7.5-05 | **安全复核**：登录/对话限流（MX-07）、CORS 白名单、日志脱敏生效（M7-06 securelogging）、Alertmanager webhook token | ○ | 高频登录被限流；日志无明文 token | MX-07, M7-06 |
+
+---
+
+## M8 能力深化与产品化（新增 2026-08-19，对应 ROADMAP-M6 阶段 B/C）
+
+> 来源：ROADMAP-M6 阶段 B（原编号 M7-01~06 与 PLAN 的 M7 冲突，统一改 M8）+ 阶段 C。目标：补 S5/S7 遗留短板、突破单机上限、走向可对外交付的产品。
+
+| # | 任务 | 状态 | 验证标准 | 依赖 |
+|---|------|------|----------|------|
+| M8-01 | **A2A 流式 + client（补 S5）**：实现 `message/stream`；平台可作 A2A client 调外部 Agent | ○ | 外部 client 长任务拿到进度流；平台调外部 Agent 成功 | M5-07 |
+| M8-02 | **Docker 执行后端**：真·文件系统沙箱（容器+只读根+网络白名单），Executor 接口下可切换 | ○ | 逃逸命令在容器内被拒；Host/Docker 后端可配置切换 | M1-04 |
+| M8-03 | **多节点 taskrun**：外部队列（Redis/DB 轮询）+ lease，突破 inprocess 单进程 | ○ | 两节点并发派生子任务均收敛；节点崩溃任务可重拾 | M2-04 |
+| M8-04 | **Knowledge RAG 升级 PG/pgvector**：本地 sqlite/bolt → pgvector，支撑更大文档集与并发 | ○ | 万级 chunk 检索 P99 达标；并发检索无退化 | M5-02 |
+| M8-05 | **评估集自举**：evolution 提取的技能反向生成 eval case，飞轮×回归自强化 | ○ | 新技能自动进 eval 集；回归分数可比 | M5-05 |
+| M8-06 | **前端重构（补 S7）**：拆分 ChatView/AutomationView 等大 View；删 PlaceholderView 死代码；naive-ui 按需引入 + manualChunks | ○ | 首屏 <500KB gzip；vue-tsc 绿；功能不回归 | M0-17 |
+| M8-07 | **IM Channel**：飞书/钉钉/企微 Channel，Loop 可从 IM 触发与回发 | ○ | IM 消息触发 Loop；完成通知回发 IM | M4-04 |
+| M8-08 | **连接器市场**：预置 GitHub/GitLab/Slack/Jira 等 MCP 模板 | ○ | 一键导入模板建 MCP 配置 | M2-02 |
+| M8-09 | **多租户隔离强化**：workspace 级配额、租户预算上限、资源隔离 | ○ | 租户 A 超配额不影响 B | M3-04 |
+| M8-10 | **切 PG（条件触发）**：SQLite 单文件是单副本硬约束，目标并发写 >50 时提前执行 | ○ | PG 后端全量 CRUD/迁移通过；K8s backend 可多副本 | M3-08 |
+| M8-11 | **文档与示例**：架构图、演示视频、典型场景案例（对标 OpenClaw+Claude 24h 自主演示） | ○ | 新人按文档复现 24h 自主演示 | M7-07 |
+
+---
+
 ## 阻塞与依赖
 
 - **阶段门槛**：M0.5-01..07 全部 ✅ 之前，任何 M1 任务不得开始（循环按「第一个 ○」自然保证，同时这是硬规则）
