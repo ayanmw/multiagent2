@@ -790,3 +790,8 @@
 - **第 2 轮（235aba3）**：git 身份适配——CI ubuntu runner 全新环境**无全局 git 身份**，`git commit` 必败；worktree/taskrun 测试的 `initRepo`、engine 的 git 集成测试均在 `git init` 前设 config（无效）或未设 → 统一「先 init 再设 user.email/user.name」（含 git_test.go 顺序修正）。本地用 `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1` 模拟 CI 环境：全量 33 包 build/vet/test 全绿。
 - **CI 实跑结果**：9cecb3f（修复①+②）→ docker/web 绿、server 仍红（git 身份）；235aba3（修复 git 身份）→ **三作业全绿（run 32244890312）＝连续第 1 次**。验收「连续 3 次」未达成，任务保持 ⏳，后续轮次每次 push 自然累积，任一轮查 CI 历史累计连续全绿 ≥3 时收尾标 ✅。
 - Commits 9cecb3f + 235aba3 已推 origin/main。下一步：M7.5-01 继续累积 CI 全绿；同时首个 ○ 仍为 M7.5-01，若下一轮已有 3 次连续全绿即标 ✅，否则推进 M7.5-02（真实模型冒烟，push 贡献下一次全绿）。
+
+### 2026-08-19 20:45 | M7.5-01 | ✅ CI 真跑闭环——连续 3 次全绿达成，验收通过
+- **收尾**：本轮用 `git commit --allow-empty`（05b0632）触发第 3 次验收运行。GitHub API 实查：235aba3 ✅ → 1c83be5 ✅ → 05b0632 ✅，**连续 3 次 main 分支 CI 全绿**；05b0632 运行（run 32253794235）三作业明细——`Server (go build / vet / test)` success、`Web (npm ci / build / typecheck)` success、`Docker image build (validate only)` success，验收标准「连续 3 次 main 分支 CI 全绿（server/web/docker 三作业）」达成。
+- 本地复核：`git status` 干净、HEAD==origin/main==05b0632；本轮为纯验证+文档收尾，无代码改动，无需 go build/vet（05b0632 为 empty commit）。
+- Commit 05b0632（empty trigger，已推 origin/main）。下一步：M7.5-02（真实模型端到端冒烟：本地网关 127.0.0.1:8088 hy3→deepseek-v4-pro 回退跑 M6-06 冒烟套件 + 一条完整自主 Loop goal→taskrun→worktree→merge，验收真实 LLM 下 Loop 全链路成功 ≥2 次）。

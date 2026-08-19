@@ -206,7 +206,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 
 | # | 任务 | 状态 | 验证标准 | 依赖 |
 |---|------|------|----------|------|
-| M7.5-01 | **CI 真跑闭环**：push/PR 触发后观察 GitHub Actions 三作业；修 ubuntu runner 才暴露的问题 | ⏳ | 连续 3 次 main 分支 CI 全绿（server/web/docker 三作业） | M7-01 |
+| M7.5-01 | **CI 真跑闭环**：push/PR 触发后观察 GitHub Actions 三作业；修 ubuntu runner 才暴露的问题 | ✅ | 连续 3 次 main 分支 CI 全绿（server/web/docker 三作业） | M7-01 |
 | M7.5-02 | **真实模型端到端冒烟**：用本地网关（127.0.0.1:8088，hy3→deepseek-v4-pro 回退）跑 M6-06 冒烟套件 + 一条完整自主 Loop（goal→taskrun→worktree→merge） | ○ | 真实 LLM 下 Loop 全链路成功 ≥2 次 | M6-06, M2-05 |
 | M7.5-03 | **并发与压测**：多用户并发对话、SSE 长连接稳定性、taskrun 扇出 5+ 子任务、SQLite 写锁 | ○ | 压测报告：P99 时延、无死锁、无连接泄漏 | M2-04 |
 | M7.5-04 | **K8s 实测**：按 M7-07 文档 apply 到真实集群；验证 ingress 分流、SSE 不缓冲、崩溃自动重启、PVC 持久化 | ○ | `kubectl apply -f k8s/` 后端到端对话走通 | M7-03, M7-07 |
