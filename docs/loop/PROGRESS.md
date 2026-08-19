@@ -722,6 +722,12 @@
 - server/Dockerfile 补 `HEALTHCHECK ... CMD wget -qO- http://localhost:8080/health`（alpine 自带 busybox wget；`/health` 端点已在 main.go:60 实现）。
 - 注：三 Dockerfile 本体（M6-08 已建）逻辑正确（纯 Go alpine、端口/卷/环境变量齐全），本次不重写，仅收尾。
 
+### 2026-08-18 13:30 | M7-03 | ✅ K8s 部署清单（补记，commit 6a3cdf9）
+- 新增 `k8s/` 共 10 个文件：`configmap.yaml`（后端环境变量 + 运维变量）/ `secret.yaml`（占位，生产用 sealed-secrets/external-secrets 注入）/ `pvc.yaml`（SQLite 持久化）/ `backend-deployment.yaml` + `backend-service.yaml`（服务名固定 `server` 以匹配前端 `nginx.conf` 的 `http://server:8080`）/ `web-deployment.yaml` + `web-service.yaml` / `ingress.yaml`（路径分流：`/api`、`/health`、`/metrics`、``/.well-known/agent.json`` → backend；`/` → web；SSE 关缓冲+长超时）/ `hpa-web.yaml`（前端无状态 HPA）/ `gen-skills-configmap.sh`（把仓库 `skills/` 挂为 ConfigMap 供 warm-start）。
+- 后端因本地 SQLite 单文件，保持单副本（多副本并发写冲突）；横向扩展留 M8 切 PG。
+- 验证：全部 k8s/CI YAML 经 `yaml.safe_load_all` 解析通过；`kubectl apply` 语义校验（未实际起集群）。
+- Commit: 6a3cdf9（已推 origin/main）。至此 M7-01/02/03 收口，下一轮 LOOP 进入 M7-04（告警规则）。
+
 ### 2026-08-18 13:30 | M7-03 | ✅ K8s 部署清单
 - 新增 `k8s/`：`configmap.yaml`（端口/路径/运行模式/开关）、`secret.yaml`（JWT_SECRET/PROVIDER_ENC_KEY 占位，提示用 sealed-secrets/external-secrets）、`pvc.yaml`（10Gi RWO）、`backend-deployment.yaml`+`backend-service.yaml`（**Service 名必须为 `server`** 以匹配前端 `nginx.conf` 的 `http://server:8080`）、`web-deployment.yaml`+`web-service.yaml`、`ingress.yaml`（路径分流：`/api`·`/health`·`/metrics`·`/.well-known/agent.json`→backend，`/`→web；SSE 关缓冲+长超时）、`hpa-web.yaml`（前端无状态可 HPA；backend 因本地 SQLite 保持单副本，注释说明切 PG 后才可 HPA）、`gen-skills-configmap.sh`（把仓库 `skills/` 挂为 ConfigMap 供 warm-start）。
 - 后端探针用 `/health`；因本地 SQLite 单文件，replicas=1（横向扩展需 M8 切 PG）。
