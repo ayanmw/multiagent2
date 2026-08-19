@@ -4,7 +4,8 @@ FROM golang:1.25-alpine AS build
 
 WORKDIR /src
 
-COPY go.mod go.sum ./
+# 本模块为纯标准库实现，无外部依赖、无 go.sum；只复制 go.mod 即可。
+COPY go.mod ./
 RUN go mod download
 
 COPY . .

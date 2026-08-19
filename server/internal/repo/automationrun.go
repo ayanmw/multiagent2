@@ -23,9 +23,10 @@ func ListUnfinishedAutomationRuns(db *gorm.DB) ([]model.AutomationRun, error) {
 }
 
 // ListAutomationRuns 返回某用户归属的全部运行记录（按创建时间倒序，诊断/测试用）。
+// 二级排序 id desc 保证同一毫秒内批量创建时顺序确定（SQLite 对相同排序键不保证次序）。
 func ListAutomationRuns(db *gorm.DB, userID uint) ([]model.AutomationRun, error) {
 	var list []model.AutomationRun
-	if err := db.Where("user_id = ?", userID).Order("created_at desc").Find(&list).Error; err != nil {
+	if err := db.Where("user_id = ?", userID).Order("created_at desc, id desc").Find(&list).Error; err != nil {
 		return nil, err
 	}
 	return list, nil
