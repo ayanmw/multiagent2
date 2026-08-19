@@ -733,3 +733,15 @@
 - 后端探针用 `/health`；因本地 SQLite 单文件，replicas=1（横向扩展需 M8 切 PG）。
 - 验证：全部 k8s YAML 经 `yaml.safe_load_all` 解析通过。实际 `kubectl apply` 由用户在目标集群执行（需先把镜像推到 ghcr.io/ayanmw/multiagent2/{server,web,gateway} 并替换 secret 占位）。
 - 下一步：M7-04（告警规则 Prometheus Alertmanager，依赖 M3-09 /metrics）。
+
+---
+
+### 2026-08-19 11:10 | M7-04 | ✅ 告警规则（Prometheus Alertmanager）+ 告警接收端点
+- 可观测告警闭环：基于 M3-09 `/metrics` 写六类告警规则（LLM 错误率 / 工具失败率 / 自主 Loop 失败率 / 平台预算耗尽 / 进程频繁重启 / LLM 时延 P99），并打通「Prometheus → Alertmanager → 后端 /api/alerts → 通知中心」链路，复用 M4-07 统一通知出口。
+- 指标补全：metrics 包新增 `codeagent_loop_runs_total`、`codeagent_loop_failures_total`、`codeagent_budget_exhausted_total` 三个计数器，以及 `process_start_time_seconds` 静态 gauge（供 `changes(process_start_time_seconds[1h])>2` 检测频繁重启）；导出 `KnownMetricNames` 供规则契约测试；`Summary()` 同步新增三个聚合字段。
+- 指标接线：scheduler(`runAutomation`)、webhook(`runLoop`) 在自主 Loop 开始/失败时记录 run/failure；gateway(`maybeNotifyBudget`) 在预算拦截时记录 budget 指标。
+- 告警接收端点 `server/internal/api/alerts.go`：`AlertsWebhookHandler` 解析 Alertmanager 标准 webhook 负载，将 `firing` 告警经 `notify.Notifier` 写入通知中心（站内信 + 可选出站回调），投递到 `ALERT_NOTIFY_USER_IDS` 指定管理员；可选 `ALERT_WEBHOOK_TOKEN` 共享密钥校验（Authorization: Bearer / X-Alert-Token）。
+- 配置：`config.go` 新增 `ALERT_WEBHOOK_TOKEN`、`ALERT_NOTIFY_USER_IDS`（默认 "1"）；`main.go` 在 notifier 构造后注册 `POST /api/alerts`（不挂 JWT，由端点内密钥校验）。
+- 配置交付：`monitoring/` 目录提供 `prometheus.yml`（抓取 `server:8080/metrics` + 加载规则）、`alert-rules.yml`（六条规则，阈值可调）、`alertmanager.yml`（路由到 `http://server:8080/api/alerts` webhook 接收器）、`docker-compose.monitoring.yml`（本地一键拉起 Prometheus+Alertmanager）。
+- 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`internal/metrics` 单测（新增指标 + process_start_time_seconds 出现在 /metrics 与 Summary）PASS；`internal/api` 的 alerts_test（告警转通知 + 密钥 401/200 校验）PASS；新增 `alertrules_test.go` 解析 `alert-rules.yml` 确认每条 expr 引用的指标均在 `KnownMetricNames`（含 `_bucket/_sum/_count` 后缀剥离）；`internal/repo` 仍因沙箱无 gcc（go-sqlite3 需 cgo）stub 失败，属环境豁免，与本次无关；`cmd/server` 集成测试绿。
+- Commit a4d1a45（已推 origin/main）。下一步：M7-05（Grafana 看板，依赖 M3-09）。
