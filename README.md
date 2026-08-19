@@ -62,7 +62,9 @@
 | M3 | 企业化：审计落库·审计/用量 API·预算护栏·人工检查点·Artifact 浏览器·MCP 加密·手动迁移·可观测性·E2E | ✅ |
 | M4 | 自主化：Automation 模型·Cron 调度·Webhook·Channel 层·跨天恢复·无人值守 Loop·通知·自动化前端·E2E | ✅ |
 | M5 | 进化：CLI·Knowledge RAG·evolution 飞轮·evolution 前端·evaluation 回归·promptiter·A2A·飞轮×回归·E2E | ✅ |
-| MX | 质量加固：工作区/MCP/Skills/任务中心前端打通·M2 测试补全·用户管理后台·安全加固（限流/CORS/日志脱敏）·**部署与文档（本任务）** | ✅ |
+| MX | 质量加固：工作区/MCP/Skills/任务中心前端打通·M2 测试补全·用户管理后台·安全加固（限流/CORS/日志脱敏）·部署与文档 | ✅ |
+| M6 | 可运营化加固：worktree/taskrun 测试去 skip·框架依赖收敛到 engine 层·生产迁移治理·种子技能库+warm-start E2E·自动化韧性·真实模型冒烟套件 | ✅ |
+| M7 | 生产交付：CI 流水线·容器化收尾（.dockerignore/HEALTHCHECK）·K8s 清单·Alertmanager 告警·Grafana 看板·日志聚合+trace 贯通·**部署文档与 quickstart（本任务）** | ✅ |
 
 ---
 
@@ -262,6 +264,43 @@ docker compose down -v            # 连数据卷一并删除（危险：清空�
 
 ---
 
+## 生产部署（Kubernetes + 监控，推荐上线方式）
+
+> 完整运维手册见 **[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)**（CI/CD · 镜像发布 · K8s 主线 · Prometheus+Grafana · 日志/trace · 密钥管理 · 备份/升级/回滚 · 排障清单）。以下为快速路径。
+
+```sh
+# 1) 密钥（勿提交真实值；或用 kubectl create secret 直接创建，见 DEPLOYMENT.md §3）
+kubectl apply -f k8s/secret.yaml        # 先替换占位符
+
+# 2) 配置 + 共享技能 + 数据卷 + 后端 + 前端 + 入口
+kubectl apply -f k8s/configmap.yaml
+bash k8s/gen-skills-configmap.sh        # skills/ → ConfigMap（warm-start 共享技能）
+kubectl apply -f k8s/pvc.yaml k8s/backend-deployment.yaml k8s/backend-service.yaml
+kubectl apply -f k8s/web-deployment.yaml k8s/web-service.yaml k8s/hpa-web.yaml
+# 改 k8s/ingress.yaml 的 host 为你的域名后：
+kubectl apply -f k8s/ingress.yaml
+
+# 3) 验证
+curl -s https://<你的域名>/health      # 200
+curl -s https://<你的域名>/metrics     # Prometheus 指标
+```
+
+要点：
+
+- **backend 固定 1 副本**（本地 SQLite 单文件，多副本写冲突）；横向扩展需先切 PG（见 M8 规划）。
+- **后端 Service 名必须为 `server`**（前端 nginx.conf 与监控 scrape 均写死 `server:8080`）。
+- ingress 已带 SSE 免缓冲注解（`proxy-buffering off` + 3600s 超时），勿删。
+- **监控告警**：`monitoring/` 提供 Prometheus + Alertmanager（六类规则，webhook 直达通知中心）+ Grafana（看板自动供应）+ Loki/Promtail（日志按 trace 串联）。本地快速体验：
+
+  ```sh
+  docker compose -f monitoring/docker-compose.monitoring.yml up -d
+  # Prometheus :9090 · Alertmanager :9093 · Grafana :3000 · Loki :3100
+  ```
+
+- 日志格式/告警 token 等运维变量见 `.env.example` 与 `docs/DEPLOYMENT.md`。
+
+---
+
 ## 前端构建产物
 
 - 开发：`npm run dev`（Vite 开发服务器，端口 5173，`/api` 经 Vite proxy 转发到 `http://localhost:8080`）。
@@ -309,6 +348,7 @@ go build -o gmctl .
 
 - `docs/loop/PLAN.md` —— 任务规划与里程碑
 - `docs/loop/LEARNINGS.md` —— 必读约定（Executor 封装、危险命令策略、路径约束等）
+- `docs/DEPLOYMENT.md` —— **生产部署手册（运维向：CI/CD·K8s·监控·日志·密钥·备份·排障）**
 - `docs/02-框架能力全景与自主化升级规划.md` —— 框架能力全景
 - `docs/03-M1规划与M0评审.md` —— M1 阶段规划
 - `tool/workbuddyLLMAPI/README.md` —— LLM 网关详细说明
