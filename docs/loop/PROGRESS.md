@@ -782,3 +782,11 @@
 - **`.env.example` 补全运维变量**：新增「可观测性（M7-04/M7-06）」段——`LOG_FORMAT=json`（json/text）、`LOG_LEVEL=info`（debug/info/warn/error）、`ALERT_WEBHOOK_TOKEN=`（告警接收端点 Bearer，生产建议开启且与 monitoring/alertmanager.yml 一致）、`ALERT_NOTIFY_USER_IDS=1`（告警目标管理员，逗号分隔）。
 - 验证：纯文档任务（无 Go/前端代码改动），无需 go build/vet；git 改动 3 文件（+377/-1）——docs/DEPLOYMENT.md 新增、README.md +42/-1、.env.example +11。
 - Commit 9e1964f 已推 origin/main。下一步：M7 全 ✅，首个 ○ 为 M7.5-01（CI 真跑闭环，需观察 GitHub Actions 实跑结果）。
+
+### 2026-08-19 18:55 | M7.5-01 | ⏳ CI 真跑闭环——修复全部 CI 失败点，235aba3 起连续全绿 1 次（验收需 3 次）
+- **诊断**：GitHub API 查 run 1~10 全部 failure。run 10（101b3ae）三作业：web ✅ / docker ❌（gateway 镜像）/ server ❌（Test 步骤）。两处根因：
+  - ① server Test：`model_test.go`/`session_test.go`/`role_test.go` 仍 import `gorm.io/driver/sqlite`（mattn cgo 驱动），CI `CGO_ENABLED=0` 下 stub 报 "go-sqlite3 requires cgo to work"（生产已用 glebarez 纯 Go 驱动，测试未跟上）→ 换 `github.com/glebarez/sqlite`（本地修复后 repo 包 9 用例全过，连跑 3 次稳定）；连带修 `ListAutomationRuns` 排序加 `id desc` 二级键（同毫秒插入时 created_at 相同排序不确定，单独跑 PASS/整包 FAIL）。
+  - ② docker gateway：`tool/workbuddyLLMAPI` 为纯标准库零依赖模块**无 go.sum**，Dockerfile `COPY go.mod go.sum ./` 缺源失败 → 改 `COPY go.mod ./`。
+- **第 2 轮（235aba3）**：git 身份适配——CI ubuntu runner 全新环境**无全局 git 身份**，`git commit` 必败；worktree/taskrun 测试的 `initRepo`、engine 的 git 集成测试均在 `git init` 前设 config（无效）或未设 → 统一「先 init 再设 user.email/user.name」（含 git_test.go 顺序修正）。本地用 `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1` 模拟 CI 环境：全量 33 包 build/vet/test 全绿。
+- **CI 实跑结果**：9cecb3f（修复①+②）→ docker/web 绿、server 仍红（git 身份）；235aba3（修复 git 身份）→ **三作业全绿（run 32244890312）＝连续第 1 次**。验收「连续 3 次」未达成，任务保持 ⏳，后续轮次每次 push 自然累积，任一轮查 CI 历史累计连续全绿 ≥3 时收尾标 ✅。
+- Commits 9cecb3f + 235aba3 已推 origin/main。下一步：M7.5-01 继续累积 CI 全绿；同时首个 ○ 仍为 M7.5-01，若下一轮已有 3 次连续全绿即标 ✅，否则推进 M7.5-02（真实模型冒烟，push 贡献下一次全绿）。
