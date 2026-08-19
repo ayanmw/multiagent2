@@ -1,13 +1,51 @@
+# GoMultiAgentV2 — 推进日志
+
+> 每轮自动化执行后追加一条记录，格式：`### YYYY-MM-DD HH:MM | M0-XX | ✅/❌`
 
 ---
 
-### 2026-08-19 17:40 | M7-07 | ✅ 部署文档与 quickstart（生产部署手册 + README 专节 + 运维变量补全）
-- **新增 `docs/DEPLOYMENT.md`（运维向完整生产手册，9 章）**：0 部署拓扑总览（ingress→web/server→gateway→LLM + Prometheus/Alertmanager/Loki 旁路）；1 前置条件（集群/域名/TLS/镜像仓库/LLM 端点）；2 CI/CD 与镜像发布（ci.yml 三作业现状 = server/web 构建测试 + docker 仅校验不推送；手动三镜像 build+push 发版、kubectl set image 更新）；3 密钥管理（JWT_SECRET/PROVIDER_ENC_KEY/ALERT_WEBHOOK_TOKEN 生成与最小密钥集、kubectl create secret 替换占位、sealed-secrets/external-secrets/CSI 升级路径、Alertmanager 令牌联动）；4 K8s 部署主线（apply 顺序：configmap→gen-skills-configmap.sh→pvc→backend+server svc→web+svc+hpa→ingress；要点：backend 单副本 SQLite、Service 名固定 server、SSE 免缓冲注解、HTTPS/跨域/rollout restart）；5 可观测性（K8s 内 vs 本地 compose 两种方式、Prometheus/Alertmanager/Grafana/Loki/Promtail 地址表、六类告警规则闭环）；6 日志与 trace（LOG_FORMAT/LOG_LEVEL、五层 span 树、Loki LogQL 示例、OTel 升级路径）；7 升级/回滚/备份（SQLite 在线备份 kubectl cp、PVC 快照、rollout undo、schema_migrations 自动迁移）；8 排障清单（10 项症状→排查→处置）；9 相关文件索引。
-- **README.md 增补**：里程碑表补 M6/M7 两行（M7 标注本任务）；新增「生产部署（Kubernetes + 监控，推荐上线方式）」专节（快速路径 kubectl 命令 + 要点：单副本/服务名 server/SSE 免缓冲/监控告警本地体验）；「相关文档」加 DEPLOYMENT.md 链接。
-- **`.env.example` 补全运维变量**：新增「可观测性（M7-04/M7-06）」段——`LOG_FORMAT=json`（json/text）、`LOG_LEVEL=info`（debug/info/warn/error）、`ALERT_WEBHOOK_TOKEN=`（告警接收端点 Bearer，生产建议开启且与 monitoring/alertmanager.yml 一致）、`ALERT_NOTIFY_USER_IDS=1`（告警目标管理员，逗号分隔）。
-- 验证：纯文档任务（无 Go/前端代码改动），无需 go build/vet；git 改动 3 文件（+377/-1）——docs/DEPLOYMENT.md 新增、README.md +42/-1、.env.example +11。
-- Commit 9e1964f 已推 origin/main。下一步：M7 全 ✅，首个 ○ 为 M7.5-01（CI 真跑闭环，需观察 GitHub Actions 实跑结果）。
-，Gin HTTP 服务器 + /health 健康检查端点
+## 2026-07-28 10:43 | 循环基础设施初始化 | ✅
+
+- 初始化 git 仓库
+- 创建 PLAN.md（19 个 M0 任务，每任务 ~1 小时）
+- 创建 PROGRESS.md（本文件）
+- 创建 LEARNINGS.md（项目规范与约定）
+- 创建 Go 项目基础骨架（go.mod + 目录结构）
+- 创建两条 Automation：`GoMultiAgent Loop`（每小时） + `GoMultiAgent 日报`（每日 9:00）
+- 状态：循环就绪，下个整点启动首轮
+
+---
+
+（以下由自动化循环追加）
+
+---
+
+### 2026-07-28 12:53 | M0-06 | ✅
+- 完成内容：APIKey 管理（创建/列表/吊销）。model/APIKey（SHA256 哈希存储，明文仅创建时回显一次）；auth.GenerateAPIKey；repo CRUD；api 处理器 POST/GET/DELETE /api/auth/apikeys（owner 归属校验）；middleware.AuthMiddleware 升级为同时支持 Bearer JWT 与 X-API-Key 双鉴权；/api/me 改用 context 身份（兼容两种鉴权）
+- Commit: f52274b
+- 验证: go build/vet ✓ | runtime curl ✓（创建→回显明文；列表不含明文；无鉴权401；X-API-Key→/api/me 200 且身份正确；X-API-Key→/api/admin/roles 403；吊销后该 key→401）
+
+### 2026-07-28 12:47 | M0-05 | ✅
+- 完成内容：JWT 认证中间件 + RBAC。middleware/auth.go（AuthMiddleware 注入 user_id/role、RequireRole 角色白名单、RequirePermission 基于 RolePermission 表资源/动作校验，支持 * 通配）；repo 新增 GetPermissionsByRoleID/ListRoles；新增 admin 演示端点 GET /api/admin/roles（admin 专属）；main.go 接好受保护路由组
+- Commit: e267da3
+- 验证: go build ✓ | go vet ✓ | runtime curl ✓（无token→401，dev/viewer→/api/admin/roles 403，admin→200，坏token→/api/me 401）
+
+### 2026-07-28 12:10 | M0-03 | ✅
+- 完成内容：Vue3 前端项目初始化，Vite + Vue3 + TS + Pinia + Vue Router + Naive UI + UnoCSS，基础布局骨架（sidebar + header + router-view）
+- Commit: f56d486
+- 验证: npm run build ✓（dist 生成，2766 modules transformed）
+
+---
+
+### 2026-07-28 11:13 | M0-02 | ✅
+- 完成内容：GORM + SQLite3 数据库底座，User/Role/RolePermission 模型 + AutoMigrate + 角色种子数据
+- Commit: 0cdd747
+- 验证: go build ✓ | DB 表创建 ✓ | 角色种子 3 条 + 权限 11 条 ✓
+
+---
+
+### 2026-07-28 11:04 | M0-01 | ✅
+- 完成内容：Go 项目初始化，Gin HTTP 服务器 + /health 健康检查端点
 - Commit: 6f8d152
 - 验证: go build ✓ | curl /health → 200 ✓
 
@@ -735,3 +773,12 @@
 - **集中采集（monitoring/）**：`docker-compose.monitoring.yml` 新增 `loki`（:3100）+ `promtail`（docker.sock 服务发现，采集 gm-server/gm-web/gm-gateway/codeagent-* 容器日志，pipeline `docker` stage）；`monitoring/promtail/promtail.yml` 新配置；`monitoring/logging.md` 新文档（日志字段说明、LogQL 按 trace_id/request_id 串联一次对话、`decision="denied"` 下钻被拒命令、OTel Collector 升级路径）。
 - 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；新增测试全 PASS——`obslog`（JSON/Text 格式、ParseLevel、trace ctx、StartSpan ok/error/parent-chain、标准 log 重定向，9 用例）、`middleware` requestid（生成/回显/透传/traceparent 解析）、`executor` trace_test（allow→status=ok+exit_code、deny→status=error+decision=denied、parent_span_id 继承）、`scheduler` trace_test（automation.run 成功 status=ok / 失败 status=error+err）、`config` LogFormat/LogLevel（默认/显式/非法回落）；engine/api/scheduler/metrics 既有单测全绿；`internal/repo` 仍因沙箱 `CGO_ENABLED=0` 下 go-sqlite3 stub 失败（环境豁免，与本次无关）。**运行时冒烟**：起服务 curl `/health` → 响应头 `X-Request-Id`/`traceparent` 回显、客户端透传生效、访问日志为 JSON 且带 trace_id/request_id（`{"msg":"http.request","trace_id":"...","request_id":"...","method":"GET","path":"/health","status":200,...}`）。
 - Commit（待提交，post-commit hook 自动推 origin/main）。下一步：M7-07（部署文档与 quickstart，依赖 M7-01~06）。
+
+---
+
+### 2026-08-19 17:40 | M7-07 | ✅ 部署文档与 quickstart（生产部署手册 + README 专节 + 运维变量补全）
+- **新增 `docs/DEPLOYMENT.md`（运维向完整生产手册，9 章）**：0 部署拓扑总览（ingress→web/server→gateway→LLM + Prometheus/Alertmanager/Loki 旁路）；1 前置条件（集群/域名/TLS/镜像仓库/LLM 端点）；2 CI/CD 与镜像发布（ci.yml 三作业现状 = server/web 构建测试 + docker 仅校验不推送；手动三镜像 build+push 发版、kubectl set image 更新）；3 密钥管理（JWT_SECRET/PROVIDER_ENC_KEY/ALERT_WEBHOOK_TOKEN 生成与最小密钥集、kubectl create secret 替换占位、sealed-secrets/external-secrets/CSI 升级路径、Alertmanager 令牌联动）；4 K8s 部署主线（apply 顺序：configmap→gen-skills-configmap.sh→pvc→backend+server svc→web+svc+hpa→ingress；要点：backend 单副本 SQLite、Service 名固定 server、SSE 免缓冲注解、HTTPS/跨域/rollout restart）；5 可观测性（K8s 内 vs 本地 compose 两种方式、Prometheus/Alertmanager/Grafana/Loki/Promtail 地址表、六类告警规则闭环）；6 日志与 trace（LOG_FORMAT/LOG_LEVEL、五层 span 树、Loki LogQL 示例、OTel 升级路径）；7 升级/回滚/备份（SQLite 在线备份 kubectl cp、PVC 快照、rollout undo、schema_migrations 自动迁移）；8 排障清单（10 项症状→排查→处置）；9 相关文件索引。
+- **README.md 增补**：里程碑表补 M6/M7 两行（M7 标注本任务）；新增「生产部署（Kubernetes + 监控，推荐上线方式）」专节（快速路径 kubectl 命令 + 要点：单副本/服务名 server/SSE 免缓冲/监控告警本地体验）；「相关文档」加 DEPLOYMENT.md 链接。
+- **`.env.example` 补全运维变量**：新增「可观测性（M7-04/M7-06）」段——`LOG_FORMAT=json`（json/text）、`LOG_LEVEL=info`（debug/info/warn/error）、`ALERT_WEBHOOK_TOKEN=`（告警接收端点 Bearer，生产建议开启且与 monitoring/alertmanager.yml 一致）、`ALERT_NOTIFY_USER_IDS=1`（告警目标管理员，逗号分隔）。
+- 验证：纯文档任务（无 Go/前端代码改动），无需 go build/vet；git 改动 3 文件（+377/-1）——docs/DEPLOYMENT.md 新增、README.md +42/-1、.env.example +11。
+- Commit 9e1964f 已推 origin/main。下一步：M7 全 ✅，首个 ○ 为 M7.5-01（CI 真跑闭环，需观察 GitHub Actions 实跑结果）。
