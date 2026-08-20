@@ -839,3 +839,17 @@
   - 既有 `TestA2A_SendTask_Success/MultiRound_Continuity/InvalidRequest` 全 PASS 无回归。
 - 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test -count=1 ./...` 全量绿（37 包全 ok，含 repo 纯 Go SQLite）；前端无改动。
 - Commit b77ba9e（feat(M8-01)）已推 origin/main。下一步：M8-02（Docker 执行后端：真·文件系统沙箱，Executor 接口可切换）；M7.5-04 待用户提供集群后恢复。
+
+### 2026-08-20 10:55 | M8-02 | ✅ Docker 执行后端——真·文件系统沙箱，Executor 接口下 host/docker 可配置切换
+- **背景**：M8 能力深化第二项（依赖 M1-04 已完成）。此前 HostExecutor 仅靠 cwd 约束无法阻止命令内 cd/绝对路径逃逸，M8-02 补齐容器级隔离。
+- **executor 包（docker.go 新文件）**：
+  - `DockerExecutor`（实现 Executor 接口，走 docker CLI 不引 SDK、纯 Go 无 CGO）：每次 Run/RunCommand 起一次性容器 `docker run --rm --network none --read-only --cidfile <tmp> -v <workdir>:/workspace -w /workspace <image> sh -c <cmd>`——网络白名单（none=无网络，出网请求失败）、只读根文件系统（写 /etc /usr /bin 被拒）、目录隔离（命令看到的是容器根，非宿主机）；容器内命令非零退出为有效结果（与 HostExecutor 语义一致），超时经 cidfile 记录容器 id `docker rm -f` 清理防残留，`isDockerInfraError` 区分 daemon/镜像故障（125/126/127+特征短语）→ `ErrDockerUnavailable` 哨兵错误；
+  - `Backend` 枚举（host/docker）+ `NewBackendExecutor` 工厂（非法/空值回落 host，向后兼容）；`Check()` 探测可用性（`docker version`）；默认镜像 `alpine:3.20`、网络 `none`、只读根 `true`；Windows 盘符路径经 `dockerVolumePath` 转 `C:/...` 供 -v 挂载；runner 注入点（dockerRunner）支持测试离线注入 fake；
+  - 单测 9 例（fake runner 断言隔离参数拼装/argv 直传含空格中文/CLI 缺失报不可用/基础设施故障识别/非零退出不误判/超时清理 rm -f/Check/默认值/工厂分流）+ 真实 docker 集成测试 4 例（写 /etc 只读拒 / 网络 none 出网失败 / /workspace 挂载可见且容器根无宿主 marker / RunCommand argv 执行；无 docker 环境 t.Skip，CI runner 真跑）。
+- **装配点打通（EXECUTOR_BACKEND=host|docker 全局切换）**：
+  - config：`ExecutorBackend()` + `DockerOptions()` getter，env `EXECUTOR_BACKEND`（默认 host）/`DOCKER_IMAGE`/`DOCKER_NETWORK`/`DOCKER_READ_ONLY`/`DOCKER_BIN`/`DOCKER_TIMEOUT_SECONDS`（默认值复用 executor 包导出常量避免漂移）；
+  - codectool：`NewCodeActWithBackend`/`NewGitExecutorWithBackend`/`NewGitToolsWithBackend`/`NewCodeActWithGitBackend`（旧函数委托 host 默认，零调用点破坏）；docker 后端下危险命令策略（SafeExecutor）+ resolveSafePath 依然生效——容器是文件系统/网络隔离强保证、策略是第一道语义闸，二者叠加；
+  - agent/taskrun/gateway/main：Deps/GatewayConfig/BuildAgentFactory/ModelConfig 均加 Backend+Docker 透传；单代理根 Agent 工具（gateway prepareRun）与 team 模式 Coder 子代理、taskrun worker 全部走配置后端；main 启动时 docker 后端做 best-effort 探测（不可用打 [WARN] 不崩，工具真实调用时返回可读错误）；
+  - **边界（已记 LEARNINGS）**：平台自身 git 基础设施（worktree add/merge、workspace 自动 init 等操作宿主仓库结构）保留 BackendHost 不切容器；docker 后端下 Git 工具要求镜像内置 git（默认 alpine 不含，需 DOCKER_IMAGE 换含 git 镜像）；`.env.example` 补全 6 个新变量。
+- 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test -count=1 ./...` 33 包全 ok（含 repo 纯 Go SQLite 全量、新增 executor/tool/config 用例）；前端无改动。
+- Commit 00aae6c 已推 origin/main。下一步：首个 ○ = M8-03（多节点 taskrun：外部队列 + lease，突破 inprocess 单进程，依赖 M2-04）；M7.5-04 待用户提供集群后恢复。
