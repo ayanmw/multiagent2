@@ -143,6 +143,20 @@ type Config struct {
 	dockerReadOnly bool
 	dockerBin      string
 	dockerTimeout  time.Duration
+	// taskrun 运行后端（M8-03）：env TASKRUN_BACKEND = inprocess（默认，单进程，
+	// 向后兼容）| queue（多节点：外部队列 + lease，突破 inprocess 单进程限制）。
+	// queue 后端下每个副本共享同一 SQLite 队列文件（表 taskrun_queue），任务经
+	// 原子领取恰好被一个节点执行，节点崩溃由 lease 过期重拾恢复。
+	taskRunBackend string
+	// 外部队列 poller 轮询间隔（M8-03）：env TASKRUN_QUEUE_POLL_INTERVAL_MS，
+	// 默认 1000ms。越小取消/重拾越灵敏，越大越省数据库查询。
+	taskRunQueuePollInterval time.Duration
+	// 单次领取的 lease 租约时长（M8-03）：env TASKRUN_QUEUE_LEASE_SECONDS，默认
+	// 30s。长任务执行中每 Lease/2 续约一次；节点崩溃后任务在 lease 过期时被重拾。
+	taskRunQueueLease time.Duration
+	// 崩溃重拾上限（M8-03）：env TASKRUN_QUEUE_MAX_ATTEMPTS，默认 3。超过后任务
+	// 置 failed 不再执行（避免永远无法收敛的任务被反复重拾）。
+	taskRunQueueMaxAttempts int
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -160,6 +174,24 @@ const DefaultMaxPlanNudges = 3
 // （M4-05）。超过后标记 failed 不再续跑，避免永远无法收敛的 Loop 在每次重启时无限续跑。
 // 此处定义一份本地默认，避免 config 包反向依赖 api 包（api 已另有同名常量，二者互不冲突）。
 const DefaultRecoveryMaxAttempts = 3
+
+// taskrun 运行后端常量（M8-03）。
+const (
+	// TaskRunBackendInprocess 单进程（默认，向后兼容，行为同 M8-02 之前）。
+	TaskRunBackendInprocess = "inprocess"
+	// TaskRunBackendQueue 多节点外部队列后端（共享 SQLite 队列 + lease 重拾）。
+	TaskRunBackendQueue = "queue"
+)
+
+// taskrun 外部队列默认值（M8-03），与 QueueService 包内默认对齐。
+const (
+	// DefaultTaskRunQueuePollInterval 是 poller 轮询间隔默认值。
+	DefaultTaskRunQueuePollInterval = time.Second
+	// DefaultTaskRunQueueLease 是 lease 租约时长默认值。
+	DefaultTaskRunQueueLease = 30 * time.Second
+	// DefaultTaskRunQueueMaxAttempts 是崩溃重拾上限默认值。
+	DefaultTaskRunQueueMaxAttempts = 3
+)
 
 // 护栏熔断默认预算（M1-13）直接复用 codeagent 包定义，避免两处漂移：
 // 业务层默认以 codeagent.Default* 为准，config 仅做 env 注入入口。
@@ -480,6 +512,38 @@ func Load() *Config {
 		dts = 60
 	}
 	cfg.dockerTimeout = time.Duration(dts) * time.Second
+
+	// taskrun 运行后端（M8-03）：默认 inprocess（单进程，向后兼容）；
+	// queue 为多节点外部队列后端（需共享 SQLite 队列存储，见 main.go 装配）。
+	taskRunBackend := envOrDefault("TASKRUN_BACKEND", TaskRunBackendInprocess)
+	if taskRunBackend != TaskRunBackendInprocess && taskRunBackend != TaskRunBackendQueue {
+		log.Printf("[WARN] TASKRUN_BACKEND=%q 非法，使用默认 %q", taskRunBackend, TaskRunBackendInprocess)
+		taskRunBackend = TaskRunBackendInprocess
+	}
+	cfg.taskRunBackend = taskRunBackend
+	// 外部队列 poller 轮询间隔（毫秒）。
+	pollMS := envOrDefaultInt("TASKRUN_QUEUE_POLL_INTERVAL_MS", int(DefaultTaskRunQueuePollInterval/time.Millisecond))
+	if pollMS <= 0 {
+		log.Printf("[WARN] TASKRUN_QUEUE_POLL_INTERVAL_MS must be positive; using default %d",
+			int(DefaultTaskRunQueuePollInterval/time.Millisecond))
+		pollMS = int(DefaultTaskRunQueuePollInterval / time.Millisecond)
+	}
+	cfg.taskRunQueuePollInterval = time.Duration(pollMS) * time.Millisecond
+	// lease 租约时长（秒）。
+	leaseSec := envOrDefaultInt("TASKRUN_QUEUE_LEASE_SECONDS", int(DefaultTaskRunQueueLease/time.Second))
+	if leaseSec <= 0 {
+		log.Printf("[WARN] TASKRUN_QUEUE_LEASE_SECONDS must be positive; using default %d",
+			int(DefaultTaskRunQueueLease/time.Second))
+		leaseSec = int(DefaultTaskRunQueueLease / time.Second)
+	}
+	cfg.taskRunQueueLease = time.Duration(leaseSec) * time.Second
+	// 崩溃重拾上限。
+	maxAttempts := envOrDefaultInt("TASKRUN_QUEUE_MAX_ATTEMPTS", DefaultTaskRunQueueMaxAttempts)
+	if maxAttempts < 0 {
+		log.Printf("[WARN] TASKRUN_QUEUE_MAX_ATTEMPTS must be non-negative; using default %d", DefaultTaskRunQueueMaxAttempts)
+		maxAttempts = DefaultTaskRunQueueMaxAttempts
+	}
+	cfg.taskRunQueueMaxAttempts = maxAttempts
 
 	return cfg
 }
@@ -833,6 +897,46 @@ func (c *Config) ExecutorMode() executor.Mode {
 		return executor.ModeUnattended
 	}
 	return executor.ModeInteractive
+}
+
+// TaskRunBackend returns the configured taskrun backend (M8-03):
+// TaskRunBackendInprocess (default, backward compatible) or TaskRunBackendQueue
+// (multi-node external queue + lease).
+func (c *Config) TaskRunBackend() string {
+	if c == nil || c.taskRunBackend == "" {
+		return TaskRunBackendInprocess
+	}
+	return c.taskRunBackend
+}
+
+// TaskRunQueuePollInterval returns the external-queue poller interval (M8-03).
+// Falls back to 1s when unset or invalid.
+func (c *Config) TaskRunQueuePollInterval() time.Duration {
+	if c == nil || c.taskRunQueuePollInterval <= 0 {
+		return DefaultTaskRunQueuePollInterval
+	}
+	return c.taskRunQueuePollInterval
+}
+
+// TaskRunQueueLease returns the lease duration for a claimed taskrun (M8-03).
+// Falls back to 30s when unset or invalid. Long tasks renew the lease every
+// Lease/2 while executing; after a node crash the task is requeued once the
+// lease expires.
+func (c *Config) TaskRunQueueLease() time.Duration {
+	if c == nil || c.taskRunQueueLease <= 0 {
+		return DefaultTaskRunQueueLease
+	}
+	return c.taskRunQueueLease
+}
+
+// TaskRunQueueMaxAttempts returns the crash-requeue budget (M8-03). Falls back
+// to 3 when unset or non-positive. Runs that keep crashing past this budget are
+// marked failed so a never-converging task is not requeued forever.
+func (c *Config) TaskRunQueueMaxAttempts() int {
+	if c == nil || c.taskRunQueueMaxAttempts <= 0 {
+		return DefaultTaskRunQueueMaxAttempts
+	}
+	return c.taskRunQueueMaxAttempts
 }
 
 func envOrDefault(key, fallback string) string {

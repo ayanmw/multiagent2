@@ -280,3 +280,64 @@ func TestDockerOptions_EnvDriven(t *testing.T) {
 		t.Errorf("Timeout = %v, want 120s", opts.Timeout)
 	}
 }
+
+// TestTaskRunBackend_Default 验收 M8-03：TASKRUN_BACKEND 默认 inprocess（向后兼容），
+// queue 可切换，非法值回落 inprocess。
+func TestTaskRunBackend_Default(t *testing.T) {
+	var c Config
+	if got := c.TaskRunBackend(); got != TaskRunBackendInprocess {
+		t.Errorf("零值 TaskRunBackend() = %q, want %q", got, TaskRunBackendInprocess)
+	}
+}
+
+func TestTaskRunBackend_EnvDriven(t *testing.T) {
+	t.Run("default_inprocess", func(t *testing.T) {
+		t.Setenv("TASKRUN_BACKEND", "")
+		if got := Load().TaskRunBackend(); got != TaskRunBackendInprocess {
+			t.Fatalf("TASKRUN_BACKEND 未设置时应默认 inprocess, got %q", got)
+		}
+	})
+	t.Run("queue", func(t *testing.T) {
+		t.Setenv("TASKRUN_BACKEND", "queue")
+		if got := Load().TaskRunBackend(); got != TaskRunBackendQueue {
+			t.Fatalf("TASKRUN_BACKEND=queue 应返回 %q, got %q", TaskRunBackendQueue, got)
+		}
+	})
+	t.Run("invalid_falls_back_inprocess", func(t *testing.T) {
+		t.Setenv("TASKRUN_BACKEND", "redis")
+		if got := Load().TaskRunBackend(); got != TaskRunBackendInprocess {
+			t.Fatalf("非法 TASKRUN_BACKEND 应回落 inprocess, got %q", got)
+		}
+	})
+}
+
+// TestTaskRunQueueOptions_Defaults 验收 M8-03：外部队列参数默认值
+//（poll=1s / lease=30s / maxAttempts=3）。
+func TestTaskRunQueueOptions_Defaults(t *testing.T) {
+	var c Config
+	if got := c.TaskRunQueuePollInterval(); got != DefaultTaskRunQueuePollInterval {
+		t.Errorf("TaskRunQueuePollInterval() = %v, want %v", got, DefaultTaskRunQueuePollInterval)
+	}
+	if got := c.TaskRunQueueLease(); got != DefaultTaskRunQueueLease {
+		t.Errorf("TaskRunQueueLease() = %v, want %v", got, DefaultTaskRunQueueLease)
+	}
+	if got := c.TaskRunQueueMaxAttempts(); got != DefaultTaskRunQueueMaxAttempts {
+		t.Errorf("TaskRunQueueMaxAttempts() = %d, want %d", got, DefaultTaskRunQueueMaxAttempts)
+	}
+}
+
+func TestTaskRunQueueOptions_EnvDriven(t *testing.T) {
+	t.Setenv("TASKRUN_QUEUE_POLL_INTERVAL_MS", "250")
+	t.Setenv("TASKRUN_QUEUE_LEASE_SECONDS", "5")
+	t.Setenv("TASKRUN_QUEUE_MAX_ATTEMPTS", "7")
+	cfg := Load()
+	if got := cfg.TaskRunQueuePollInterval(); got != 250*time.Millisecond {
+		t.Errorf("TaskRunQueuePollInterval() = %v, want 250ms", got)
+	}
+	if got := cfg.TaskRunQueueLease(); got != 5*time.Second {
+		t.Errorf("TaskRunQueueLease() = %v, want 5s", got)
+	}
+	if got := cfg.TaskRunQueueMaxAttempts(); got != 7 {
+		t.Errorf("TaskRunQueueMaxAttempts() = %d, want 7", got)
+	}
+}

@@ -853,3 +853,21 @@
   - **边界（已记 LEARNINGS）**：平台自身 git 基础设施（worktree add/merge、workspace 自动 init 等操作宿主仓库结构）保留 BackendHost 不切容器；docker 后端下 Git 工具要求镜像内置 git（默认 alpine 不含，需 DOCKER_IMAGE 换含 git 镜像）；`.env.example` 补全 6 个新变量。
 - 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test -count=1 ./...` 33 包全 ok（含 repo 纯 Go SQLite 全量、新增 executor/tool/config 用例）；前端无改动。
 - Commit 00aae6c 已推 origin/main。下一步：首个 ○ = M8-03（多节点 taskrun：外部队列 + lease，突破 inprocess 单进程，依赖 M2-04）；M7.5-04 待用户提供集群后恢复。
+
+### 2026-08-20 11:55 | M8-03 | ✅ 多节点 taskrun——外部队列（SQLite）+ lease 原子领取，突破 inprocess 单进程
+- **背景**：M8 能力深化第三项（依赖 M2-04 已完成）。框架 inprocess.Service 的 run 记录与执行 goroutine 都在单进程内，多副本部署各副本互不可见；M8-03 把 run 记录外置到共享队列，借「原子领取 + lease 租约」实现多节点执行与崩溃恢复。
+- **新包 `internal/taskrun/queue/`（纯 Go 无 CGO）**：
+  - `Queue` 接口（Enqueue/ClaimNext/UpdateStatusIf/RequeueExpired/Get/List）+ `Row`（Run + WorkerID/LeaseExpiresAt/Attempts 分布式状态机字段）；
+  - `SQLiteQueue`：独立连接池（`_txlock=immediate` 立即写锁 + WAL + busy_timeout 10s），表 `taskrun_queue`（run_json JSON 列 + status/worker_id/lease_expires_at/attempts 索引列）；ClaimNext 事务内「SELECT id(FIFO) → UPDATE WHERE id=? AND status='queued'（原子领取，并发节点匹配 0 行）→ 精确读回」；RequeueExpired 三分流——canceling→canceled（不重试）、running+lease 过期+attempts<max→queued（重拾+1）、超限→failed；**status 列为状态机权威**（scanRow 以列为准，run_json 内 Status 可能滞后）；
+  - `MemoryQueue`：同接口内存实现（单测/轻量场景，多节点模拟=共享同一实例）；
+  - 单测 5 例：CRUD/两连接并发 ClaimNext 20 任务无重复领取（原子性）/UpdateStatusIf 条件更新/RequeueExpired 四态分流/内存队列并发。
+- **`internal/taskrun/queue_service.go`（QueueService 实现 taskrunruntime.Controller）**：
+  - Spawn：校验 + 入队（queued）+ **确定性生成并持久化 ChildSessionID/RequestID/Timeout**（Run.Metadata 保留键 `taskrun.queue.timeout_ns`，跨节点可重建执行上下文；不依赖 SpawnRequest.RunContext 本地闭包）；
+  - poller（每节点一 goroutine，PollInterval 轮询）：RequeueExpired 重拾 → ClaimNext 原子领取 → 每任务一 goroutine 执行（与 inprocess 对齐）；`wake` channel 使 Spawn 后立即领取；
+  - 执行中：leaseKeepAlive 每 Lease/2 续约（续约失败→取消本节点执行，防双跑）+ cancelWatcher 轮询检测跨节点取消（canceling→cancel ctx）；终态乐观写「running→terminal 优先，canceling→canceled 兜底，其余跳过」防并发覆盖；worker 身份从 Run 持久化字段重建（WithWorkerUserID/ParentSessionID 注入，与 WithWorkerIdentity 约定一致）；
+  - Cancel：queued→直接 canceled；running→canceling（本节点执行立即取消，其他节点 watchdog 兜底）；Wait 轮询（跨节点有效）；
+  - `NewQueueController` 工厂（worker Runner + 持久化 session + Observer worktree 钩子）；`queueRunnerRun` 默认执行函数（runner.Run + 事件流累加，对齐 inprocess.runChild）；
+  - **测试 5 例（关键验收）**：两节点共享同一 SQLite 文件并发扇出 12 任务全部 completed、每任务恰好执行 1 次、两节点均有负载、observer 收到全部终态通知；节点 A 领取后「崩溃消失」（不续约/不写终态/poller 不启动）→ lease 过期后节点 B 重拾执行成功（Result=ok-b 且恰 1 次）；反复崩溃重拾耗尽→failed；Cancel running/queued 语义；Wait ctx 超时。**5 连跑全绿（无 flaky）**。
+- **config + main 装配**：`TASKRUN_BACKEND=inprocess|queue`（默认 inprocess 向后兼容）+ `TASKRUN_QUEUE_POLL_INTERVAL_MS`（默认 1000）/`TASKRUN_QUEUE_LEASE_SECONDS`（默认 30）/`TASKRUN_QUEUE_MAX_ATTEMPTS`（默认 3）；main.go 按后端分支装配（queue 用 `queue.NewSQLiteQueueFile(cfg.DBPath, ...)` + `NewQueueController`，复用同一 SQLite 文件即多节点共享）；`.env.example` 补 4 变量；config 新增 5 例测试（默认值/非法回落/env 覆盖）。
+- 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test -count=1 ./...` 34 包全 ok（含 repo 纯 Go SQLite、新增 queue/queue_service/config 用例，多节点测试 5 连跑稳定）；前端无改动。
+- Commit 待提交（feat(M8-03)）。下一步：首个 ○ = M8-04（Knowledge RAG 升级 PG/pgvector，依赖 M5-02）；M7.5-04 待用户提供集群后恢复。

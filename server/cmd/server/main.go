@@ -40,6 +40,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/scheduler"
 	"github.com/ayanmw/multiagent2/server/internal/sessionstore"
 	"github.com/ayanmw/multiagent2/server/internal/taskrun"
+	"github.com/ayanmw/multiagent2/server/internal/taskrun/queue"
 	"github.com/ayanmw/multiagent2/server/internal/toolsearch"
 	"github.com/ayanmw/multiagent2/server/internal/worktree"
 	"github.com/gin-gonic/gin"
@@ -545,16 +546,47 @@ func main() {
 		},
 	}
 	workerFactory := taskrun.BuildAgentFactory(cfg.GuardrailConfig(), workerResolver, executor.ModeUnattended, cfg.ExecutorBackend(), cfg.DockerOptions())
-	rawTaskRunController, ctrlErr := taskrun.NewController(
-		context.Background(),
-		codeagent.RoleCoder,
-		workerFactory,
-		runStore,
-		taskRunSession,
-		workerResolver.Worktree, // inprocess.Observer：子任务终态 merge 回主分支 + 清理
-	)
-	if ctrlErr != nil {
-		log.Fatalf("Failed to initialize taskrun controller: %v", ctrlErr)
+	// M8-03：taskrun 运行后端二选一——
+	//   - inprocess（默认）：框架 inprocess.Service（run 记录 FileStore，单进程执行，
+	//     向后兼容，行为同 M8-02 之前）；
+	//   - queue（多节点）：外部队列（SQLite 表 taskrun_queue）+ lease，原子领取保证
+	//     每个任务恰好被一个节点执行，节点崩溃由 lease 过期重拾恢复——多个副本共享
+	//     同一 DB 文件即可突破 inprocess 单进程限制（M8-03 验收：两节点并发收敛 + 崩溃重拾）。
+	var rawTaskRunController taskrunruntime.Controller
+	var ctrlErr error
+	if cfg.TaskRunBackend() == config.TaskRunBackendQueue {
+		taskQueue, qerr := queue.NewSQLiteQueueFile(cfg.DBPath, queue.DefaultTableName)
+		if qerr != nil {
+			log.Fatalf("Failed to initialize taskrun queue: %v", qerr)
+		}
+		rawTaskRunController, ctrlErr = taskrun.NewQueueController(
+			context.Background(),
+			codeagent.RoleCoder,
+			workerFactory,
+			taskQueue,
+			taskRunSession,
+			workerResolver.Worktree, // taskrunruntime.Observer：子任务终态 merge 回主分支 + 清理
+			taskrun.WithQueuePollInterval(cfg.TaskRunQueuePollInterval()),
+			taskrun.WithQueueLease(cfg.TaskRunQueueLease()),
+			taskrun.WithQueueMaxAttempts(cfg.TaskRunQueueMaxAttempts()),
+		)
+		if ctrlErr != nil {
+			log.Fatalf("Failed to initialize taskrun queue controller: %v", ctrlErr)
+		}
+		log.Printf("[INFO] TASKRUN_BACKEND=queue：多节点外部队列模式（DB=%s poll=%v lease=%v maxAttempts=%d）",
+			cfg.DBPath, cfg.TaskRunQueuePollInterval(), cfg.TaskRunQueueLease(), cfg.TaskRunQueueMaxAttempts())
+	} else {
+		rawTaskRunController, ctrlErr = taskrun.NewController(
+			context.Background(),
+			codeagent.RoleCoder,
+			workerFactory,
+			runStore,
+			taskRunSession,
+			workerResolver.Worktree, // inprocess.Observer：子任务终态 merge 回主分支 + 清理
+		)
+		if ctrlErr != nil {
+			log.Fatalf("Failed to initialize taskrun controller: %v", ctrlErr)
+		}
 	}
 	// M7.5-02：包装 Controller 透传 worker 用户身份——v1.10.0 下 worker 的
 	// AgentFactory 在 selectAgent 阶段拿不到框架 invocation（先 selectAgent 后
