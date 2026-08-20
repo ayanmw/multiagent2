@@ -117,6 +117,10 @@ func CreateMCPServerHandler(db *gorm.DB, encKey []byte) gin.HandlerFunc {
 		}
 		if req.Enabled != nil {
 			m.Enabled = *req.Enabled
+		} else {
+			// 缺省启用（对齐 DB default:true 的既有语义；显式化以配合 repo 层
+			// GORM 零值 bool 校正——不显式给 true 会被校正成不启用）。
+			m.Enabled = true
 		}
 		if err := m.Validate(); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

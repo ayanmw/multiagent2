@@ -43,6 +43,16 @@ import {
   NListItem,
 } from 'naive-ui/es/list'
 import {
+  NDrawer,
+  NDrawerContent,
+} from 'naive-ui/es/drawer'
+import {
+  NEmpty,
+} from 'naive-ui/es/empty'
+import {
+  NSpin,
+} from 'naive-ui/es/spin'
+import {
   useMessage,
 } from 'naive-ui/es/message'
 import {
@@ -51,10 +61,13 @@ import {
   updateMCPServer,
   deleteMCPServer,
   testMCPServer,
+  listMCPTemplates,
+  importMCPTemplate,
   type MCPServer,
   type MCPServerPayload,
   type MCPTransport,
   type MCPTestResult,
+  type MCPTemplate,
 } from '@/api/mcp'
 
 const message = useMessage()
@@ -217,6 +230,85 @@ async function handleTest(s: MCPServer) {
   }
 }
 
+// ---------- 连接器市场（M8-08）：预置 MCP 模板 + 一键导入 ----------
+const showMarket = ref(false)
+const templates = ref<MCPTemplate[]>([])
+const loadingTemplates = ref(false)
+
+async function openMarket() {
+  showMarket.value = true
+  if (templates.value.length) return
+  loadingTemplates.value = true
+  try {
+    templates.value = await listMCPTemplates()
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    loadingTemplates.value = false
+  }
+}
+
+// 导入弹窗状态
+const showImport = ref(false)
+const importingTemplate = ref<MCPTemplate | null>(null)
+const importing = ref(false)
+const importForm = reactive({
+  name: '',
+  enabled: true,
+  secrets: {} as Record<string, string>,
+})
+
+function openImport(tmpl: MCPTemplate) {
+  importingTemplate.value = tmpl
+  importForm.name = tmpl.default_name
+  importForm.enabled = tmpl.default_enabled
+  importForm.secrets = {}
+  showImport.value = true
+}
+
+// 密钥字段名转可读标签（GITHUB_TOKEN → GITHUB TOKEN 的展示优化）。
+function secretLabel(field: string) {
+  return field.replace(/_/g, ' ')
+}
+
+function categoryTagType(cat: string) {
+  switch (cat) {
+    case '代码托管':
+      return 'info'
+    case '团队协作':
+      return 'warning'
+    case '数据与存储':
+      return 'error'
+    default:
+      return 'success'
+  }
+}
+
+async function submitImport() {
+  const tmpl = importingTemplate.value
+  if (!tmpl) return
+  if (!importForm.name.trim()) {
+    message.warning('请填写配置名称')
+    return
+  }
+  importing.value = true
+  try {
+    // 密钥值统一走 env 提交（后端 env ∪ headers 合并查找占位符，M8-08）。
+    await importMCPTemplate(tmpl.id, {
+      name: importForm.name.trim(),
+      enabled: importForm.enabled,
+      env: importForm.secrets,
+    })
+    message.success(`已导入「${importForm.name.trim()}」，可在列表中测试连接`)
+    showImport.value = false
+    await load()
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    importing.value = false
+  }
+}
+
 const transportOptions = [
   { label: 'stdio（本地进程）', value: 'stdio' },
   { label: 'sse（Server-Sent Events）', value: 'sse' },
@@ -315,7 +407,10 @@ const columns: DataTableColumns<MCPServer> = [
           配置 MCP 服务器（仅管理面 + 校验，工具由对话按需装载）；env / headers 加密存储，不回显明文
         </n-text>
       </div>
-      <n-button type="primary" class="ml-auto" @click="openCreate">新建 MCP</n-button>
+      <n-space class="ml-auto" :size="8">
+        <n-button secondary type="primary" @click="openMarket">连接器市场</n-button>
+        <n-button type="primary" @click="openCreate">新建 MCP</n-button>
+      </n-space>
     </div>
 
     <n-data-table
@@ -414,6 +509,86 @@ const columns: DataTableColumns<MCPServer> = [
           </n-list>
           <n-text v-else depth="3" class="text-sm">该服务器连接成功，但未暴露任何工具。</n-text>
         </template>
+      </template>
+    </n-modal>
+
+    <!-- M8-08：连接器市场（预置 MCP 模板，一键导入） -->
+    <n-drawer v-model:show="showMarket" :width="720">
+      <n-drawer-content title="连接器市场" closable>
+        <template #header-extra>
+          <n-text depth="3" class="text-xs">
+            预置常用 MCP 模板，一键导入为你的配置；密钥加密落库，不回调明文
+          </n-text>
+        </template>
+        <n-spin :show="loadingTemplates">
+          <n-empty
+            v-if="!loadingTemplates && !templates.length"
+            description="暂无可用模板"
+            class="py-12"
+          />
+          <n-space vertical :size="12">
+            <n-card v-for="tmpl in templates" :key="tmpl.id" size="small">
+              <div class="flex items-center gap-2 mb-1">
+                <n-tag size="small" :type="categoryTagType(tmpl.category)" :bordered="false">
+                  {{ tmpl.category }}
+                </n-tag>
+                <span class="font-semibold">{{ tmpl.name }}</span>
+                <n-tag size="small" :bordered="false" class="font-mono">{{ tmpl.transport }}</n-tag>
+                <n-button size="small" type="primary" class="ml-auto" @click="openImport(tmpl)">
+                  一键导入
+                </n-button>
+              </div>
+              <n-text depth="3" class="text-sm block">{{ tmpl.description }}</n-text>
+              <div class="mt-2 flex items-center gap-1 flex-wrap">
+                <template v-if="tmpl.secret_fields.length">
+                  <n-tag
+                    v-for="f in tmpl.secret_fields"
+                    :key="f"
+                    size="small"
+                    type="warning"
+                    :bordered="false"
+                  >
+                    需提供 {{ secretLabel(f) }}
+                  </n-tag>
+                </template>
+                <n-text v-else depth="3" class="text-xs">无需密钥，导入即用</n-text>
+              </div>
+            </n-card>
+          </n-space>
+        </n-spin>
+      </n-drawer-content>
+    </n-drawer>
+
+    <!-- M8-08：模板导入表单 -->
+    <n-modal
+      v-model:show="showImport"
+      :title="`导入连接器 · ${importingTemplate?.name ?? ''}`"
+      preset="card"
+      style="width: 480px; max-width: 94vw"
+    >
+      <n-form label-placement="top">
+        <n-form-item label="配置名称" required>
+          <n-input v-model:value="importForm.name" placeholder="导入后的配置名称" />
+        </n-form-item>
+        <template v-for="f in importingTemplate?.secret_fields ?? []" :key="f">
+          <n-form-item :label="secretLabel(f)" required>
+            <n-input
+              v-model:value="importForm.secrets[f]"
+              type="password"
+              show-password-on="click"
+              :placeholder="`请输入 ${secretLabel(f)}（加密存储）`"
+            />
+          </n-form-item>
+        </template>
+        <n-form-item label="启用">
+          <n-switch v-model:value="importForm.enabled" />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showImport = false">取消</n-button>
+          <n-button type="primary" :loading="importing" @click="submitImport">导入</n-button>
+        </n-space>
       </template>
     </n-modal>
   </n-card>

@@ -2,7 +2,9 @@ package repo
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ayanmw/multiagent2/server/internal/config"
 	"github.com/ayanmw/multiagent2/server/internal/model"
@@ -140,8 +142,7 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 
 // TestRunMigrations_LegacySessionIndexDropped 验证 0002 挂接正确：
 // 遗留的单列 session_key 唯一索引在迁移中被删除（模拟未应用 0002 的旧库）。
-func TestRunMigrations_LegacySessionIndexDropped(t *testing.T) {
-	db := newMigrateTestDB(t)
+func TestRunMigrations_LegacySessionIndexDropped(t *testing.T) {	db := newMigrateTestDB(t)
 	mc := MigrationContext{EncryptionKey: testEncKey()}
 	if _, err := RunMigrations(db, mc); err != nil {
 		t.Fatalf("RunMigrations: %v", err)
@@ -307,5 +308,74 @@ func TestRunMigrations_VersionTableIsSourceOfTruth(t *testing.T) {
 	}
 	if len(pending) != 0 {
 		t.Fatalf("全量迁移后不应有待应用版本, got %v", pending)
+	}
+}
+
+// TestRunMigrations_MCPCompositeNameUniqueRebuilt 验证 0013 挂接正确（M8-08）：
+// 模拟「M2-02 时代的旧库」——idx_user_mcp 是单列 name 唯一索引——重跑迁移后
+// 索引应重建为 (user_id, name) 复合，且不同用户可插入同名 MCP。
+func TestRunMigrations_MCPCompositeNameUniqueRebuilt(t *testing.T) {
+	db := newMigrateTestDB(t)
+	mc := MigrationContext{EncryptionKey: testEncKey()}
+	if _, err := RunMigrations(db, mc); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	// 造出「旧库」：把复合索引手工改回单列 name 唯一（M2-02 时代形态），
+	// 并抹掉 0013 版本记录，模拟「已跑过 0012、未跑 0013」的升级现场。
+	if err := db.Exec("DROP INDEX idx_user_mcp").Error; err != nil {
+		t.Fatalf("drop composite index: %v", err)
+	}
+	if err := db.Exec("CREATE UNIQUE INDEX idx_user_mcp ON mcp_servers(name)").Error; err != nil {
+		t.Fatalf("create legacy index: %v", err)
+	}
+	if err := db.Where("version = ?", "0013").Delete(&SchemaMigration{}).Error; err != nil {
+		t.Fatalf("delete version row: %v", err)
+	}
+
+	applied, err := RunMigrations(db, mc)
+	if err != nil {
+		t.Fatalf("re-run: %v", err)
+	}
+	if len(applied) != 1 || applied[0] != "0013_fix_mcp_servers_composite_unique" {
+		t.Fatalf("应只补跑 0013, got %v", applied)
+	}
+
+	// 索引已是复合（DDL 含 user_id）。
+	var ddl string
+	if err := db.Raw(`SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_user_mcp'`).
+		Scan(&ddl).Error; err != nil {
+		t.Fatalf("query index ddl: %v", err)
+	}
+	if !strings.Contains(ddl, "user_id") || !strings.Contains(ddl, "name") {
+		t.Fatalf("idx_user_mcp 应为 (user_id, name) 复合, ddl=%s", ddl)
+	}
+
+	// 行为验收：两个用户可插入同名 MCP（复合唯一按用户隔离）。
+	now := time.Now()
+	for _, uid := range []uint{41, 42} {
+		m := &model.MCPServer{
+			Model:     gorm.Model{CreatedAt: now, UpdatedAt: now},
+			UserID:    uid,
+			Name:      "github",
+			Transport: model.MCPTransportStreamable,
+			URL:       "https://api.githubcopilot.com/mcp/",
+			Enabled:   true,
+		}
+		if err := CreateMCPServer(db, m, testEncKey()); err != nil {
+			t.Fatalf("用户 %d 建同名 MCP 应成功（复合唯一按用户隔离）: %v", uid, err)
+		}
+	}
+	// 同一用户再次同名 → 冲突。
+	dup := &model.MCPServer{
+		Model:     gorm.Model{CreatedAt: now, UpdatedAt: now},
+		UserID:    41,
+		Name:      "github",
+		Transport: model.MCPTransportStreamable,
+		URL:       "https://example.com/mcp",
+		Enabled:   true,
+	}
+	if err := CreateMCPServer(db, dup, testEncKey()); err == nil {
+		t.Fatal("同用户同名 MCP 应冲突")
 	}
 }

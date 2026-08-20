@@ -56,8 +56,11 @@ func ParseMCPTransport(s string) (MCPTransport, bool) {
 // 两者的 json tag 均为 `-`，即便整行被误序列化也不会泄漏明文。
 type MCPServer struct {
 	gorm.Model
-	UserID    uint         `gorm:"not null;index" json:"user_id"`
-	Name      string       `gorm:"size:128;not null;uniqueIndex:idx_user_mcp,priority:1" json:"name"`
+	// (user_id, name) 复合唯一：不同用户可建同名 MCP（连接器市场每用户都要能
+	// 导入同名模板，如 github）。M8-08 修复——此前 UserID 只有 index 声明，
+	// idx_user_mcp 实际是单列 name 唯一，跨用户同名会误冲突。
+	UserID    uint         `gorm:"not null;uniqueIndex:idx_user_mcp,priority:1" json:"user_id"`
+	Name      string       `gorm:"size:128;not null;uniqueIndex:idx_user_mcp,priority:2" json:"name"`
 	Transport MCPTransport `gorm:"size:32;not null" json:"transport"`
 	Command   string       `gorm:"size:256" json:"command"`
 	Args      []string     `gorm:"serializer:json" json:"args"`

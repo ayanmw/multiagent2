@@ -212,6 +212,16 @@ func Migrations() []Migration {
 				return db.AutoMigrate(&model.IMBinding{})
 			},
 		},
+		{
+			Version: "0013",
+			Name:    "fix_mcp_servers_composite_unique",
+			// M8-08：修复 M2-02 遗留缺陷——idx_user_mcp 原为单列 name 唯一，
+			// 不同用户无法建同名 MCP（连接器市场致命缺陷）。模型已补 UserID 的
+			// uniqueIndex 声明，本迁移把旧库的单列索引重建为 (user_id, name) 复合。
+			Up: func(db *gorm.DB, _ MigrationContext) error {
+				return migrateMCPCompositeNameUnique(db)
+			},
+		},
 	}
 }
 

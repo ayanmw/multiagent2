@@ -114,6 +114,40 @@ func migrateCompositeSessionKey(db *gorm.DB) error {
 	return nil
 }
 
+// migrateMCPCompositeNameUnique 把 mcp_servers 上遗留的「单列 name 唯一索引」
+// 升级为复合唯一索引 (user_id, name)（M8-08）。
+//
+// 背景：M2-02 的模型只在 Name 上声明 `uniqueIndex:idx_user_mcp,priority:1`，
+// UserID 仅 `index`，导致 idx_user_mcp 实际是单列 name 唯一——不同用户无法建
+// 同名 MCP，直接破坏连接器市场「每用户导入同名模板」的验收（实测 UNIQUE
+// constraint failed）。修复模型后，已有库的旧索引需手动重建（AutoMigrate 只认
+// 索引名、不比较列定义，同名索引存在即跳过）。
+//
+// 安全性：旧库 name 全局唯一，不存在跨用户同名数据，DROP 单列索引 → 建复合
+// 索引无冲突。幂等：索引已是复合（含 user_id）或无索引时为 no-op。
+func migrateMCPCompositeNameUnique(db *gorm.DB) error {
+	if !db.Migrator().HasTable("mcp_servers") {
+		return nil
+	}
+	var ddl string
+	if err := db.Raw(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_user_mcp'`).
+		Scan(&ddl).Error; err != nil {
+		return err
+	}
+	if ddl == "" || strings.Contains(ddl, "user_id") {
+		return nil // 无索引或已是复合 → no-op
+	}
+	if err := db.Exec("DROP INDEX IF EXISTS idx_user_mcp").Error; err != nil {
+		return err
+	}
+	// 与 GORM 模型生成的列序一致（user_id 在前，利于按用户过滤）。
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_mcp ON mcp_servers (user_id, name)").Error; err != nil {
+		return err
+	}
+	log.Printf("[DB] Rebuilt idx_user_mcp as composite unique (user_id, name)")
+	return nil
+}
+
 // legacyMCPSecretRow 承载一行待迁移的 MCP 配置（遗留明文 + 现有密文）。
 type legacyMCPSecretRow struct {
 	ID         uint   `gorm:"column:id"`

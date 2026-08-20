@@ -86,3 +86,42 @@ export async function testMCPServer(id: number): Promise<MCPTestResult> {
   return request<MCPTestResult>(`/mcp/${id}/test`, { method: 'POST' })
 }
 
+// ---------- 连接器市场（M8-08）：预置 MCP 模板 + 一键导入 ----------
+
+export interface MCPTemplate {
+  id: string
+  name: string
+  category: string
+  description: string
+  transport: MCPTransport
+  command: string
+  args: string[]
+  url: string
+  /** 需要用户提供的密钥/参数名（导入表单据此渲染输入框） */
+  secret_fields: string[]
+  default_name: string
+  default_enabled: boolean
+}
+
+export interface ImportTemplatePayload {
+  /** 覆盖配置名（不传用模板默认名） */
+  name?: string
+  enabled?: boolean
+  description?: string
+  /** 占位符实际值（键名即 secret_fields，值加密落库） */
+  env?: Record<string, string>
+  headers?: Record<string, string>
+}
+
+export async function listMCPTemplates(): Promise<MCPTemplate[]> {
+  const data = await request<{ templates: MCPTemplate[]; total: number }>('/mcp/templates')
+  return data.templates ?? []
+}
+
+export async function importMCPTemplate(
+  id: string,
+  payload: ImportTemplatePayload,
+): Promise<MCPServer> {
+  return request<MCPServer>(`/mcp/templates/${id}/import`, { method: 'POST', body: payload })
+}
+

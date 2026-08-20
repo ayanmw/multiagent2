@@ -17,11 +17,26 @@ var ErrMCPServerNotFound = errors.New("mcp server not found")
 // encKey 为 32 字节 AES-256 主密钥（config.EncryptionKey，与 Provider api_key_enc 同源）。
 
 // CreateMCPServer 持久化一个新的 MCP 服务器配置（env/headers 加密后落库）。
+//
+// 注意 GORM 陷阱（M8-08 实测）：Enabled 带 `default:true` 标签，Create 时若字段
+// 为零值（false），GORM 会省略该列让 DB 填默认值并把默认值**回填结构体**——
+// `enabled:false` 会被悄悄置回 true。故按 Create 前的期望值显式校正一次，
+// 保证语义精确（true 不需要：DB 默认 true 与显式 true 等价）。
 func CreateMCPServer(db *gorm.DB, m *model.MCPServer, encKey []byte) error {
 	if err := m.SealSecrets(encKey); err != nil {
 		return err
 	}
-	return db.Create(m).Error
+	wantEnabled := m.Enabled
+	if err := db.Create(m).Error; err != nil {
+		return err
+	}
+	if !wantEnabled {
+		if err := db.Model(m).Update("enabled", false).Error; err != nil {
+			return err
+		}
+		m.Enabled = false
+	}
+	return nil
 }
 
 // ListMCPServers 返回某用户归属的全部 MCP 服务器（按创建时间倒序，已解密敏感字段）。

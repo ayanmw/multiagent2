@@ -170,6 +170,10 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// M3-07：env/headers 以 AES-256-GCM 加密落库，故各 handler 需注入 cfg.EncryptionKey。
 		protected.GET("/mcp", middleware.RequirePermission(db.DB, "mcp", "read"), api.ListMCPServersHandler(db.DB, cfg.EncryptionKey))
 		protected.POST("/mcp", middleware.RequirePermission(db.DB, "mcp", "write"), api.CreateMCPServerHandler(db.DB, cfg.EncryptionKey))
+		// 连接器市场（M8-08）：预置 MCP 模板列表 + 一键导入建配置。
+		// 注意：静态段 /mcp/templates 必须先于 /mcp/:id 注册，避免被参数路由吞掉。
+		protected.GET("/mcp/templates", middleware.RequirePermission(db.DB, "mcp", "read"), api.ListMCPTemplatesHandler())
+		protected.POST("/mcp/templates/:id/import", middleware.RequirePermission(db.DB, "mcp", "write"), api.ImportMCPTemplateHandler(db.DB, cfg.EncryptionKey))
 		protected.GET("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "read"), api.GetMCPServerHandler(db.DB, cfg.EncryptionKey))
 		protected.PUT("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.UpdateMCPServerHandler(db.DB, cfg.EncryptionKey))
 		protected.DELETE("/mcp/:id", middleware.RequirePermission(db.DB, "mcp", "write"), api.DeleteMCPServerHandler(db.DB, cfg.EncryptionKey))

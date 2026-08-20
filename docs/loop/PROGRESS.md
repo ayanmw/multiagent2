@@ -907,4 +907,17 @@
   - 文档：`docs/im-channel.md`（三平台接入步骤/绑定 API/行为约定/测试说明）+ `.env.example` 补 6 变量。
 - 测试：im 包 15 例（三平台 Parse/Verify/出站 payload/HTTPSender httptest 真跑）+ api 集成 7 例（绑定 CRUD owner 隔离 + 409/403、webhook 全链路触发+回发、未绑定指引、签名 401/有效通过、非法平台 400、非文本 400）+ config 2 例；CGO_ENABLED=0 build/vet 全绿、go test ./... 35 包全 ok。
 - 踩坑（已记 LEARNINGS）：再次踩 heredoc `cat >>` 追加损坏文件（config_test.go 被写坏头部）——已 `git checkout` 恢复并改用 Edit 工具追加，**追加文档一律用 Edit 工具**。
-- Commit 待提交。下一步：首个 ○ = M8-08（连接器市场：预置 GitHub/GitLab/Slack/Jira 等 MCP 模板）；M7.5-04 待用户提供集群后恢复。
+- Commit 14bc39d 已推 origin/main。下一步：首个 ○ = M8-08（连接器市场：预置 GitHub/GitLab/Slack/Jira 等 MCP 模板）；M7.5-04 待用户提供集群后恢复。
+
+### 2026-08-20 16:56 | M8-08 | ✅ 连接器市场——预置 MCP 模板 + 一键导入（顺带修复 2 个 M2 遗留缺陷）
+- **交付**：
+  - `internal/marketplace`（纯数据+纯函数）：8 个预置模板（GitHub/GitLab/Slack/Jira·Confluence/PostgreSQL/Redis/文件系统/网页抓取，分类=代码托管·团队协作·数据与存储·通用工具）；`{{KEY}}` 占位符 + `Render(opts)` 按 **env∪headers 合并查找表**替换任意位置占位符（token 放 env 也能替换 headers 里的 `{{GITHUB_TOKEN}}`）；`placeholderKeys()` 预计算模板占位符集合——匹配占位符的键只作查找源、不冗余落库（GitHub 导入后 env 保持为空）；未提供的占位符保留原样可后续编辑补齐；`ValidateTemplates` 自检（元数据/必填/SecretFields 与占位符一致）。
+  - API（`api/mcp_templates.go`）：`GET /api/mcp/templates`（mcp:read，含分类/所需密钥提示，不回显模板 env/headers 值）+ `POST /api/mcp/templates/:id/import`（mcp:write，模板渲染→UserID 归属→同名 409→repo 加密落库）；路由静态段先于 `/mcp/:id` 注册。
+  - 前端：`api/mcp.ts` 加 `listMCPTemplates/importMCPTemplate`；McpView.vue「连接器市场」抽屉（分类 tag + 描述 + 密钥提示 chips + 一键导入）+ 导入弹窗（名称可改/SecretFields 输入框/enabled 开关），导入成功自动刷新列表。
+  - 文档：`docs/mcp-marketplace.md`（API/占位符机制/模板一览/修复说明）。
+- **顺带修复 2 个 M2 遗留缺陷**（M8-08 测试暴露）：
+  ① **GORM 零值 bool + default:true 陷阱**：`enabled:false` 被 Create 省略列+DB 默认值回填成 true——`repo.CreateMCPServer` 按 Create 前期望值显式校正 + `CreateMCPServerHandler` 缺省显式 true；
+  ② **mcp_servers 唯一索引实为单列 name**（M2-02 声称 (user_id,name) 隔离但 UserID 无 uniqueIndex 声明）——补模型声明 + 迁移 `0013_fix_mcp_servers_composite_unique`（旧库单列索引重建为复合，幂等安全）。
+- **测试**：marketplace 8 例 + api 7 例（列表/导入 GitHub 占位符替换·密文落库·不回显/覆盖字段/409/404·400/RBAC/跨用户 owner 隔离+同名按用户隔离）+ repo 迁移 0013 单测（重建复合 + 双用户同名插入成功 + 同用户同名冲突）；CGO_ENABLED=0 build/vet 全绿、go test ./... **36 包全 ok**（新增 marketplace）；前端 vue-tsc + build 全绿（McpView 12.39KB gzip 4.63KB，naive-ui chunk 与基线持平）。
+- **Runtime 冒烟**（PORT=8091 临时库）：模板列表 8 个 → 导入 github 201（header_keys=['Authorization']）→ 用户2 导入同名 github 201（复合唯一生效）→ 用户1 重复导入 409 → 导入 fetch enabled:false 落库 0（修复生效）→ DB headers_enc 均为 AES 密文。
+- Commit 待提交。下一步：首个 ○ = M8-09（多租户隔离强化：workspace 级配额、租户预算上限、资源隔离）；M7.5-04 待用户提供集群后恢复。
