@@ -35,6 +35,12 @@ type Report struct {
 	TotalCases  int     `json:"total_cases"`
 	FailedCases int     `json:"failed_cases"`
 	Detail      string  `json:"detail"`
+	// M8-05 分数可比：附带最近一次历史回归（done 且非本次运行）的基线分与差值，
+	// 使「技能/提示词改动前后分数可对比」——ScoreDelta>0 即本次优于上次。
+	BaselineScoreAvg float64 `json:"baseline_score_avg"` // 0 = 无历史基线（首次回归）
+	BaselinePassRate float64 `json:"baseline_pass_rate"`
+	ScoreDelta       float64 `json:"score_delta"`    // ScoreAvg - BaselineScoreAvg
+	PassRateDelta    float64 `json:"pass_rate_delta"` // PassRate - BaselinePassRate
 }
 
 // Checker 决定一个候选技能是否可以安全发布：
@@ -86,8 +92,10 @@ func (c *EvalChecker) adapter(ctx context.Context, userID uint, modelID string) 
 // datasetName 把技能名映射为评估集名（带 skill: 前缀，便于反解关键词与去重）。
 func (c *EvalChecker) datasetName(name string) string { return "skill:" + name }
 
-// Register 确保候选技能在评估集中有一条对应的「评估集+用例」（新发布技能自动进 eval 集）。
-// 已存在则安全复用（幂等），不重复建。
+// Register 确保候选技能在评估集中有对应的「评估集 + 自举用例」（M8-05：新技能自动
+// 进 eval 集）。评估集不存在则创建；用例由 GenerateCases 从技能正文反向生成
+// （保底知识 + 标题小节 + 命令词干），已存在相同 Input 的用例则跳过（幂等，不重复建）。
+// 返回评估集 id 与首条用例 id（无新用例时返回已有首条，兼容旧调用语义）。
 func (c *EvalChecker) Register(ctx context.Context, userID uint, cand *model.SkillCandidate) (uint, uint, error) {
 	name := c.datasetName(cand.Name)
 	ds, err := repo.GetEvalDatasetByName(c.db, userID, name)
@@ -107,28 +115,39 @@ func (c *EvalChecker) Register(ctx context.Context, userID uint, cand *model.Ski
 	} else if err != nil {
 		return 0, 0, err
 	}
-	cases, err := repo.ListEvalCases(c.db, ds.ID)
+
+	existing, err := repo.ListEvalCases(c.db, ds.ID)
 	if err != nil {
 		return 0, 0, err
 	}
+	have := make(map[string]bool, len(existing))
+	for i := range existing {
+		have[existing[i].Input] = true
+	}
+
+	// M8-05 自举：从技能正文生成多条用例，按 Input 幂等补齐缺失项。
+	gen, gerr := GenerateCases(cand)
+	if gerr != nil {
+		return 0, 0, gerr
+	}
 	var caseID uint
-	if len(cases) == 0 {
-		cs := &model.EvalCase{
-			DatasetID: ds.ID,
-			Input: fmt.Sprintf("请运用你可用的名为「%s」的技能来完成以下任务：%s。请先说明你将如何应用该技能，再给出具体执行步骤。",
-				cand.Name, cand.Description),
-			Expected: cand.Name,
-			Grader:   model.GraderContains,
+	for i := range gen {
+		if have[gen[i].Input] {
+			continue
 		}
-		if verr := cs.Validate(); verr != nil {
+		gen[i].DatasetID = ds.ID
+		if verr := gen[i].Validate(); verr != nil {
 			return 0, 0, verr
 		}
-		if cerr := repo.CreateEvalCase(c.db, cs); cerr != nil {
+		if cerr := repo.CreateEvalCase(c.db, &gen[i]); cerr != nil {
 			return 0, 0, cerr
 		}
-		caseID = cs.ID
-	} else {
-		caseID = cases[0].ID
+		if caseID == 0 {
+			caseID = gen[i].ID
+		}
+	}
+	if caseID == 0 && len(existing) > 0 {
+		caseID = existing[0].ID
 	}
 	return ds.ID, caseID, nil
 }
@@ -161,7 +180,35 @@ func (c *EvalChecker) Check(ctx context.Context, userID, datasetID uint) (Report
 	if !rep.Passed && rep.Detail == "" {
 		rep.Detail = fmt.Sprintf("回归通过率 %.0f%% 低于阈值 %.0f%%，请修订技能后重试", rep.PassRate*100, c.minPassRate*100)
 	}
+	// M8-05 分数可比：附最近一次历史回归（done 且非本次）的基线分与差值。
+	if runs, rerr := repo.ListEvalRuns(c.db, userID, datasetID); rerr == nil {
+		bs, bp, found := baselineOf(runs, run.ID)
+		if found {
+			rep.BaselineScoreAvg = bs
+			rep.BaselinePassRate = bp
+			rep.ScoreDelta = round4(rep.ScoreAvg - bs)
+			rep.PassRateDelta = round4(rep.PassRate - bp)
+		}
+	}
 	return rep, nil
+}
+
+// baselineOf 从运行历史中找「最近一次 done 且非本次运行」的记录作为基线（分数可比）。
+// 返回基线的平均分/通过率与是否找到；无历史时 found=false（首次回归无基线）。
+func baselineOf(runs []model.EvalRun, currentID uint) (scoreAvg, passRate float64, found bool) {
+	for i := range runs {
+		r := runs[i]
+		if r.ID == currentID || r.Status != model.EvalRunStatusDone {
+			continue
+		}
+		return r.ScoreAvg, r.PassRate, true
+	}
+	return 0, 0, false
+}
+
+// round4 保留 4 位小数（消除浮点聚合噪声，保证 delta 展示稳定）。
+func round4(v float64) float64 {
+	return float64(int64(v*10000+0.5)) / 10000
 }
 
 // truncate 截断字符串到 max 字节（细节字段防爆）。
