@@ -823,3 +823,19 @@
 - **runtime 实测**（真实服务 PORT=8091 低阈值配置）：① 登录 4 连发 → 401/401/401/**429**；② 带明文敏感头请求后检索访问日志 → token/apikey/密码 3 个明文串 0 命中；③ CORS 预检 → 白名单源 204+ACAO:localhost:5173+Credentials，非白名单源 204 无 ACAO。
 - 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test -count=1 -v ./cmd/server/ -run 'TestSecurity_'` 5/5 PASS；`go test -count=1 ./cmd/server/` 全量绿（含既有测试无回归）；前端无改动。
 - Commit 待提交（feat(M7.5-05): 安全复核集成测试套件 + 复核报告）。下一步：M8-01（A2A 流式 + client，依赖 M5-07 已完成）；M7.5-04 待用户提供集群后恢复。
+
+### 2026-08-20 09:45 | M8-01 | ✅ A2A 流式 + client（补 S5）——message/stream SSE 进度流 + 平台可作 A2A client 调外部 Agent
+- **背景**：M8 能力深化第一项（依赖 M5-07 已完成）。M5-07 仅有非流式 message/send；本轮补齐 message/stream 流式 + client 双向能力。
+- **服务端（internal/a2a/a2a.go + internal/api/a2a.go）**：
+  - 协议扩展：新增 `TaskStatusUpdateEvent` / `TaskArtifactUpdateEvent` 与 SSE 事件名常量（`task.status_update` / `task.artifact_update`），`MethodMessageStream` 由预留转为正式实现；
+  - `A2AHandler` 重构为按 method 分发：抽公共 `parseA2ARPC`（jsonrpc=2.0/-32600、方法白名单含 stream/-32601、缺文本/-32602、任务 id 缺省生成），`message/send|tasks/send` → 原非流式逻辑，`message/stream` → 新增 `handleA2AStream`；
+  - 流式实现 `handleA2AStream`：SSE 帧序列对齐 Google A2A 0.2.x——① 首帧 JSON-RPC 响应（result=Task working）② 中间帧 `task.status_update` working（AG-UI TEXT_MESSAGE_CONTENT 增量经 `gw.Stream` emit 桥接，逐段推送=进度流）③ 终帧 completed（携带完整回复）/ failed（含预算耗尽/模型错误）④ 补帧 `task.artifact_update`（完整回复作为 reply.txt 产物）。客户端断开即停推（ctx 取消），复用统一 Gateway（会话串行锁/多轮记忆/预算护栏/用量计量，ChannelA2A）；
+  - Agent Card `Capabilities.Streaming` → **true**（对外声明支持 message/stream）。
+- **client（internal/a2a/client.go 新文件，无框架依赖）**：`Client{BaseURL/APIKey/Headers/HTTP}` + `NewClient`；`FetchAgentCard`（GET /.well-known/agent.json 能力发现）、`SendMessage`（message/send 非流式）、`StreamMessage`（message/stream SSE 解析：bufio 逐帧、首帧 JSON-RPC 响应记录初始 Task、`task.status_update` 触发 onStatus 进度回调、`task.artifact_update` 触发 onArtifact、流结束返回最终 Task；1MB 扫描缓冲）。端点对齐自身服务端 `/api/a2a`，鉴权默认 X-API-Key、可经 Headers 覆盖（如 Authorization: Bearer 对接本平台）。
+- **集成测试（cmd/server/a2a_stream_integration_test.go 新文件，3 例 + 既有 3 例全回归）**：
+  - `TestA2A_Stream_ProgressAndComplete`：a2a.Client 真实 HTTP 调服务端 message/stream → 进度帧=3（working×2 带增量文本 + completed 终帧）、产物 reply.txt=完整回复、最终 Task completed；回复="回声首句：你好 A2A 流式"（mock LLM）；
+  - `TestA2A_Stream_MultiRound`：同 task id 两轮流式续聊，第二轮回复携带首轮上下文（流式下多轮记忆同样生效）；
+  - `TestA2AClient_ExternalAgent`：httptest mock 外部 Agent（agent.json + /api/a2a 的 send/stream）→ 平台作 client 调外部：拉 Agent Card（协议版本+streaming=true）→ message/send completed → message/stream 拿到 working(处理中...)/completed 进度与 out.txt 产物。
+  - 既有 `TestA2A_SendTask_Success/MultiRound_Continuity/InvalidRequest` 全 PASS 无回归。
+- 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test -count=1 ./...` 全量绿（37 包全 ok，含 repo 纯 Go SQLite）；前端无改动。
+- Commit b77ba9e（feat(M8-01)）已推 origin/main。下一步：M8-02（Docker 执行后端：真·文件系统沙箱，Executor 接口可切换）；M7.5-04 待用户提供集群后恢复。

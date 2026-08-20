@@ -220,7 +220,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 
 | # | 任务 | 状态 | 验证标准 | 依赖 |
 |---|------|------|----------|------|
-| M8-01 | **A2A 流式 + client（补 S5）**：实现 `message/stream`；平台可作 A2A client 调外部 Agent | ○ | 外部 client 长任务拿到进度流；平台调外部 Agent 成功 | M5-07 |
+| M8-01 | **A2A 流式 + client（补 S5）**：实现 `message/stream`；平台可作 A2A client 调外部 Agent | ✅ | 外部 client 长任务拿到进度流；平台调外部 Agent 成功 | M5-07 |
 | M8-02 | **Docker 执行后端**：真·文件系统沙箱（容器+只读根+网络白名单），Executor 接口下可切换 | ○ | 逃逸命令在容器内被拒；Host/Docker 后端可配置切换 | M1-04 |
 | M8-03 | **多节点 taskrun**：外部队列（Redis/DB 轮询）+ lease，突破 inprocess 单进程 | ○ | 两节点并发派生子任务均收敛；节点崩溃任务可重拾 | M2-04 |
 | M8-04 | **Knowledge RAG 升级 PG/pgvector**：本地 sqlite/bolt → pgvector，支撑更大文档集与并发 | ○ | 万级 chunk 检索 P99 达标；并发检索无退化 | M5-02 |
