@@ -86,6 +86,7 @@ func SeedRoles() []Role {
 			{Resource: "instructions", Action: "write"},
 			{Resource: "im", Action: "read"},
 			{Resource: "im", Action: "write"},
+			{Resource: "tenants", Action: "read"},
 		},
 		},
 		{

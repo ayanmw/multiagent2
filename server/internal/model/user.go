@@ -21,6 +21,9 @@ type User struct {
 	RoleID       uint       `gorm:"not null;default:3" json:"role_id"`
 	Role         Role       `gorm:"foreignKey:RoleID" json:"role,omitempty"`
 	Status       UserStatus `gorm:"size:16;not null;default:active" json:"status"`
+	// TenantID 是可空的租户归属（M8-09 多租户隔离）。nil=独立用户（不参与租户聚合），
+	// 非空=该用户归属租户，与租户内其他用户共享租户级预算上限（tenant 作用域）。
+	TenantID *uint `gorm:"index" json:"tenant_id,omitempty"`
 }
 
 // TableName overrides the default table name.

@@ -222,6 +222,18 @@ func Migrations() []Migration {
 				return migrateMCPCompositeNameUnique(db)
 			},
 		},
+		{
+			Version: "0014",
+			Name:    "add_tenant_and_quota_columns",
+			// M8-09 多租户隔离强化：① 新增 tenants 表（租户隔离单元）；
+			// ② users 补可空 tenant_id（租户归属）；③ usage_records 补 workspace_key
+			// （workspace 作用域预算聚合）；④ workspaces 补 disk_quota_bytes（磁盘配额）。
+			// 全部用 AutoMigrate：新库 0001 基线已含后三者的新列（模型已更新），
+			// 旧库由本迁移幂等补列（AutoMigrate 只加缺失列/表，不动已有数据）。
+			Up: func(db *gorm.DB, _ MigrationContext) error {
+				return db.AutoMigrate(&model.Tenant{}, &model.User{}, &model.UsageRecord{}, &model.Workspace{})
+			},
+		},
 	}
 }
 

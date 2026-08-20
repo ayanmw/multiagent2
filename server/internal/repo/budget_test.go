@@ -53,7 +53,7 @@ func TestEvaluateBudgets_UserBlocked(t *testing.T) {
 	// 模拟「第一轮」对话已消耗 120 token（落库）。
 	seedBudgetUsage(t, db, 42, "sk-a", 120)
 
-	ev, err := EvaluateBudgets(db, 42, "sk-a", "")
+	ev, err := EvaluateBudgets(db, 42, "sk-a", "", "")
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestEvaluateBudgets_Under(t *testing.T) {
 		t.Fatalf("upsert policy: %v", err)
 	}
 	seedBudgetUsage(t, db, 42, "sk-a", 120)
-	ev, err := EvaluateBudgets(db, 42, "sk-a", "")
+	ev, err := EvaluateBudgets(db, 42, "sk-a", "", "")
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestEvaluateBudgets_RaiseRecovers(t *testing.T) {
 	}
 	seedBudgetUsage(t, db, 42, "sk-a", 120)
 
-	if ev, _ := EvaluateBudgets(db, 42, "sk-a", ""); !ev.Blocked {
+	if ev, _ := EvaluateBudgets(db, 42, "sk-a", "", ""); !ev.Blocked {
 		t.Fatal("提额前应被拦")
 	}
 	// 管理员提额到 100000。
@@ -102,7 +102,7 @@ func TestEvaluateBudgets_RaiseRecovers(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("raise policy: %v", err)
 	}
-	if ev, _ := EvaluateBudgets(db, 42, "sk-a", ""); ev.Blocked {
+	if ev, _ := EvaluateBudgets(db, 42, "sk-a", "", ""); ev.Blocked {
 		t.Fatalf("提额后应恢复，仍被拦: %+v", ev)
 	}
 }
@@ -117,7 +117,7 @@ func TestEvaluateBudgets_SessionScope(t *testing.T) {
 		t.Fatalf("upsert session policy: %v", err)
 	}
 	seedBudgetUsage(t, db, 42, "sk-x", 20)
-	ev, err := EvaluateBudgets(db, 42, "sk-x", "")
+	ev, err := EvaluateBudgets(db, 42, "sk-x", "", "")
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestEvaluateBudgets_SessionScope(t *testing.T) {
 		t.Fatalf("应触发会话级拦截: %+v", ev)
 	}
 	// 不同会话不受影响。
-	if ev, _ := EvaluateBudgets(db, 42, "sk-other", ""); ev.Blocked {
+	if ev, _ := EvaluateBudgets(db, 42, "sk-other", "", ""); ev.Blocked {
 		t.Fatalf("其它会话不应被拦: %+v", ev)
 	}
 }
@@ -141,7 +141,7 @@ func TestEvaluateBudgets_Disabled(t *testing.T) {
 	seedBudgetUsage(t, db, 42, "sk-a", 999)
 	os.Setenv("BUDGET_ENABLED", "false")
 	defer os.Unsetenv("BUDGET_ENABLED")
-	if ev, err := EvaluateBudgets(db, 42, "sk-a", ""); err != nil || ev.Blocked {
+	if ev, err := EvaluateBudgets(db, 42, "sk-a", "", ""); err != nil || ev.Blocked {
 		t.Fatalf("关闭开关后应放行: err=%v ev=%+v", err, ev)
 	}
 }

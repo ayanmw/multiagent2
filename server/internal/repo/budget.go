@@ -100,16 +100,21 @@ func windowStart(window string) time.Time {
 	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 }
 
-// EvaluateBudgets 评估本次请求命中的全部预算策略（user / session / automation 三级），
-// 任一超限即判定为平台级预算耗尽（Blocked=true），应暂停该 session/automation 后续 LLM 调用。
+// EvaluateBudgets 评估本次请求命中的全部预算策略（user / session / workspace / tenant /
+// automation 五级），任一超限即判定为平台级预算耗尽（Blocked=true），应暂停该
+// session/automation 后续 LLM 调用。
 //
 // 统计口径（与 M3-03 用量记录一致，复用 repo.SumUsageRecords）：
 //   - user 作用域：按 UserID 聚合窗口内 total_tokens；
 //   - session 作用域：按 UserID + SessionKey 聚合；
+//   - workspace 作用域（M8-09）：按 WorkspaceKey 聚合（会话绑定 workspace 时生效，
+//     无绑定则跳过——默认目录会话不参与 workspace 预算）；
+//   - tenant 作用域（M8-09）：按 TenantID 聚合租户内全部用户（users.tenant_id 归属），
+//     租户 A 超限只拦 A 内用户，不影响 B（验收「租户 A 超配额不影响 B」）；
 //   - automation 作用域（M4 接入 automation_id 前，按 UserID 近似聚合）暂由 automationID 非空时启用。
 //
 // 总开关 BUDGET_ENABLED=false 时直接放行。
-func EvaluateBudgets(db *gorm.DB, uid uint, sessionKey, automationID string) (BudgetEvaluation, error) {
+func EvaluateBudgets(db *gorm.DB, uid uint, sessionKey, workspaceKey, automationID string) (BudgetEvaluation, error) {
 	notBlocked := BudgetEvaluation{Blocked: false}
 	if !budgetEnabled() {
 		return notBlocked, nil
@@ -148,7 +153,47 @@ func EvaluateBudgets(db *gorm.DB, uid uint, sessionKey, automationID string) (Bu
 		}
 	}
 
-	// 3) automation 作用域（M4 全面接入前，automationID 非空时按用户近似聚合）。
+	// 3) workspace 作用域（M8-09）：仅当会话绑定 workspace（workspaceKey 非空）且
+	// 存在该 workspace 的策略时按 workspace_key 聚合。
+	if workspaceKey != "" {
+		wsPolicy, err := GetBudgetPolicy(db, model.BudgetScopeWorkspace, workspaceKey)
+		if err != nil {
+			return notBlocked, err
+		}
+		if wsPolicy != nil {
+			totals, err := SumUsageRecords(db, UsageRecordFilter{WorkspaceKey: workspaceKey, Start: start(wsPolicy)})
+			if err != nil {
+				return notBlocked, err
+			}
+			if totals.TotalTokens >= wsPolicy.MaxTokens {
+				return BudgetEvaluation{Blocked: true, Policy: wsPolicy, Scope: model.BudgetScopeWorkspace, Used: totals.TotalTokens, Max: wsPolicy.MaxTokens}, nil
+			}
+		}
+	}
+
+	// 4) tenant 作用域（M8-09）：用户归属租户且存在该租户策略时，按租户内全部用户聚合。
+	// 用户无租户归属（TenantID=nil）时跳过——独立用户不参与租户预算。
+	var tenantID uint
+	if u, uerr := GetUserByID(db, uid); uerr == nil && u.TenantID != nil {
+		tenantID = *u.TenantID
+	}
+	if tenantID != 0 {
+		tnPolicy, err := GetBudgetPolicy(db, model.BudgetScopeTenant, strconv.FormatUint(uint64(tenantID), 10))
+		if err != nil {
+			return notBlocked, err
+		}
+		if tnPolicy != nil {
+			totals, err := SumUsageRecords(db, UsageRecordFilter{TenantID: tenantID, Start: start(tnPolicy)})
+			if err != nil {
+				return notBlocked, err
+			}
+			if totals.TotalTokens >= tnPolicy.MaxTokens {
+				return BudgetEvaluation{Blocked: true, Policy: tnPolicy, Scope: model.BudgetScopeTenant, Used: totals.TotalTokens, Max: tnPolicy.MaxTokens}, nil
+			}
+		}
+	}
+
+	// 5) automation 作用域（M4 全面接入前，automationID 非空时按用户近似聚合）。
 	if automationID != "" {
 		autoPolicy, err := GetBudgetPolicy(db, model.BudgetScopeAutomation, automationID)
 		if err != nil {

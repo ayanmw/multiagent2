@@ -30,20 +30,23 @@ type workspaceView struct {
 	Status      string `json:"status"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
+	// DiskQuotaBytes 是该 workspace 的磁盘配额上限（字节，M8-09；0=不限）。
+	DiskQuotaBytes int64 `json:"disk_quota_bytes"`
 }
 
 func toWorkspaceView(w *model.Workspace) workspaceView {
 	return workspaceView{
-		ID:          w.ID,
-		UserID:      w.UserID,
-		Key:         w.Key,
-		Name:        w.Name,
-		LocalPath:   w.LocalPath,
-		GitRemote:   w.GitRemote,
-		Description: w.Description,
-		Status:      string(w.Status),
-		CreatedAt:   w.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   w.UpdatedAt.Format(time.RFC3339),
+		ID:             w.ID,
+		UserID:         w.UserID,
+		Key:            w.Key,
+		Name:           w.Name,
+		LocalPath:      w.LocalPath,
+		GitRemote:      w.GitRemote,
+		Description:    w.Description,
+		Status:         string(w.Status),
+		CreatedAt:      w.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:      w.UpdatedAt.Format(time.RFC3339),
+		DiskQuotaBytes: w.DiskQuotaBytes,
 	}
 }
 
@@ -162,9 +165,10 @@ func UpdateWorkspaceHandler(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		var req struct {
-			Name        *string `json:"name"`
-			GitRemote   *string `json:"git_remote"`
-			Description *string `json:"description"`
+			Name            *string `json:"name"`
+			GitRemote       *string `json:"git_remote"`
+			Description     *string `json:"description"`
+			DiskQuotaBytes  *int64  `json:"disk_quota_bytes"` // M8-09：磁盘配额（字节，>=0，0=不限）
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -178,6 +182,13 @@ func UpdateWorkspaceHandler(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.Description != nil {
 			w.Description = *req.Description
+		}
+		if req.DiskQuotaBytes != nil {
+			if *req.DiskQuotaBytes < 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "disk_quota_bytes 不能为负"})
+				return
+			}
+			w.DiskQuotaBytes = *req.DiskQuotaBytes
 		}
 		if err := repo.UpdateWorkspace(db, w); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update workspace"})
@@ -213,37 +224,38 @@ func DeleteWorkspaceHandler(db *gorm.DB) gin.HandlerFunc {
 }
 
 // resolveWorkspaceLocalDir 解析本次对话应使用的工作目录本地路径：
-//   - workspaceKey 非空：按 (user, key) 查找并绑定会话到该 workspace，返回其 LocalPath；
+//   - workspaceKey 非空：按 (user, key) 查找并绑定会话到该 workspace，返回其 LocalPath 与对象；
 //   - workspaceKey 为空但会话已绑定 workspace_id：复用已绑定目录；
-//   - 均无：返回空串，由调用方回退到 WorkspaceRoot/<uid> 默认目录。
+//   - 均无：返回空串与 nil（调用方回退到 WorkspaceRoot/<uid> 默认目录）。
 //
-// 返回空串表示使用默认目录（不报错）。会话与 workspace 的绑定会被持久化到
+// 返回 (localDir, ws, err)：ws 非空时调用方可取 ws.Key（workspace 预算作用域）与
+// ws.DiskQuotaBytes（磁盘配额，M8-09）。会话与 workspace 的绑定会被持久化到
 // sessions.workspace_id，使后续同会话（不传 workspaceKey）仍落在同一目录。
-func resolveWorkspaceLocalDir(db *gorm.DB, uid uint, workspaceKey string, sess *model.Session) (string, error) {
+func resolveWorkspaceLocalDir(db *gorm.DB, uid uint, workspaceKey string, sess *model.Session) (string, *model.Workspace, error) {
 	var ws *model.Workspace
 	var err error
 	if workspaceKey != "" {
 		ws, err = repo.GetWorkspaceByKey(db, uid, workspaceKey)
 		if err != nil {
-			return "", err // 404 / 越权
+			return "", nil, err // 404 / 越权
 		}
 	} else if sess.WorkspaceID != nil && *sess.WorkspaceID != 0 {
 		ws, err = repo.GetWorkspaceByID(db, uid, *sess.WorkspaceID)
 		if err != nil {
 			// 已绑定但 workspace 已被删除：回退默认目录，不报错。
-			return "", nil
+			return "", nil, nil
 		}
 	}
 	if ws == nil {
-		return "", nil
+		return "", nil, nil
 	}
 	// 绑定 / 更新会话的 workspace。
 	sid := ws.ID
 	if sess.WorkspaceID == nil || *sess.WorkspaceID != sid {
 		sess.WorkspaceID = &sid
 		if uerr := db.Model(&model.Session{}).Where("id = ?", sess.ID).Update("workspace_id", sid).Error; uerr != nil {
-			return "", uerr
+			return "", nil, uerr
 		}
 	}
-	return ws.LocalPath, nil
+	return ws.LocalPath, ws, nil
 }

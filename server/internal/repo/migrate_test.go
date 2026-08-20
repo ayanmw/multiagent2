@@ -379,3 +379,54 @@ func TestRunMigrations_MCPCompositeNameUniqueRebuilt(t *testing.T) {
 		t.Fatal("同用户同名 MCP 应冲突")
 	}
 }
+
+// TestRunMigrations_0014_TenantQuotaColumns 验证 0014 挂接正确（M8-09）：
+// 全新库跑全迁移后，tenants 表存在，users.tenant_id / usage_records.workspace_key /
+// workspaces.disk_quota_bytes 三列齐全（新库由 0001 基线建列、旧库由 0014 补列，
+// 均幂等）。
+func TestRunMigrations_0014_TenantQuotaColumns(t *testing.T) {
+	db := newMigrateTestDB(t)
+	if _, err := RunMigrations(db, MigrationContext{EncryptionKey: testEncKey()}); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	// tenants 表。
+	if !db.Migrator().HasTable(&model.Tenant{}) {
+		t.Fatal("0014 应建 tenants 表")
+	}
+	// 三列。
+	for _, c := range []struct {
+		dst any
+		col string
+	}{
+		{&model.User{}, "tenant_id"},
+		{&model.UsageRecord{}, "workspace_key"},
+		{&model.Workspace{}, "disk_quota_bytes"},
+	} {
+		if !db.Migrator().HasColumn(c.dst, c.col) {
+			t.Fatalf("0014 应补列 %T.%s", c.dst, c.col)
+		}
+	}
+
+	// 行为验收：租户可建、用户可归属、workspace 可设配额。
+	t1 := &model.Tenant{Name: "mig-tenant", Status: model.TenantStatusActive}
+	if err := db.Create(t1).Error; err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	u := &model.User{Username: "miguser", Email: "mig@t.test", PasswordHash: "x", TenantID: &t1.ID}
+	if err := db.Create(u).Error; err != nil {
+		t.Fatalf("create user with tenant: %v", err)
+	}
+	var got model.User
+	if err := db.First(&got, u.ID).Error; err != nil || got.TenantID == nil || *got.TenantID != t1.ID {
+		t.Fatalf("tenant_id 应持久化: err=%v got=%+v", err, got)
+	}
+	ws := &model.Workspace{UserID: u.ID, Key: "ws-mig", Name: "n", LocalPath: "/tmp/ws", DiskQuotaBytes: 4096}
+	if err := db.Create(ws).Error; err != nil {
+		t.Fatalf("create workspace with quota: %v", err)
+	}
+	var gotWS model.Workspace
+	if err := db.First(&gotWS, ws.ID).Error; err != nil || gotWS.DiskQuotaBytes != 4096 {
+		t.Fatalf("disk_quota_bytes 应持久化: err=%v got=%+v", err, gotWS)
+	}
+}

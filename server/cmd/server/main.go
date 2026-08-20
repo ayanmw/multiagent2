@@ -193,11 +193,22 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		// 与 usage 同级保护（usage:read，RBAC）。
 		protected.GET("/monitoring/overview", middleware.RequirePermission(db.DB, "usage", "read"), api.MonitoringOverviewHandler(db.DB))
 
-		// 平台级预算护栏（M3-04）：管理员设定 / 查询预算策略（user/session/automation 三级阈值）。
-		// 读操作需 budgets:read，写（upsert / 删除）需 budgets:write（RBAC）。
+		// 平台级预算护栏（M3-04）：管理员设定 / 查询预算策略（user/session/automation 三级阈值；
+		// M8-09 扩展 tenant/workspace 作用域）。读需 budgets:read，写需 budgets:write（RBAC）。
 		protected.GET("/budgets", middleware.RequirePermission(db.DB, "budgets", "read"), api.ListBudgetsHandler(db.DB))
 		protected.PUT("/budgets", middleware.RequirePermission(db.DB, "budgets", "write"), api.UpsertBudgetHandler(db.DB))
 		protected.DELETE("/budgets/:id", middleware.RequirePermission(db.DB, "budgets", "write"), api.DeleteBudgetHandler(db.DB))
+
+		// 租户管理（M8-09 多租户隔离）：租户是「一组用户的配额边界」——租户内用户共享
+		// 租户级预算上限（budgets scope=tenant, scope_key=<tenant_id>），租户 A 超限不影响 B。
+		// 读需 tenants:read，写（创建/更新/删除/成员管理）需 tenants:write（admin 全权限）。
+		protected.GET("/tenants", middleware.RequirePermission(db.DB, "tenants", "read"), api.ListTenantsHandler(db.DB))
+		protected.POST("/tenants", middleware.RequirePermission(db.DB, "tenants", "write"), api.CreateTenantHandler(db.DB))
+		protected.GET("/tenants/:id", middleware.RequirePermission(db.DB, "tenants", "read"), api.GetTenantHandler(db.DB))
+		protected.PUT("/tenants/:id", middleware.RequirePermission(db.DB, "tenants", "write"), api.UpdateTenantHandler(db.DB))
+		protected.DELETE("/tenants/:id", middleware.RequirePermission(db.DB, "tenants", "write"), api.DeleteTenantHandler(db.DB))
+		protected.POST("/tenants/:id/members", middleware.RequirePermission(db.DB, "tenants", "write"), api.AddTenantMemberHandler(db.DB))
+		protected.DELETE("/tenants/:id/members/:uid", middleware.RequirePermission(db.DB, "tenants", "write"), api.RemoveTenantMemberHandler(db.DB))
 
 		// 人工检查点（M3-05 human-in-the-loop）：无人值守命中 ask 危险命令生成的待审批记录，
 		// 经前端审批（approve 执行 / reject 中止）。读需 checkpoints:read，审批写需 checkpoints:write。

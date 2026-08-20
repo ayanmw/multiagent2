@@ -35,6 +35,8 @@ type adminUserView struct {
 	Status      string `json:"status"`
 	CreatedAt   string `json:"created_at"`
 	Quota       *adminQuotaView `json:"quota,omitempty"`
+	// TenantID 是用户归属的租户（M8-09，可空：nil=独立用户）。
+	TenantID *uint `json:"tenant_id,omitempty"`
 }
 
 // adminQuotaView 展示作用于该用户的最具体预算策略（M3-04 配额护栏）。
@@ -59,6 +61,7 @@ func toAdminUserView(db *gorm.DB, u *model.User) adminUserView {
 		Role:        role,
 		Status:      string(u.Status),
 		CreatedAt:   u.CreatedAt.Format("2006-01-02 15:04:05"),
+		TenantID:    u.TenantID,
 	}
 	// 配额：查作用于该用户的最具体预算策略（用户特定 → 全局默认），无则留空。
 	if db != nil {
@@ -97,6 +100,8 @@ type adminCreateUserRequest struct {
 	Password    string `json:"password" binding:"required,min=6"`
 	DisplayName string `json:"display_name"`
 	Role        string `json:"role"` // admin / developer / viewer；缺省 developer
+	// TenantID 可选：创建时直接把用户归属到某租户（M8-09，0/缺省=独立用户）。
+	TenantID *uint `json:"tenant_id"`
 }
 
 // CreateUserHandler handles POST /api/admin/users (admin only).
@@ -154,6 +159,17 @@ func CreateUserHandler(db *gorm.DB) gin.HandlerFunc {
 			RoleID:       roleID,
 			Status:       model.UserStatusActive,
 		}
+		// 创建时归属租户（可选）：校验租户存在且启用。
+		if req.TenantID != nil && *req.TenantID != 0 {
+			if t, terr := repo.GetTenant(db, *req.TenantID); terr != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "tenant not found"})
+				return
+			} else if t.Status != model.TenantStatusActive {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "tenant disabled"})
+				return
+			}
+			user.TenantID = req.TenantID
+		}
 		if err := repo.CreateUser(db, user); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
 			return
@@ -189,6 +205,8 @@ type adminUpdateUserRequest struct {
 	DisplayName string `json:"display_name"`
 	Role        string `json:"role"`
 	Status      string `json:"status"` // active / disabled
+	// TenantID 可选：0=移出租户（置 NULL），>0=加入指定租户（M8-09）；nil=不修改。
+	TenantID *uint `json:"tenant_id"`
 }
 
 // UpdateUserHandler handles PUT /api/admin/users/:id (admin only).
@@ -257,6 +275,24 @@ func UpdateUserHandler(db *gorm.DB) gin.HandlerFunc {
 
 		if req.DisplayName != "" {
 			user.DisplayName = req.DisplayName
+		}
+
+		// 租户归属变更（M8-09）：nil=不修改；0=移出；>0=加入（校验存在且启用）。
+		if req.TenantID != nil {
+			if *req.TenantID == 0 {
+				user.TenantID = nil
+			} else {
+				t, terr := repo.GetTenant(db, *req.TenantID)
+				if terr != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "tenant not found"})
+					return
+				}
+				if t.Status != model.TenantStatusActive {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "tenant disabled"})
+					return
+				}
+				user.TenantID = req.TenantID
+			}
 		}
 
 		if err := repo.UpdateUser(db, user); err != nil {

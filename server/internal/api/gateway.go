@@ -137,9 +137,10 @@ func (g *Gateway) DB() *gorm.DB { return g.cfg.DB }
 // EncKey 暴露加密主密钥（供 Channel handler 按需解密）。
 func (g *Gateway) EncKey() []byte { return g.cfg.EncKey }
 
-// EvaluateBudget 在发起 LLM 调用前评估平台级预算护栏（M3-04），供各 Channel 复用同一检查逻辑。
-func (g *Gateway) EvaluateBudget(uid uint, sessionKey string) (repo.BudgetEvaluation, error) {
-	return repo.EvaluateBudgets(g.cfg.DB, uid, sessionKey, "")
+// EvaluateBudget 在发起 LLM 调用前评估平台级预算护栏（M3-04；M8-09 扩展 workspace 维度），
+// 供各 Channel 复用同一检查逻辑。workspaceKey 为会话绑定的 workspace key（空=默认目录）。
+func (g *Gateway) EvaluateBudget(uid uint, sessionKey, workspaceKey string) (repo.BudgetEvaluation, error) {
+	return repo.EvaluateBudgets(g.cfg.DB, uid, sessionKey, workspaceKey, "")
 }
 
 // ErrBudgetExhausted 是「平台级预算耗尽拦截」的哨兵错误（M3-04 / M4-06）。
@@ -234,19 +235,54 @@ type preparedRun struct {
 	m          *model.Model
 	p          *model.Provider
 	workdir    string
-	eng        *engine.Engine
-	history    []engine.ChatMessage
+	// wsKey 是会话绑定的 workspace key（M8-09，空=默认目录）：写用量记录时落
+	// usage_records.workspace_key，供 workspace 作用域预算聚合。
+	wsKey string
+	// wsQuota 是 workspace 磁盘配额（字节，M8-09；0=不限）：装配文件工具时注入。
+	wsQuota int64
+	eng     *engine.Engine
+	history []engine.ChatMessage
 }
 
-// prepareRun 统一完成「解析模型 → 解密 → 建会话/写 user 消息 → 解析工作目录 → 构建引擎 → 加载历史」
-// 的共享前置流程，供 Run/Stream 复用（同一 Runner 落点）。sessionKey 必须已稳定分配。
+// prepareRun 统一完成「建会话/写 user 消息 → 解析工作目录 → 预算护栏 → 解析模型 →
+// 解密 → 构建引擎 → 加载历史」的共享前置流程，供 Run/Stream 复用（同一 Runner 落点）。
+// sessionKey 必须已稳定分配。顺序要点（M8-09）：workspace 解析在预算检查之前——
+// workspace 作用域预算需要会话绑定的 workspace key；磁盘配额取自 workspace 对象。
 func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string) (*preparedRun, error) {
 	uid := req.UserID
 
-	// 预算护栏（M3-04 / M4-06）：在发起 LLM 调用前集中评估平台级预算，超时直接拦截。
-	// 集中在此处使 Web/SSE/定时/Webhook/恢复 Loop 全部 Channel 共用同一护栏，
-	// 自主化无人值守 Loop 也不会绕过护栏烧预算。拦截时写审计便于管理员追溯。
-	budgetEv, berr := repo.EvaluateBudgets(g.cfg.DB, uid, sessionKey, "")
+	// 本次运行的执行器模式（M4-06）：自主化 Channel 强制无人值守，其余跟随 RUN_MODE 配置。
+	exMode := g.resolveExecutorMode(req.Channel)
+
+	// 建会话并落库当前 user 消息（先于预算检查：写消息不耗 token，预算只管 LLM 调用）。
+	sess, serr := repo.GetOrCreateSession(g.cfg.DB, uid, sessionKey)
+	if serr != nil {
+		return nil, fmt.Errorf("创建会话失败")
+	}
+	if aerr := repo.AppendMessage(g.cfg.DB, sess.ID, "user", req.Message); aerr != nil {
+		return nil, fmt.Errorf("写入用户消息失败")
+	}
+
+	// 解析工作目录并绑定 workspace（M1-07）：顺带取 workspace key 与磁盘配额（M8-09）。
+	wsLocalDir, ws, werr := resolveWorkspaceLocalDir(g.cfg.DB, uid, req.WorkspaceKey, sess)
+	if werr != nil {
+		return nil, fmt.Errorf("workspace not found")
+	}
+	wsKey := ""
+	var wsQuota int64
+	if ws != nil {
+		wsKey = ws.Key
+		wsQuota = ws.DiskQuotaBytes
+	}
+	workdir, dErr := ensureWorkdir(g.cfg.WorkspaceRoot, uid, wsLocalDir)
+	if dErr != nil {
+		return nil, dErr
+	}
+
+	// 预算护栏（M3-04 / M4-06；M8-09 扩展 workspace/tenant 作用域）：在发起 LLM 调用前
+	// 集中评估，超时直接拦截。集中在此处使 Web/SSE/定时/Webhook/恢复 Loop 全部 Channel
+	// 共用同一护栏，自主化无人值守 Loop 也不会绕过护栏烧预算。拦截时写审计便于管理员追溯。
+	budgetEv, berr := repo.EvaluateBudgets(g.cfg.DB, uid, sessionKey, wsKey, "")
 	if berr != nil {
 		return nil, fmt.Errorf("预算评估失败: %w", berr)
 	}
@@ -256,9 +292,6 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 		g.maybeNotifyBudget(uid, budgetEv)
 		return nil, &BudgetExhaustedError{Eval: budgetEv}
 	}
-
-	// 本次运行的执行器模式（M4-06）：自主化 Channel 强制无人值守，其余跟随 RUN_MODE 配置。
-	exMode := g.resolveExecutorMode(req.Channel)
 
 	m, p, err := resolveChatModel(g.cfg.DB, uid, req.ModelID)
 	if err != nil {
@@ -271,21 +304,6 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 			return nil, fmt.Errorf("解密 provider key 失败")
 		}
 		apiKey = dec
-	}
-	sess, serr := repo.GetOrCreateSession(g.cfg.DB, uid, sessionKey)
-	if serr != nil {
-		return nil, fmt.Errorf("创建会话失败")
-	}
-	if aerr := repo.AppendMessage(g.cfg.DB, sess.ID, "user", req.Message); aerr != nil {
-		return nil, fmt.Errorf("写入用户消息失败")
-	}
-	wsLocalDir, werr := resolveWorkspaceLocalDir(g.cfg.DB, uid, req.WorkspaceKey, sess)
-	if werr != nil {
-		return nil, fmt.Errorf("workspace not found")
-	}
-	workdir, dErr := ensureWorkdir(g.cfg.WorkspaceRoot, uid, wsLocalDir)
-	if dErr != nil {
-		return nil, dErr
 	}
 
 	team := g.cfg.Team
@@ -321,7 +339,7 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 	if !team.EnableSubAgents {
 		// M8-02：单代理模式的根 Agent 工具集按配置后端切换（host 宿主机 /
 		// docker 容器沙箱）；docker 下 git 工具需镜像内置 git。
-		t, tErr := codectool.NewCodeActWithGitBackend(workdir, repo.NewDBAuditor(g.cfg.DB, uid), checkpointer, exMode, g.cfg.ExecutorBackend, g.cfg.Docker)
+		t, tErr := codectool.NewCodeActWithGitBackend(workdir, repo.NewDBAuditor(g.cfg.DB, uid), checkpointer, exMode, g.cfg.ExecutorBackend, g.cfg.Docker, wsQuota)
 		if tErr != nil {
 			return nil, fmt.Errorf("构建代码执行工具失败: %w", tErr)
 		}
@@ -362,7 +380,7 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 		return nil, eErr
 	}
 	history := loadChatHistory(g.cfg.DB, sess.ID, 1)
-	return &preparedRun{sess: sess, sessionKey: sessionKey, m: m, p: p, workdir: workdir, eng: eng, history: history}, nil
+	return &preparedRun{sess: sess, sessionKey: sessionKey, m: m, p: p, workdir: workdir, wsKey: wsKey, wsQuota: wsQuota, eng: eng, history: history}, nil
 }
 
 // Run 串行执行一次非流式对话（绑定 sessionKey 串行锁）。返回统一结果或引擎错误。
@@ -451,8 +469,8 @@ func channelKind(ch Channel) string {
 
 // finalize 在对话正常结束或护栏熔断（partial）后记录 token 用量并落库助手消息。
 func (g *Gateway) finalize(req Request, pr *preparedRun, reply string) {
-	// M3-03：记录 token 用量（按 user / session / provider / model 归属）。
-	recordEngineUsage(g.cfg.DB, pr.eng, req.UserID, pr.sess, pr.p, pr.m, buildPromptText(pr.history, req.Message), reply)
+	// M3-03：记录 token 用量（按 user / session / provider / model 归属；M8-09 附 workspace key）。
+	recordEngineUsage(g.cfg.DB, pr.eng, req.UserID, pr.sess, pr.p, pr.m, pr.wsKey, buildPromptText(pr.history, req.Message), reply)
 	// 仅在正常结束时落库助手消息（客户端中途断开不写脏数据，由调用方控制）。
 	if perr := repo.AppendMessage(g.cfg.DB, pr.sess.ID, "assistant", reply); perr != nil {
 		fmt.Printf("[GATEWAY] 写入助手消息失败: %v\n", perr)

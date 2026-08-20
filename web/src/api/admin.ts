@@ -23,6 +23,8 @@ export interface AdminUser {
   status: UserStatus
   created_at: string
   quota?: UserQuota | null
+  // M8-09：用户归属的租户 id（nil/缺省 = 独立用户，不参与租户预算聚合）。
+  tenant_id?: number | null
   [key: string]: unknown
 }
 
@@ -37,12 +39,16 @@ export interface CreateUserPayload {
   password: string
   display_name?: string
   role?: UserRole
+  // M8-09：创建时归属租户（0/缺省 = 独立用户）。
+  tenant_id?: number
 }
 
 export interface UpdateUserPayload {
   display_name?: string
   role?: UserRole
   status?: UserStatus
+  // M8-09：租户归属变更（0=移出 / >0=加入 / 缺省=不修改）。
+  tenant_id?: number
 }
 
 export interface ResetPasswordPayload {

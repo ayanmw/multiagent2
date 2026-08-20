@@ -111,36 +111,39 @@ func TestResolveWorkspaceLocalDir(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	// 指定 workspaceKey：应返回其目录并绑定会话。
-	dir, err := resolveWorkspaceLocalDir(db.DB, uid, wsKey, sess)
+	// 指定 workspaceKey：应返回其目录与对象并绑定会话。
+	dir, wsGot, err := resolveWorkspaceLocalDir(db.DB, uid, wsKey, sess)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if dir != wsPath {
 		t.Fatalf("dir=%q want %q", dir, wsPath)
 	}
+	if wsGot == nil || wsGot.Key != wsKey {
+		t.Fatalf("应返回 workspace 对象, got %+v", wsGot)
+	}
 	if sess.WorkspaceID == nil || *sess.WorkspaceID != ws.ID {
 		t.Fatalf("会话未绑定 workspace")
 	}
 
 	// 跨用户解析应报错（404）。
-	if _, err := resolveWorkspaceLocalDir(db.DB, 999, wsKey, sess); err == nil {
+	if _, _, err := resolveWorkspaceLocalDir(db.DB, 999, wsKey, sess); err == nil {
 		t.Fatalf("跨用户解析应报错")
 	}
 
-	// 不指定 key 且未绑定：回退默认目录（空串）。
+	// 不指定 key 且未绑定：回退默认目录（空串、nil 对象）。
 	sess2 := &model.Session{UserID: uid, SessionKey: "sess-y", Title: "t"}
 	if err := db.DB.Create(sess2).Error; err != nil {
 		t.Fatalf("create session2: %v", err)
 	}
-	dir2, err := resolveWorkspaceLocalDir(db.DB, uid, "", sess2)
-	if err != nil || dir2 != "" {
-		t.Fatalf("未绑定应回退空串, got %q err=%v", dir2, err)
+	dir2, ws2, err := resolveWorkspaceLocalDir(db.DB, uid, "", sess2)
+	if err != nil || dir2 != "" || ws2 != nil {
+		t.Fatalf("未绑定应回退空串/nil, got %q ws=%v err=%v", dir2, ws2, err)
 	}
 
 	// 不指定 key 但已绑定：复用已绑定目录。
-	dir3, err := resolveWorkspaceLocalDir(db.DB, uid, "", sess)
-	if err != nil || dir3 != wsPath {
-		t.Fatalf("应复用已绑定目录, got %q err=%v", dir3, err)
+	dir3, ws3, err := resolveWorkspaceLocalDir(db.DB, uid, "", sess)
+	if err != nil || dir3 != wsPath || ws3 == nil {
+		t.Fatalf("应复用已绑定目录, got %q ws=%v err=%v", dir3, ws3, err)
 	}
 }

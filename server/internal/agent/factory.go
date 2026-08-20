@@ -132,7 +132,10 @@ func NewCoder(d Deps) (agent.Agent, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	tools, err := codectool.NewCodeActWithBackend(d.Workdir, d.Auditor, d.Checkpointer, d.ExecutorMode, d.Backend, d.Docker)
+	// M8-09：Coder 子代理工作目录为 worktree（主仓库派生），磁盘配额按 0（不限）处理——
+	// 单代理路径（gateway.prepareRun）按 workspace.DiskQuotaBytes 强制，team 模式的
+	// worktree 文件最终 merge 回主 workspace，由主路径配额兜底。
+	tools, err := codectool.NewCodeActWithBackend(d.Workdir, d.Auditor, d.Checkpointer, d.ExecutorMode, d.Backend, d.Docker, 0)
 	if err != nil {
 		return nil, err
 	}

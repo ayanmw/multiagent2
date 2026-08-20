@@ -274,15 +274,17 @@ func NewGitTools(workdir string, auditor executor.Auditor, cp executor.Checkpoin
 // cp 为无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05），语义同 NewCodeAct。
 // mode 为执行器运行模式（M4-06），语义同 NewCodeAct/NewGitTools。
 func NewCodeActWithGit(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) ([]tool.Tool, error) {
-	return NewCodeActWithGitBackend(workdir, auditor, cp, mode, executor.BackendHost, executor.DockerOptions{})
+	return NewCodeActWithGitBackend(workdir, auditor, cp, mode, executor.BackendHost, executor.DockerOptions{}, 0)
 }
 
 // NewCodeActWithGitBackend 是 NewCodeActWithGit 的后端可切换版本（M8-02）：
 // 把 CodeAct 与 Git 工具集统一切到指定执行后端（host 或 docker 容器沙箱）。
 // 注意：docker 后端下 Git 工具要求容器镜像内置 git（默认 alpine 不含，需
 // DOCKER_IMAGE 指向含 git 的镜像），否则 git 命令在容器内报 command not found。
-func NewCodeActWithGitBackend(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode, backend executor.Backend, dopts executor.DockerOptions) ([]tool.Tool, error) {
-	code, err := NewCodeActWithBackend(workdir, auditor, cp, mode, backend, dopts)
+// quotaBytes 是磁盘配额上限（字节，M8-09）：<=0 不限；>0 时文件写入工具
+// 检查工作目录总大小（Git 工具不受配额限制，提交元数据不占配额）。
+func NewCodeActWithGitBackend(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode, backend executor.Backend, dopts executor.DockerOptions, quotaBytes int64) ([]tool.Tool, error) {
+	code, err := NewCodeActWithBackend(workdir, auditor, cp, mode, backend, dopts, quotaBytes)
 	if err != nil {
 		return nil, err
 	}

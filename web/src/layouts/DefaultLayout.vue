@@ -148,12 +148,18 @@ const menuOptions: MenuOption[] = [
     key: 'admin',
     icon: svgIcon('M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'),
   },
+  {
+    label: '租户管理',
+    key: 'tenants',
+    icon: svgIcon('M3 11h8v10H3zm10 0h8v10h-8zM5 9l7-6 7 6'),
+  },
 ]
 
-// 非管理员隐藏「用户管理」菜单项（后端同样强制 RequireRole(admin)）。
+// 非管理员隐藏「用户管理 / 租户管理」菜单项（后端同样强制 RequireRole(admin)）。
+const adminKeys = new Set<string>(['admin', 'tenants'])
 const visibleMenuOptions = computed(() => {
   if (auth.user?.role === 'admin') return menuOptions
-  return menuOptions.filter((o) => o.key !== 'admin')
+  return menuOptions.filter((o) => o.key != null && !adminKeys.has(String(o.key)))
 })
 
 // 主题切换按钮图标：深色显示「太阳」(切回浅色)，浅色显示「月亮」(切到深色)。

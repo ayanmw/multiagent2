@@ -63,7 +63,7 @@ func callTool(t *testing.T, tools []tool.Tool, name, inputJSON string) string {
 func TestShellExec_RunsCommand(t *testing.T) {
 	dir := t.TempDir()
 	ex, _ := newTestExecutor(t, dir)
-	tools := CodeActTools(dir, ex)
+	tools := CodeActTools(dir, ex, 0)
 
 	out := callTool(t, tools, "shell_exec", `{"command":"echo hello-m1"}`)
 	if !strings.Contains(out, "hello-m1") {
@@ -78,7 +78,7 @@ func TestShellExec_RunsCommand(t *testing.T) {
 func TestShellExec_DangerousCommandDenied(t *testing.T) {
 	dir := t.TempDir()
 	ex, aud := newTestExecutor(t, dir)
-	tools := CodeActTools(dir, ex)
+	tools := CodeActTools(dir, ex, 0)
 
 	out := callTool(t, tools, "shell_exec", `{"command":"rm -rf /"}`)
 	if !strings.Contains(out, "拒绝") {
@@ -97,7 +97,7 @@ func TestShellExec_DangerousCommandDenied(t *testing.T) {
 func TestFileWriteReadEdit(t *testing.T) {
 	dir := t.TempDir()
 	ex, _ := newTestExecutor(t, dir)
-	tools := CodeActTools(dir, ex)
+	tools := CodeActTools(dir, ex, 0)
 
 	// 写
 	writeOut := callTool(t, tools, "file_write", `{"path":"src/main.go","content":"package main\n"}`)
@@ -134,7 +134,7 @@ func TestFileWriteReadEdit(t *testing.T) {
 func TestFileRead_TraversalBlocked(t *testing.T) {
 	dir := t.TempDir()
 	ex, _ := newTestExecutor(t, dir)
-	tools := CodeActTools(dir, ex)
+	tools := CodeActTools(dir, ex, 0)
 
 	// 试图越出工作目录读到仓库根（用绝对路径指向父级）。
 	target := filepath.Join(dir, "..", "escape.txt")

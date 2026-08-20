@@ -16,7 +16,7 @@ import (
 // 返回可读的 ErrDockerUnavailable 错误（而非静默失败）——提示运维改用 host 或装 docker。
 func TestNewCodeActWithBackend_DockerUnavailable(t *testing.T) {
 	dir := t.TempDir()
-	all, err := NewCodeActWithBackend(dir, nil, nil, executor.ModeUnattended, executor.BackendDocker, executor.DockerOptions{})
+	all, err := NewCodeActWithBackend(dir, nil, nil, executor.ModeUnattended, executor.BackendDocker, executor.DockerOptions{}, 0)
 	if err != nil {
 		t.Fatalf("NewCodeActWithBackend(docker): %v（构造不应依赖 docker 可用）", err)
 	}
@@ -46,7 +46,7 @@ func TestNewCodeActWithBackend_DockerUnavailable(t *testing.T) {
 // （工具可真实执行——host 无 docker 依赖）。
 func TestNewCodeActWithBackend_Host(t *testing.T) {
 	dir := t.TempDir()
-	all, err := NewCodeActWithBackend(dir, nil, nil, executor.ModeUnattended, executor.BackendHost, executor.DockerOptions{})
+	all, err := NewCodeActWithBackend(dir, nil, nil, executor.ModeUnattended, executor.BackendHost, executor.DockerOptions{}, 0)
 	if err != nil {
 		t.Fatalf("NewCodeActWithBackend(host): %v", err)
 	}

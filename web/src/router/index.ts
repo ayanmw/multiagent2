@@ -134,6 +134,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/AdminView.vue'),
         meta: { title: '用户管理', desc: '用户管理后台：创建 / 禁用 / 重置平台用户，查看配额', adminOnly: true },
       },
+      {
+        path: 'tenants',
+        name: 'tenants',
+        component: () => import('@/views/TenantsView.vue'),
+        meta: { title: '租户管理', desc: '多租户隔离：租户 CRUD、成员归属与租户级预算上限（租户 A 超配额不影响 B）', adminOnly: true },
+      },
     ],
   },
   // 兜底：未知路径回到首页（由守卫决定是否需要登录）。

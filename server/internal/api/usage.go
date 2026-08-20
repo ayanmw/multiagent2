@@ -168,7 +168,8 @@ func buildPromptText(history []engine.ChatMessage, current string) string {
 // recordEngineUsage 在对话结束后落库 token 用量（M3-03 Token/费用计量）。
 // 优先用引擎捕获的上游 usage；若上游未给（TotalTokens==0），用 engine.EstimateUsage
 // 本地粗估并标记 Estimated=true，保证 usage_records 始终有可观测行；估算也为 0 时跳过。
-func recordEngineUsage(db *gorm.DB, eng *engine.Engine, uid uint, sess *model.Session, p *model.Provider, m *model.Model, promptText, completionText string) {
+// workspaceKey 是会话绑定的 workspace key（M8-09，空=默认目录，不参与 workspace 聚合）。
+func recordEngineUsage(db *gorm.DB, eng *engine.Engine, uid uint, sess *model.Session, p *model.Provider, m *model.Model, workspaceKey, promptText, completionText string) {
 	usage := eng.LastUsage()
 	estimated := false
 	if usage.TotalTokens == 0 {
@@ -182,6 +183,7 @@ func recordEngineUsage(db *gorm.DB, eng *engine.Engine, uid uint, sess *model.Se
 		UserID:           uid,
 		SessionID:        sess.ID,
 		SessionKey:       sess.SessionKey,
+		WorkspaceKey:     workspaceKey,
 		ProviderID:       p.ID,
 		ModelID:          m.ID,
 		ModelName:        m.Name,

@@ -93,10 +93,53 @@ func FileRead(workdir, path string) (string, error) {
 	return string(data), nil
 }
 
+// ErrDiskQuotaExceeded 是磁盘配额超限的哨兵错误（M8-09 workspace 磁盘配额）。
+// file_write / file_edit 写入前检查目录总大小，超限返回该错误，Agent 可据此调整。
+var ErrDiskQuotaExceeded = errors.New("workspace 磁盘配额超限")
+
+// enforceQuota 在写入前检查工作目录总大小：quotaBytes<=0 表示不限（跳过）；
+// 否则递归统计目录大小（filepath.Walk），若 size+delta 超过 quotaBytes 返回
+// ErrDiskQuotaExceeded。实现「workspace 级资源隔离」：一个 workspace 写爆
+// 不影响同用户其他 workspace（配额按目录边界独立统计）。
+func enforceQuota(workdir string, quotaBytes, delta int64) error {
+	if quotaBytes <= 0 {
+		return nil
+	}
+	var size int64
+	err := filepath.Walk(workdir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			// 目录内个别文件读取失败不阻断统计（如权限异常），跳过继续。
+			if info != nil && info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("统计工作目录大小失败: %w", err)
+	}
+	if delta < 0 {
+		delta = 0
+	}
+	if size+delta > quotaBytes {
+		return fmt.Errorf("%w：目录已用 %d 字节，配额 %d 字节，本次需 %d 字节",
+			ErrDiskQuotaExceeded, size, quotaBytes, delta)
+	}
+	return nil
+}
+
 // FileWrite 是 file_write 的纯逻辑实现：写入/创建文件（自动建目录）。
-func FileWrite(workdir, path, content string) (string, error) {
+// quotaBytes<=0 表示不限制磁盘配额；>0 时写入前检查目录总大小（M8-09）。
+func FileWrite(workdir, path, content string, quotaBytes int64) (string, error) {
 	abs, err := resolveSafePath(workdir, path)
 	if err != nil {
+		return "", err
+	}
+	if err := enforceQuota(workdir, quotaBytes, int64(len(content))); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
@@ -110,7 +153,8 @@ func FileWrite(workdir, path, content string) (string, error) {
 
 // FileEdit 是 file_edit 的纯逻辑实现：把文件中 oldString 替换为 newString。
 // expectedReplacements>0 时要求精确匹配该次数，否则报错以避免歧义替换。
-func FileEdit(workdir, path, oldString, newString string, expectedReplacements int) (string, error) {
+// quotaBytes<=0 表示不限制磁盘配额；>0 时写入前检查目录总大小（M8-09）。
+func FileEdit(workdir, path, oldString, newString string, expectedReplacements int, quotaBytes int64) (string, error) {
 	if oldString == "" {
 		return "", fmt.Errorf("old_string 不能为空")
 	}
@@ -129,6 +173,11 @@ func FileEdit(workdir, path, oldString, newString string, expectedReplacements i
 	}
 	if expectedReplacements > 0 && count != expectedReplacements {
 		return "", fmt.Errorf("期望替换 %d 处，实际找到 %d 处，已中止以避免歧义替换", expectedReplacements, count)
+	}
+	// 配额检查：净增量 = 替换后与替换前的内容长度差（可能为负=体积变小）。
+	delta := int64(len(newString)-len(oldString)) * int64(count)
+	if err := enforceQuota(workdir, quotaBytes, delta); err != nil {
+		return "", err
 	}
 	if err := os.WriteFile(abs, []byte(strings.Replace(content, oldString, newString, -1)), 0o644); err != nil {
 		return "", fmt.Errorf("写回文件失败: %w", err)
@@ -184,11 +233,11 @@ func fileReadTool(workdir string) tool.Tool {
 	)
 }
 
-// fileWriteTool 构造 file_write 工具。
-func fileWriteTool(workdir string) tool.Tool {
+// fileWriteTool 构造 file_write 工具（quotaBytes<=0 不限，M8-09）。
+func fileWriteTool(workdir string, quotaBytes int64) tool.Tool {
 	return function.NewFunctionTool(
 		func(_ context.Context, in fileWriteInput) (string, error) {
-			return FileWrite(workdir, in.Path, in.Content)
+			return FileWrite(workdir, in.Path, in.Content, quotaBytes)
 		},
 		function.WithName(ToolFileWrite),
 		function.WithDescription("在工作目录内写入/创建文件，自动创建缺失的父目录。"+
@@ -196,11 +245,11 @@ func fileWriteTool(workdir string) tool.Tool {
 	)
 }
 
-// fileEditTool 构造 file_edit 工具。
-func fileEditTool(workdir string) tool.Tool {
+// fileEditTool 构造 file_edit 工具（quotaBytes<=0 不限，M8-09）。
+func fileEditTool(workdir string, quotaBytes int64) tool.Tool {
 	return function.NewFunctionTool(
 		func(_ context.Context, in fileEditInput) (string, error) {
-			return FileEdit(workdir, in.Path, in.OldString, in.NewString, in.ExpectedReplacements)
+			return FileEdit(workdir, in.Path, in.OldString, in.NewString, in.ExpectedReplacements, quotaBytes)
 		},
 		function.WithName(ToolFileEdit),
 		function.WithDescription("把工作目录内文件中的 old_string 替换为 new_string。"+
@@ -212,12 +261,13 @@ func fileEditTool(workdir string) tool.Tool {
 // workdir 是文件类工具的根目录（相对路径以其为基准，且限制不越界）；
 // ex 必须是经过危险命令策略包装的执行器（NewSafeExecutor(HostExecutor, policy, auditor, nil)），
 // 禁止裸用 HostExecutor.Run（见 LEARNINGS M1-05）。
-func CodeActTools(workdir string, ex executor.Executor) []tool.Tool {
+// quotaBytes<=0 表示不限制磁盘配额；>0 时文件写入工具检查目录总大小（M8-09）。
+func CodeActTools(workdir string, ex executor.Executor, quotaBytes int64) []tool.Tool {
 	return []tool.Tool{
 		shellExecTool(ex),
 		fileReadTool(workdir),
-		fileWriteTool(workdir),
-		fileEditTool(workdir),
+		fileWriteTool(workdir, quotaBytes),
+		fileEditTool(workdir, quotaBytes),
 	}
 }
 
@@ -243,7 +293,7 @@ func normalizeExecutorMode(mode executor.Mode) executor.Mode {
 // mode 为执行器运行模式（M4-06）：Unattended 时 ask→检查点/deny（自主 Loop 安全默认）；
 // Interactive 时 ask→deny（有人值守调试会话）；非法值回落 Unattended。
 func NewCodeAct(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) ([]tool.Tool, error) {
-	return NewCodeActWithBackend(workdir, auditor, cp, mode, executor.BackendHost, executor.DockerOptions{})
+	return NewCodeActWithBackend(workdir, auditor, cp, mode, executor.BackendHost, executor.DockerOptions{}, 0)
 }
 
 // NewCodeActWithBackend 是 NewCodeAct 的后端可切换版本（M8-02）：
@@ -253,7 +303,9 @@ func NewCodeAct(workdir string, auditor executor.Auditor, cp executor.Checkpoint
 // 容器是「文件系统/网络隔离」的强保证，策略是「命令语义」的第一道闸，二者叠加。
 // 注意：docker 后端要求宿主机安装 docker CLI，且容器镜像含所需工具链
 // （如 git 工具需镜像内置 git，见 LEARNINGS M8-02）。
-func NewCodeActWithBackend(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode, backend executor.Backend, dopts executor.DockerOptions) ([]tool.Tool, error) {
+// quotaBytes 是磁盘配额上限（字节，M8-09）：<=0 不限；>0 时文件写入工具在写入前
+// 检查工作目录总大小，超限拒绝（docker 后端下 workdir 即宿主机挂载目录，统计一致）。
+func NewCodeActWithBackend(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode, backend executor.Backend, dopts executor.DockerOptions, quotaBytes int64) ([]tool.Tool, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
@@ -271,5 +323,5 @@ func NewCodeActWithBackend(workdir string, auditor executor.Auditor, cp executor
 		nil, // 无人值守：ask 类命令不交交互确认
 		cp,  // 无人值守 ask → 生成人工检查点（nil 时退化 deny，M3-05）
 	)
-	return CodeActTools(workdir, ex), nil
+	return CodeActTools(workdir, ex, quotaBytes), nil
 }

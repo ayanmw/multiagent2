@@ -27,6 +27,10 @@ type Workspace struct {
 	GitRemote   string          `gorm:"size:512" json:"git_remote"`
 	Description string          `gorm:"size:512" json:"description"`
 	Status      WorkspaceStatus `gorm:"size:16;not null;default:active" json:"status"`
+	// DiskQuotaBytes 是该 workspace 的磁盘配额上限（字节，M8-09）。0=不限（默认）。
+	// 文件工具（file_write/file_edit）写入前检查目录总大小，超限拒绝写入——
+	// 实现「workspace 级资源隔离」：一个 workspace 写爆不拖垮同用户其他 workspace。
+	DiskQuotaBytes int64 `gorm:"not null;default:0" json:"disk_quota_bytes"`
 }
 
 // TableName overrides the default GORM table name.

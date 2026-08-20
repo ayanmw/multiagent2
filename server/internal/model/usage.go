@@ -13,6 +13,9 @@ type UsageRecord struct {
 	UserID     uint   `gorm:"not null;index" json:"user_id"`       // 归属用户（owner 隔离）
 	SessionID  uint   `gorm:"not null;index" json:"session_id"`    // 会话 DB id（repo.Session.ID）
 	SessionKey string `gorm:"index" json:"session_key"`            // 会话业务 key（便于按对话聚合）
+	// WorkspaceKey 是会话绑定的 workspace key（M8-09，可空）：供 workspace 作用域
+	// 预算聚合；无绑定的会话（默认用户目录）留空，不参与 workspace 聚合。
+	WorkspaceKey string `gorm:"index" json:"workspace_key,omitempty"`
 	ProviderID uint   `gorm:"index" json:"provider_id"`            // 上游 Provider id
 	ModelID    uint   `gorm:"index" json:"model_id"`               // 模型 id
 	ModelName  string `json:"model_name"`                          // 模型展示名（冗余，便于展示）
