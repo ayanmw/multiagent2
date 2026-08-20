@@ -6,13 +6,23 @@ import {
   NLayoutHeader,
   NLayoutSider,
   NLayoutContent,
+} from 'naive-ui/es/layout'
+import {
   NMenu,
+} from 'naive-ui/es/menu'
+import {
   NText,
+} from 'naive-ui/es/typography'
+import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NIcon,
+} from 'naive-ui/es/icon'
+import {
   NBadge,
-} from 'naive-ui'
-import type { MenuOption } from 'naive-ui'
+} from 'naive-ui/es/badge'
+import type { MenuOption } from 'naive-ui/es/menu'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { listNotifications } from '@/api/notification'

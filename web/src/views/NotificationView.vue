@@ -2,18 +2,36 @@
 import { h, ref, reactive, computed, onMounted } from 'vue'
 import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NDataTable,
-  NSelect,
-  NSpace,
-  NTag,
-  NEmpty,
-  NAlert,
-  NPopconfirm,
-  useMessage,
   type DataTableColumns,
+} from 'naive-ui/es/data-table'
+import {
+  NSelect,
   type SelectOption,
-} from 'naive-ui'
+} from 'naive-ui/es/select'
+import {
+  NSpace,
+} from 'naive-ui/es/space'
+import {
+  NTag,
+} from 'naive-ui/es/tag'
+import {
+  NEmpty,
+} from 'naive-ui/es/empty'
+import {
+  NAlert,
+} from 'naive-ui/es/alert'
+import {
+  NPopconfirm,
+} from 'naive-ui/es/popconfirm'
+import {
+  useMessage,
+} from 'naive-ui/es/message'
 import {
   listNotifications,
   markNotificationRead,

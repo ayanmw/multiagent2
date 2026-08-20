@@ -2,17 +2,35 @@
 import { h, ref, onMounted } from 'vue'
 import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NDataTable,
-  NSwitch,
-  NTag,
-  NSpace,
-  NText,
-  NEmpty,
-  NScrollbar,
-  useMessage,
   type DataTableColumns,
-} from 'naive-ui'
+} from 'naive-ui/es/data-table'
+import {
+  NSwitch,
+} from 'naive-ui/es/switch'
+import {
+  NTag,
+} from 'naive-ui/es/tag'
+import {
+  NSpace,
+} from 'naive-ui/es/space'
+import {
+  NText,
+} from 'naive-ui/es/typography'
+import {
+  NEmpty,
+} from 'naive-ui/es/empty'
+import {
+  NScrollbar,
+} from 'naive-ui/es/scrollbar'
+import {
+  useMessage,
+} from 'naive-ui/es/message'
 import {
   listProviders,
   type Provider,

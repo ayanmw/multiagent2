@@ -2,19 +2,39 @@
 import { h, ref, computed, onMounted } from 'vue'
 import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NDataTable,
-  NSelect,
-  NSpace,
-  NTag,
-  NModal,
-  NAlert,
-  NEmpty,
-  NSpin,
-  useMessage,
   type DataTableColumns,
+} from 'naive-ui/es/data-table'
+import {
+  NSelect,
   type SelectOption,
-} from 'naive-ui'
+} from 'naive-ui/es/select'
+import {
+  NSpace,
+} from 'naive-ui/es/space'
+import {
+  NTag,
+} from 'naive-ui/es/tag'
+import {
+  NModal,
+} from 'naive-ui/es/modal'
+import {
+  NAlert,
+} from 'naive-ui/es/alert'
+import {
+  NEmpty,
+} from 'naive-ui/es/empty'
+import {
+  NSpin,
+} from 'naive-ui/es/spin'
+import {
+  useMessage,
+} from 'naive-ui/es/message'
 import {
   listArtifacts,
   getArtifact,

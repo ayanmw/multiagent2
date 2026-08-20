@@ -2,16 +2,32 @@
 import { h, ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NDataTable,
-  NModal,
-  NTag,
-  NSpace,
-  NScrollbar,
-  NEmpty,
-  useMessage,
   type DataTableColumns,
-} from 'naive-ui'
+} from 'naive-ui/es/data-table'
+import {
+  NModal,
+} from 'naive-ui/es/modal'
+import {
+  NTag,
+} from 'naive-ui/es/tag'
+import {
+  NSpace,
+} from 'naive-ui/es/space'
+import {
+  NScrollbar,
+} from 'naive-ui/es/scrollbar'
+import {
+  NEmpty,
+} from 'naive-ui/es/empty'
+import {
+  useMessage,
+} from 'naive-ui/es/message'
 import {
   listTaskRuns,
   getTaskRun,

@@ -2,18 +2,38 @@
 import { ref, computed, onMounted } from 'vue'
 import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NTag,
+} from 'naive-ui/es/tag'
+import {
   NSpace,
+} from 'naive-ui/es/space'
+import {
   NGrid,
   NGridItem,
+} from 'naive-ui/es/grid'
+import {
   NStatistic,
+} from 'naive-ui/es/statistic'
+import {
   NEmpty,
+} from 'naive-ui/es/empty'
+import {
   NResult,
+} from 'naive-ui/es/result'
+import {
   NText,
+} from 'naive-ui/es/typography'
+import {
   NBadge,
+} from 'naive-ui/es/badge'
+import {
   useMessage,
-} from 'naive-ui'
+} from 'naive-ui/es/message'
 import { getMonitoringOverview, GRAFANA_URL, type MonitoringOverview } from '@/api/monitoring'
 
 const message = useMessage()

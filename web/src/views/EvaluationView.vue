@@ -2,24 +2,52 @@
 import { h, ref, computed, onMounted, watch } from 'vue'
 import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NDataTable,
+  type DataTableColumns,
+} from 'naive-ui/es/data-table'
+import {
   NModal,
+} from 'naive-ui/es/modal'
+import {
   NForm,
   NFormItem,
+} from 'naive-ui/es/form'
+import {
   NInput,
+} from 'naive-ui/es/input'
+import {
   NSelect,
-  NSpace,
-  NText,
-  NTag,
-  NInputNumber,
-  NEmpty,
-  NSpin,
-  useMessage,
-  useDialog,
-  type DataTableColumns,
   type SelectOption,
-} from 'naive-ui'
+} from 'naive-ui/es/select'
+import {
+  NSpace,
+} from 'naive-ui/es/space'
+import {
+  NText,
+} from 'naive-ui/es/typography'
+import {
+  NTag,
+} from 'naive-ui/es/tag'
+import {
+  NInputNumber,
+} from 'naive-ui/es/input-number'
+import {
+  NEmpty,
+} from 'naive-ui/es/empty'
+import {
+  NSpin,
+} from 'naive-ui/es/spin'
+import {
+  useMessage,
+} from 'naive-ui/es/message'
+import {
+  useDialog,
+} from 'naive-ui/es/dialog'
 import {
   listEvalDatasets,
   createEvalDataset,

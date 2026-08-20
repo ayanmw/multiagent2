@@ -328,3 +328,11 @@ server/
 - **config 校验抽纯函数再 fatal**：`log.Fatalf` 路径在单测里不可达（os.Exit 会杀测试进程），把校验逻辑抽成 `validateKnowledgeStore(store, dsn) error` 纯函数，Load 内 fatal、测试直调纯函数断言——与 M8-03 的 queue 配置同款模式。
 - **万级/并发验收测试的环境策略**：集成测试读 `PG_TEST_DSN`，未设置 t.Skip（本机沙箱/CI 默认跳过，有 PG 的 runner 真跑）；万级数据测试再套 `PG_SCALE_TEST=1` 开关（避免 CI 每次跑 1 万条插入）；性能数字**只输出不硬断言**（P50/P95/P99 打印进报告，环境抖动不 flaky）——与 M8-02 docker 集成测试同款「环境变量 + Skip 兜底」策略。
 
+
+### 2026-08-20 | 前端 | naive-ui 按需引入必须组件级子路径导入（M8-06，重要）
+- **根入口带副作用，无法 tree-shake**：`import { NButton } from 'naive-ui'` 会经 `es/components.mjs` 导出全部组件模块；Rollup 对 node_modules 默认保留有副作用模块（naive-ui 每个组件模块顶层有 cssr 样式注册副作用），**从根导入必然全量打包**（实测 naive-ui chunk 仍是 800KB+，含 NCode/NEquation/NDatePicker 等未用组件的重型依赖）。官方 `NaiveUiResolver` 生成的 `from: 'naive-ui'` 同样是根导入——**必须自定义 resolver 返回子路径**。
+- **正确姿势**：所有 naive-ui 导入一律写组件级子路径 `import { NButton } from 'naive-ui/es/button'`（naive-ui **无 exports 字段**，子路径完全合法；组件目录在 `es/` 根平铺：button/card/data-table/config-provider/global-style/...）。模板中未显式 import 的 n-* 组件由 unplugin-vue-components 自定义 resolver 生成同款子路径导入。
+- **特例映射（Pascal 直转 kebab 会错）**：NText/NH1~H6/NP/NUl/NOl/NLi → `es/typography`（无 es/text）；NGi/NGridItem → `es/grid`；NFormItemGi → `es/form`（naive-ui 专有 Grid 表单项）；NFormItem → `es/form`；NDrawerContent → `es/drawer`；NLayoutHeader/Sider/Content → `es/layout`；NRadioGroup/NRadioButton → `es/radio`；NMessageProvider → `es/message`；NDialogProvider → `es/dialog`；NInputGroup → `es/input`；NDescriptionsItem → `es/descriptions`；NListItem → `es/list`。hook（useMessage→es/message、useDialog→es/dialog）、darkTheme→es/themes、类型（DataTableColumns→es/data-table、SelectOption→es/select、MenuOption→es/menu）同样走子路径。
+- **判别 tree-shake 是否生效要用强特征**：naive-ui 的 date-picker 内部自带日历/时间选择逻辑，字符串探测 'calendar'/'time-picker'/'highlight'/'katex' 全是**误报**（date-picker 与样式类名中包含这些词）。正确判别用强第三方依赖特征：`highlight.js/lib`（NCode）、`katex.mjs`（NEquation）、`codemirror`、`echarts`、`marked`、`dayjs`——零命中即按需已生效。
+- **行为等价拆分的细节**：hover 高亮从「绝对设置 index」改为「相对增量 emit」时注意取模等价性；父组件原有的 `nextTick(focus)` 等 UX 细节在拆入子组件后需在子组件内用 `watch(modelValue)` 补回（选中带参命令回填 `/name ` 后聚焦）。
+- **沙箱 /tmp 备份不可靠**：git bash 下 `cp src/App.vue /tmp/x.bak` 跨命令视图隔离（沙箱 shim 把 /tmp 映射异常），实验性修改务必用 Edit 工具或仓库内临时路径，改完立即恢复。

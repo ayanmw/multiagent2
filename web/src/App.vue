@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import {
-  NConfigProvider,
-  NMessageProvider,
-  NDialogProvider,
-  NGlobalStyle,
-  darkTheme,
-} from 'naive-ui'
+import { NConfigProvider } from 'naive-ui/es/config-provider'
+import { NMessageProvider } from 'naive-ui/es/message'
+import { NDialogProvider } from 'naive-ui/es/dialog'
+import { NGlobalStyle } from 'naive-ui/es/global-style'
+import { darkTheme } from 'naive-ui/es/themes'
 import { useUiStore } from '@/stores/ui'
 
 const ui = useUiStore()

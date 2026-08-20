@@ -2,23 +2,49 @@
 import { h, ref, onMounted, reactive } from 'vue'
 import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NDataTable,
+  type DataTableColumns,
+} from 'naive-ui/es/data-table'
+import {
   NModal,
+} from 'naive-ui/es/modal'
+import {
   NForm,
   NFormItem,
+} from 'naive-ui/es/form'
+import {
   NInput,
+} from 'naive-ui/es/input'
+import {
   NSelect,
+} from 'naive-ui/es/select'
+import {
   NSwitch,
+} from 'naive-ui/es/switch'
+import {
   NPopconfirm,
+} from 'naive-ui/es/popconfirm'
+import {
   NTag,
+} from 'naive-ui/es/tag'
+import {
   NSpace,
+} from 'naive-ui/es/space'
+import {
   NText,
+} from 'naive-ui/es/typography'
+import {
   NList,
   NListItem,
+} from 'naive-ui/es/list'
+import {
   useMessage,
-  type DataTableColumns,
-} from 'naive-ui'
+} from 'naive-ui/es/message'
 import {
   listMCPServers,
   createMCPServer,

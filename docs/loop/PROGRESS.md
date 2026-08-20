@@ -889,3 +889,11 @@
 - **测试（9 例全绿）**：`selfgen_test.go` 6 例（真实技能正文三类用例全命中 / 琐碎正文仅保底 / 超长技能截断 ≤8 / nil·空名报错 / commandStem 去参数·flag 过滤 / headingKey CJK 优先）+ `regression_test.go` 扩展 3 例（Register 自举多 case 且重复幂等 / baselineOf 跳过 running·failed·本次取最近 done / 无历史 found=false）。
 - 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test -count=1 ./...` 39 包全 ok（cmd/server 25.8s，regression 0.18s 含新用例，其余无回归）；前端无改动。
 - Commit 43174cc 已推 origin/main。下一步：首个 ○ = M8-06（前端重构：拆分大 View + 删 PlaceholderView 死代码 + naive-ui 按需 + manualChunks，首屏 <500KB gzip）；M7.5-04 待用户提供集群后恢复。
+
+### 2026-08-20 14:38 | M8-06 | ✅ 前端重构：大 View 拆分 + 死代码删除 + naive-ui 按需 + manualChunks
+- **大 View 拆分（行为等价，纯 UI 提取 + 事件上抛）**：ChatView 803→430 行——新增 `components/chat/`（SessionSidebar 会话侧栏 / ChatToolbar 顶部工具条 / MessageList 消息区含工具折叠与滚动跟随 / ChatInput 输入区含斜杠命令浮层键盘导航）；AutomationView 467→420 行——新增 `components/automation/`（AutomationFormModal 创建/编辑表单弹窗内聚校验 / RunHistoryDrawer 运行历史抽屉内聚自加载）。
+- **死代码删除**：PlaceholderView.vue（M0 占位遗留，路由早已全量真实视图）、HomeView.vue、AboutView.vue——grep 证实零引用后删除，views 24→21 个。
+- **naive-ui 按需（关键改造）**：① main.ts 移除 `app.use(naive)` 全量注册；② 29 个文件全部显式 import 改写为**组件级子路径** `naive-ui/es/<dir>`（一次性脚本执行后已删，naive-ui 无 exports 字段故子路径合法）；③ vite.config.ts 自定义 resolver（替代官方 NaiveUiResolver——其 from=根入口 'naive-ui' 会带副作用全量打包）为模板 n-* 组件生成子路径导入，含特例映射（NText→typography、NGi/NFormItemGi→grid/form、NDrawerContent→drawer、NLayoutHeader→layout、NRadioButton→radio、NMessageProvider→message、NDatePicker→date-picker 等）；④ manualChunks 函数式分包：vue-vendor（vue/router/pinia）+ naive-ui（含 vueuc/css-render/seemly/date-fns 等基础库）。
+- **验证**：vue-tsc 全绿；build 全绿；runtime preview HTTP 200；**首屏 320.4 KB gzip**（index 7.57 + vue-vendor 39.54 + naive-ui 215.67 + ChatView 7.60 + markdown 54.62 + css 3.03），较基线 456.9KB **降 29.9%**，达成「首屏 <500KB gzip」验收；功能逻辑零改动（API 层未动，仅 UI 拆分与打包配置）。
+- 依赖变更：web/package.json devDependencies + unplugin-vue-components ^32.1.0。
+- Commit 待提交。下一步：首个 ○ = M8-07（IM Channel：飞书/钉钉/企微 Channel，Loop 可从 IM 触发与回发）；M7.5-04 待用户提供集群后恢复。

@@ -2,23 +2,49 @@
 import { h, ref, reactive, computed, onMounted } from 'vue'
 import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NDataTable,
+  type DataTableColumns,
+} from 'naive-ui/es/data-table'
+import {
   NInput,
   NInputGroup,
+} from 'naive-ui/es/input'
+import {
   NSelect,
+} from 'naive-ui/es/select'
+import {
   NSpace,
+} from 'naive-ui/es/space'
+import {
   NText,
+} from 'naive-ui/es/typography'
+import {
   NEmpty,
+} from 'naive-ui/es/empty'
+import {
   NModal,
+} from 'naive-ui/es/modal'
+import {
   NForm,
   NFormItem,
+} from 'naive-ui/es/form'
+import {
   NTag,
+} from 'naive-ui/es/tag'
+import {
   NScrollbar,
+} from 'naive-ui/es/scrollbar'
+import {
   useMessage,
+} from 'naive-ui/es/message'
+import {
   useDialog,
-  type DataTableColumns,
-} from 'naive-ui'
+} from 'naive-ui/es/dialog'
 import {
   listKnowledgeBases,
   createKnowledgeBase,

@@ -2,22 +2,48 @@
 import { h, ref, reactive, computed, onMounted } from 'vue'
 import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NDataTable,
-  NSelect,
-  NSpace,
-  NTag,
-  NModal,
-  NInput,
-  NForm,
-  NGrid,
-  NEmpty,
-  NAlert,
-  useMessage,
-  useDialog,
   type DataTableColumns,
+} from 'naive-ui/es/data-table'
+import {
+  NSelect,
   type SelectOption,
-} from 'naive-ui'
+} from 'naive-ui/es/select'
+import {
+  NSpace,
+} from 'naive-ui/es/space'
+import {
+  NTag,
+} from 'naive-ui/es/tag'
+import {
+  NModal,
+} from 'naive-ui/es/modal'
+import {
+  NInput,
+} from 'naive-ui/es/input'
+import {
+  NForm,
+} from 'naive-ui/es/form'
+import {
+  NGrid,
+} from 'naive-ui/es/grid'
+import {
+  NEmpty,
+} from 'naive-ui/es/empty'
+import {
+  NAlert,
+} from 'naive-ui/es/alert'
+import {
+  useMessage,
+} from 'naive-ui/es/message'
+import {
+  useDialog,
+} from 'naive-ui/es/dialog'
 import {
   listCheckpoints,
   resolveCheckpoint,

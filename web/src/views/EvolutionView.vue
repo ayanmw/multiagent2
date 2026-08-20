@@ -2,20 +2,40 @@
 import { h, ref, onMounted } from 'vue'
 import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NDataTable,
+  type DataTableColumns,
+} from 'naive-ui/es/data-table'
+import {
   NDrawer,
   NDrawerContent,
+} from 'naive-ui/es/drawer'
+import {
   NTag,
+} from 'naive-ui/es/tag'
+import {
   NSpace,
+} from 'naive-ui/es/space'
+import {
   NText,
+} from 'naive-ui/es/typography'
+import {
   NSelect,
-  NInput,
-  NEmpty,
-  useMessage,
-  type DataTableColumns,
   type SelectOption,
-} from 'naive-ui'
+} from 'naive-ui/es/select'
+import {
+  NInput,
+} from 'naive-ui/es/input'
+import {
+  NEmpty,
+} from 'naive-ui/es/empty'
+import {
+  useMessage,
+} from 'naive-ui/es/message'
 import {
   listSkillCandidates,
   scanSkillCandidates,

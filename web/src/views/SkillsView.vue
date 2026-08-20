@@ -2,17 +2,35 @@
 import { h, ref, onMounted } from 'vue'
 import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NDataTable,
-  NModal,
-  NInput,
-  NPopconfirm,
-  NTag,
-  NSpace,
-  NText,
-  useMessage,
   type DataTableColumns,
-} from 'naive-ui'
+} from 'naive-ui/es/data-table'
+import {
+  NModal,
+} from 'naive-ui/es/modal'
+import {
+  NInput,
+} from 'naive-ui/es/input'
+import {
+  NPopconfirm,
+} from 'naive-ui/es/popconfirm'
+import {
+  NTag,
+} from 'naive-ui/es/tag'
+import {
+  NSpace,
+} from 'naive-ui/es/space'
+import {
+  NText,
+} from 'naive-ui/es/typography'
+import {
+  useMessage,
+} from 'naive-ui/es/message'
 import {
   listSkills,
   getSkill,

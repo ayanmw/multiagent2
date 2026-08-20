@@ -2,22 +2,47 @@
 import { ref, h, onMounted, computed } from 'vue'
 import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NDataTable,
+} from 'naive-ui/es/data-table'
+import {
   NTag,
+} from 'naive-ui/es/tag'
+import {
   NSpace,
+} from 'naive-ui/es/space'
+import {
   NDrawer,
   NDrawerContent,
+} from 'naive-ui/es/drawer'
+import {
   NForm,
   NFormItem,
+} from 'naive-ui/es/form'
+import {
   NInput,
+} from 'naive-ui/es/input'
+import {
   NSelect,
+} from 'naive-ui/es/select'
+import {
   NSwitch,
+} from 'naive-ui/es/switch'
+import {
   NText,
+} from 'naive-ui/es/typography'
+import {
   useMessage,
+} from 'naive-ui/es/message'
+import {
   useDialog,
-} from 'naive-ui'
-import type { DataTableColumns, SelectOption } from 'naive-ui'
+} from 'naive-ui/es/dialog'
+import type { DataTableColumns } from 'naive-ui/es/data-table'
+import type { SelectOption } from 'naive-ui/es/select'
 import { useAuthStore } from '@/stores/auth'
 import {
   listUsers,

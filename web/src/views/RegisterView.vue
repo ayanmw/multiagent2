@@ -1,19 +1,33 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import {
+  useMessage,
+} from 'naive-ui/es/message'
 import {
   NLayout,
   NLayoutContent,
+} from 'naive-ui/es/layout'
+import {
   NCard,
+} from 'naive-ui/es/card'
+import {
   NForm,
   NFormItem,
+} from 'naive-ui/es/form'
+import {
   NInput,
+} from 'naive-ui/es/input'
+import {
   NButton,
+} from 'naive-ui/es/button'
+import {
   NAlert,
+} from 'naive-ui/es/alert'
+import {
   NH2,
   NText,
-} from 'naive-ui'
+} from 'naive-ui/es/typography'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
