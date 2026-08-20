@@ -84,6 +84,8 @@ func SeedRoles() []Role {
 			{Resource: "promptiter", Action: "write"},
 			{Resource: "instructions", Action: "read"},
 			{Resource: "instructions", Action: "write"},
+			{Resource: "im", Action: "read"},
+			{Resource: "im", Action: "write"},
 		},
 		},
 		{
@@ -108,6 +110,7 @@ func SeedRoles() []Role {
 			{Resource: "evaluations", Action: "read"},
 			{Resource: "promptiter", Action: "read"},
 			{Resource: "instructions", Action: "read"},
+			{Resource: "im", Action: "read"},
 		},
 		},
 	}

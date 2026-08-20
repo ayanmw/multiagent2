@@ -336,3 +336,12 @@ server/
 - **判别 tree-shake 是否生效要用强特征**：naive-ui 的 date-picker 内部自带日历/时间选择逻辑，字符串探测 'calendar'/'time-picker'/'highlight'/'katex' 全是**误报**（date-picker 与样式类名中包含这些词）。正确判别用强第三方依赖特征：`highlight.js/lib`（NCode）、`katex.mjs`（NEquation）、`codemirror`、`echarts`、`marked`、`dayjs`——零命中即按需已生效。
 - **行为等价拆分的细节**：hover 高亮从「绝对设置 index」改为「相对增量 emit」时注意取模等价性；父组件原有的 `nextTick(focus)` 等 UX 细节在拆入子组件后需在子组件内用 `watch(modelValue)` 补回（选中带参命令回填 `/name ` 后聚焦）。
 - **沙箱 /tmp 备份不可靠**：git bash 下 `cp src/App.vue /tmp/x.bak` 跨命令视图隔离（沙箱 shim 把 /tmp 映射异常），实验性修改务必用 Edit 工具或仓库内临时路径，改完立即恢复。
+
+### 2026-08-20 | 架构 | IM Channel 的三平台统一设计（M8-07，可复用）
+- **协议层与接入层分离**：`internal/im` 只做「解析 + 验签 + 出站 payload」三组纯函数（飞书/钉钉/企微各一文件），`Sender` 接口 + `HTTPSender`（POST 机器人 webhook，`ErrNoWebhook` 哨兵让「未配置 URL」可被 best-effort 忽略）；接入层（api handler）只依赖接口，测试用 mock 或 httptest 真跑 HTTP。**不要**把平台协议细节混进 handler 或 model。
+- **入站验签三平台差异（一次性记全）**：飞书 = `base64(HMAC-SHA256(encrypt_key, timestamp+"\n"+body))`，签名/时间戳在 header `X-Lark-Signature`/`X-Lark-Request-Timestamp`；钉钉 = `base64(HMAC-SHA256(timestamp+"\n"+secret, secret))`，timestamp/sign 在 URL query（或 header）；企微明文回调 = `sha1hex(sort(token, timestamp, nonce, body))`，参数在 query。**统一模式**：secret 配置非空才验签、空则放行（与 M6-05 webhook 签名同款），生产必配，本地调试/单测免配。
+- **绑定表而非「IM 账号即平台账号」**：`im_bindings (platform, im_user_id) 复合唯一 → user_id + chat_id`，webhook 按 (platform, im_user_id) 匹配、ChatID 记录回发目标；仅本人绑定本人（owner 隔离防越权代绑）。会话 key 用稳定 `im:<platform>:<chat_id>` → 同一 IM 聊天天然多轮记忆（复用 M0.5-01 历史回灌），无需额外会话管理。
+- **无人值守归类**：IM 与 cron/webhook/recover 一样属无人值守 Channel（服务器侧无人实时确认），`Gateway.resolveExecutorMode` 必须把它加进强制 `ModeUnattended` 分支，否则 ask 危险命令会在无人确认下卡死 Loop。
+- **复用而不是新造 Runner**：IM 触发 Loop 直接包装 `gw.Run(Request{Channel: ChannelIM, TeamOverride: &schedTeam})`——与 cron/webhook 同一 Gateway（同一会话串行锁）、同一目标契约 TeamOverride（子代理+Goal+护栏）、同一预算/检查点护栏，只是 Channel 标识不同。预留的 `ChannelIM` 常量（M4-04）正是为此。
+- **Go 测试命名坑（再记一条）**：函数式参数 `func(ctx, uid uint, s, t string)` 里的 `t` 会遮蔽外层 `*testing.T`，在闭包内 `t.Fatal` 编译报 `type string has no field Fatal`——闭包参数命名避开 `t`（用 `txt`）。
+- **heredoc 追加二次踩坑（重申）**：`cat >> file << EOF` 在沙箱下会偶发把内容写到**文件头部/截断重排**（config_test.go 被整体覆盖，靠 `git checkout --` 恢复）——**追加/修改任何文档或代码一律用 Edit 工具，禁止 heredoc 追加**（M7-07 已记一次，本次复发）。

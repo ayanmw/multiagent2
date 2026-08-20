@@ -89,6 +89,7 @@ func baselineModels() []any {
 		&model.EvalResult{},
 		&model.AgentInstruction{},
 		&model.PromptIterRun{},
+		&model.IMBinding{},
 	}
 }
 
@@ -199,6 +200,16 @@ func Migrations() []Migration {
 			// 落库 baseline/candidate 分数、优化前后指令全文与改进理由，支撑「可读、可回滚」。
 			Up: func(db *gorm.DB, _ MigrationContext) error {
 				return db.AutoMigrate(&model.PromptIterRun{})
+			},
+		},
+		{
+			Version: "0012",
+			Name:    "add_im_bindings",
+			// M8-07：新增 im_bindings 表（IM 用户 ↔ 平台用户绑定）。
+			// IM 平台（飞书/钉钉/企微）webhook 入站消息按 (platform, im_user_id)
+			// 匹配绑定 → 以平台用户身份跑 Gateway Loop → 结果回发 ChatID。
+			Up: func(db *gorm.DB, _ MigrationContext) error {
+				return db.AutoMigrate(&model.IMBinding{})
 			},
 		},
 	}

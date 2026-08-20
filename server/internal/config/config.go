@@ -136,6 +136,16 @@ type Config struct {
 	// 告警接收端点共享密钥（M7-04）：非空时 /api/alerts 要求携带此密钥（Authorization: Bearer
 	// 或 X-Alert-Token）才接受 Alertmanager 推送；空=关闭校验（向后兼容，生产建议配置）。
 	alertWebhookToken string // 告警接收端点共享密钥（env ALERT_WEBHOOK_TOKEN，默认空=关闭）
+	// IM Channel（M8-07）：飞书/钉钉/企微机器人接入。
+	// *_WEBHOOK_URL 是「自定义机器人出站回发地址」：非空才注册该平台的回发能力；
+	// *_SECRET 是「入站事件验签密钥」：非空才启用签名校验（生产必须配置，空=本地调试跳过）。
+	// 未配置的 IM 平台 webhook 端点仍可接收（解析/运行照常），只是不回发、不验签。
+	imFeishuWebhookURL   string // 飞书出站机器人 webhook（env IM_FEISHU_WEBHOOK_URL，默认空=关闭回发）
+	imFeishuSecret       string // 飞书事件验签密钥（env IM_FEISHU_SECRET，默认空=关闭验签）
+	imDingtalkWebhookURL string // 钉钉出站机器人 webhook（env IM_DINGTALK_WEBHOOK_URL，默认空=关闭回发）
+	imDingtalkSecret     string // 钉钉回调验签密钥（env IM_DINGTALK_SECRET，默认空=关闭验签）
+	imWecomWebhookURL    string // 企微出站机器人 webhook（env IM_WECOM_WEBHOOK_URL，默认空=关闭回发）
+	imWecomSecret        string // 企微回调验签 Token（env IM_WECOM_SECRET，默认空=关闭验签）
 	// 告警通知目标用户 ID 列表（M7-04）：Prometheus/Alertmanager 平台告警经统一通知出口
 	// 投递到这些管理员用户（逗号分隔，env ALERT_NOTIFY_USER_IDS，默认 "1"）。
 	alertNotifyUserIDs []uint // 告警通知目标用户 ID 列表（env ALERT_NOTIFY_USER_IDS，默认 [1]）
@@ -490,6 +500,14 @@ func Load() *Config {
 	// 出站 webhook 通知回调地址（M4-07）：为空表示只发站内信，不发外部回调。
 	cfg.webhookNotifyURL = envOrDefault("WEBHOOK_NOTIFY_URL", "")
 	cfg.webhookSignSecret = envOrDefault("WEBHOOK_SIGN_SECRET", "")
+
+	// IM Channel（M8-07）：三平台出站回发 URL + 入站验签密钥。空=对应能力关闭。
+	cfg.imFeishuWebhookURL = envOrDefault("IM_FEISHU_WEBHOOK_URL", "")
+	cfg.imFeishuSecret = envOrDefault("IM_FEISHU_SECRET", "")
+	cfg.imDingtalkWebhookURL = envOrDefault("IM_DINGTALK_WEBHOOK_URL", "")
+	cfg.imDingtalkSecret = envOrDefault("IM_DINGTALK_SECRET", "")
+	cfg.imWecomWebhookURL = envOrDefault("IM_WECOM_WEBHOOK_URL", "")
+	cfg.imWecomSecret = envOrDefault("IM_WECOM_SECRET", "")
 
 	// 告警接收端点共享密钥（M7-04）：空=关闭校验。
 	cfg.alertWebhookToken = envOrDefault("ALERT_WEBHOOK_TOKEN", "")
@@ -889,6 +907,56 @@ func (c *Config) WebhookSignSecret() string {
 		return ""
 	}
 	return c.webhookSignSecret
+}
+
+// IMFeishuWebhookURL returns the Feishu outbound bot webhook URL (M8-07).
+// Empty means outbound reply is disabled for Feishu.
+func (c *Config) IMFeishuWebhookURL() string {
+	if c == nil {
+		return ""
+	}
+	return c.imFeishuWebhookURL
+}
+
+// IMFeishuSecret returns the Feishu inbound event verification secret (M8-07).
+// Empty means signature verification is disabled (local dev only).
+func (c *Config) IMFeishuSecret() string {
+	if c == nil {
+		return ""
+	}
+	return c.imFeishuSecret
+}
+
+// IMDingtalkWebhookURL returns the DingTalk outbound bot webhook URL (M8-07).
+func (c *Config) IMDingtalkWebhookURL() string {
+	if c == nil {
+		return ""
+	}
+	return c.imDingtalkWebhookURL
+}
+
+// IMDingtalkSecret returns the DingTalk inbound callback verification secret (M8-07).
+func (c *Config) IMDingtalkSecret() string {
+	if c == nil {
+		return ""
+	}
+	return c.imDingtalkSecret
+}
+
+// IMWecomWebhookURL returns the WeCom outbound bot webhook URL (M8-07).
+func (c *Config) IMWecomWebhookURL() string {
+	if c == nil {
+		return ""
+	}
+	return c.imWecomWebhookURL
+}
+
+// IMWecomSecret returns the WeCom inbound callback verification token (M8-07).
+func (c *Config) IMWecomSecret() string {
+	if c == nil {
+		return ""
+	}
+	return c.imWecomSecret
 }
 
 // AlertWebhookToken returns the shared secret for the /api/alerts receiver (M7-04).

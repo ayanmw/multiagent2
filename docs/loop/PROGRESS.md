@@ -897,3 +897,14 @@
 - **验证**：vue-tsc 全绿；build 全绿；runtime preview HTTP 200；**首屏 320.4 KB gzip**（index 7.57 + vue-vendor 39.54 + naive-ui 215.67 + ChatView 7.60 + markdown 54.62 + css 3.03），较基线 456.9KB **降 29.9%**，达成「首屏 <500KB gzip」验收；功能逻辑零改动（API 层未动，仅 UI 拆分与打包配置）。
 - 依赖变更：web/package.json devDependencies + unplugin-vue-components ^32.1.0。
 - Commit 待提交。下一步：首个 ○ = M8-07（IM Channel：飞书/钉钉/企微 Channel，Loop 可从 IM 触发与回发）；M7.5-04 待用户提供集群后恢复。
+
+### 2026-08-20 15:48 | M8-07 | ✅ IM Channel（飞书/钉钉/企微，Loop 可从 IM 触发与回发）
+- 交付：
+  - `internal/im/` 协议层（纯函数，无框架依赖/无 os/exec）：`Platform` 枚举 + `InboundMessage{SenderID,ChatID,Text}` + `Sender` 接口/`HTTPSender`（POST 各平台机器人 webhook，`ErrNoWebhook` 哨兵）；三平台 Parse（飞书 im.message.receive_v1 / 钉钉新旧字段并集 / 企微明文回调）、Verify（飞书 HMAC-SHA256(timestamp\n+body)、钉钉 HMAC-SHA256(timestamp\n+secret)、企微 sha1(sort(token,timestamp,nonce,body))，secret 空=放行）、`OutboundPayload`（feishu msg_type / dingtalk+wecom msgtype）。
+  - `model.IMBinding`（im_bindings 表，(platform,im_user_id) 复合唯一）+ 迁移 0012 + baselineModels + repo CRUD（owner 隔离、冲突 409）。
+  - `internal/api/im.go`：`POST /api/im/:platform/webhook`（不挂 JWT，靠平台验签 + 按 platform:senderID 限流 + 防重入；解析→匹配绑定→202 异步 Gateway.Run→回发结果/未绑定指引/排队提示；每次写审计 channel=im）；bindings CRUD（im:read/im:write 权限种子，viewer 只读，仅本人绑定本人）。
+  - 装配：Gateway.resolveExecutorMode 把 ChannelIM 归入无人值守（ask 危险命令进检查点队列）；config 6 变量 `IM_{FEISHU,DINGTALK,WECOM}_{WEBHOOK_URL,SECRET}`（空=对应能力关闭）+ getter；main.go 三平台 sender + `imRunFunc`（复用 schedTeam Goal 契约 TeamOverride 经同一 Gateway）；稳定 session_key `im:<platform>:<chat_id>` 天然多轮记忆。
+  - 文档：`docs/im-channel.md`（三平台接入步骤/绑定 API/行为约定/测试说明）+ `.env.example` 补 6 变量。
+- 测试：im 包 15 例（三平台 Parse/Verify/出站 payload/HTTPSender httptest 真跑）+ api 集成 7 例（绑定 CRUD owner 隔离 + 409/403、webhook 全链路触发+回发、未绑定指引、签名 401/有效通过、非法平台 400、非文本 400）+ config 2 例；CGO_ENABLED=0 build/vet 全绿、go test ./... 35 包全 ok。
+- 踩坑（已记 LEARNINGS）：再次踩 heredoc `cat >>` 追加损坏文件（config_test.go 被写坏头部）——已 `git checkout` 恢复并改用 Edit 工具追加，**追加文档一律用 Edit 工具**。
+- Commit 待提交。下一步：首个 ○ = M8-08（连接器市场：预置 GitHub/GitLab/Slack/Jira 等 MCP 模板）；M7.5-04 待用户提供集群后恢复。

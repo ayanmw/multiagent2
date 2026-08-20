@@ -27,6 +27,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/eval"
 	"github.com/ayanmw/multiagent2/server/internal/evolution"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
+	"github.com/ayanmw/multiagent2/server/internal/im"
 	"github.com/ayanmw/multiagent2/server/internal/knowledge"
 	"github.com/ayanmw/multiagent2/server/internal/knowledge/store"
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
@@ -286,6 +287,13 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 			protected.GET("/instructions/:name", middleware.RequirePermission(db.DB, "instructions", "read"), api.GetInstructionHandler(db.DB))
 			protected.PUT("/instructions/:name", middleware.RequirePermission(db.DB, "instructions", "write"), api.UpdateInstructionHandler(db.DB))
 		}
+
+		// IM Channel 绑定管理（M8-07）：用户管理「IM 用户 → 平台用户」绑定。
+		// 绑定后 IM 消息经 /api/im/:platform/webhook 进入，以该平台用户身份跑 Loop 并回发。
+		// 读需 im:read（viewer 也有），写（建/删自己的绑定）需 im:write；仅本人绑定本人（owner 隔离）。
+		protected.GET("/im/bindings", middleware.RequirePermission(db.DB, "im", "read"), api.ListIMBindingsHandler(db.DB))
+		protected.POST("/im/bindings", middleware.RequirePermission(db.DB, "im", "write"), api.CreateIMBindingHandler(db.DB))
+		protected.DELETE("/im/bindings/:id", middleware.RequirePermission(db.DB, "im", "write"), api.DeleteIMBindingHandler(db.DB))
 
 		// Agent 对话（引擎封装 trpc-agent-go，连接已启用 Model+Provider）
 		// M1-08：AGENT_MODE=team 时根 Agent 换成 Orchestrator，代码落地委托 Coder 子代理。
@@ -815,6 +823,48 @@ func main() {
 	// 令牌校验 + 按 token 速率限制 + 防并发重入均在 handler 内完成。
 	webhookLimiter := api.NewWebhookRateLimiter(cfg.WebhookRateLimit(), cfg.WebhookRateWindow())
 	r.POST("/api/webhooks/:token", api.NewWebhookHandler(db.DB, webhookRunner, webhookLimiter).WithNotifier(notifier).WithSignatureSecret(cfg.WebhookSignSecret()).Handle)
+
+	// IM Channel 入口（M8-07）：飞书/钉钉/企微 webhook → 绑定匹配 → Gateway.Run 跑 Loop → 回发。
+	// 不挂鉴权中间件，靠各平台入站验签（IM_*_SECRET 配置后启用）保护；消息按绑定用户身份执行。
+	// 出站回发走各平台自定义机器人 webhook（IM_*_WEBHOOK_URL 配置后启用；未配置则跳过回发）。
+	// Loop 运行复用与 cron/webhook 相同的目标契约 TeamOverride（子代理 + Goal + 护栏），
+	// 经同一 Gateway（同一会话串行锁）以稳定 session_key "im:<platform>:<chat_id>" 保留多轮记忆。
+	imSenders := map[im.Platform]im.Sender{}
+	if u := cfg.IMFeishuWebhookURL(); u != "" {
+		imSenders[im.Feishu] = im.NewHTTPSender(u, cfg.EngineTimeout())
+	}
+	if u := cfg.IMDingtalkWebhookURL(); u != "" {
+		imSenders[im.DingTalk] = im.NewHTTPSender(u, cfg.EngineTimeout())
+	}
+	if u := cfg.IMWecomWebhookURL(); u != "" {
+		imSenders[im.WeCom] = im.NewHTTPSender(u, cfg.EngineTimeout())
+	}
+	imSecrets := map[im.Platform]string{
+		im.Feishu:   cfg.IMFeishuSecret(),
+		im.DingTalk: cfg.IMDingtalkSecret(),
+		im.WeCom:    cfg.IMWecomSecret(),
+	}
+	imRunFunc := func(ctx context.Context, uid uint, sessionKey, text string) (string, error) {
+		res, rerr := gw.Run(ctx, api.Request{
+			Channel:      api.ChannelIM,
+			UserID:       uid,
+			SessionKey:   sessionKey,
+			Message:      text,
+			TeamOverride: &schedTeam, // IM 触发的消息按 Goal Loop 语义推进（子代理+目标契约+护栏）
+		})
+		if rerr != nil {
+			return "", rerr
+		}
+		return res.Reply, nil
+	}
+	imLimiter := api.NewWebhookRateLimiter(cfg.WebhookRateLimit(), cfg.WebhookRateWindow())
+	r.POST("/api/im/:platform/webhook", api.NewIMWebhookHandler(api.IMWebhookOptions{
+		DB:      db.DB,
+		Limiter: imLimiter,
+		RunFunc: imRunFunc,
+		Senders: imSenders,
+		Secrets: imSecrets,
+	}).Handle)
 
 	// 告警接收端点（M7-04）：接收 Alertmanager 推送的告警，经统一通知出口（M4-07）写入通知中心，
 	// 使 Prometheus 告警直达用户站内信 / 外部渠道。共享密钥校验（ALERT_WEBHOOK_TOKEN），

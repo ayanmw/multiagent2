@@ -420,3 +420,43 @@ func TestKnowledgeStore_Validate(t *testing.T) {
 		t.Error("非法后端值必须报错（回落路径）")
 	}
 }
+
+// TestIMChannelConfig 验收 M8-07：IM 三平台配置 env 驱动（URL 与验签密钥默认空=关闭）。
+func TestIMChannelConfig(t *testing.T) {
+	t.Run("default_disabled", func(t *testing.T) {
+		t.Setenv("IM_FEISHU_WEBHOOK_URL", "")
+		t.Setenv("IM_FEISHU_SECRET", "")
+		t.Setenv("IM_DINGTALK_WEBHOOK_URL", "")
+		t.Setenv("IM_DINGTALK_SECRET", "")
+		t.Setenv("IM_WECOM_WEBHOOK_URL", "")
+		t.Setenv("IM_WECOM_SECRET", "")
+		cfg := Load()
+		if cfg.IMFeishuWebhookURL() != "" || cfg.IMFeishuSecret() != "" {
+			t.Errorf("feishu 未配置应全空, got url=%q secret=%q", cfg.IMFeishuWebhookURL(), cfg.IMFeishuSecret())
+		}
+		if cfg.IMDingtalkWebhookURL() != "" || cfg.IMDingtalkSecret() != "" {
+			t.Errorf("dingtalk 未配置应全空, got url=%q secret=%q", cfg.IMDingtalkWebhookURL(), cfg.IMDingtalkSecret())
+		}
+		if cfg.IMWecomWebhookURL() != "" || cfg.IMWecomSecret() != "" {
+			t.Errorf("wecom 未配置应全空, got url=%q secret=%q", cfg.IMWecomWebhookURL(), cfg.IMWecomSecret())
+		}
+	})
+	t.Run("env_driven", func(t *testing.T) {
+		t.Setenv("IM_FEISHU_WEBHOOK_URL", "https://open.feishu.cn/open-apis/bot/v2/hook/x")
+		t.Setenv("IM_FEISHU_SECRET", "feishu-enc")
+		t.Setenv("IM_DINGTALK_WEBHOOK_URL", "https://oapi.dingtalk.com/robot/send?access_token=x")
+		t.Setenv("IM_DINGTALK_SECRET", "ding-sec")
+		t.Setenv("IM_WECOM_WEBHOOK_URL", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x")
+		t.Setenv("IM_WECOM_SECRET", "wecom-token")
+		cfg := Load()
+		if cfg.IMFeishuWebhookURL() != "https://open.feishu.cn/open-apis/bot/v2/hook/x" || cfg.IMFeishuSecret() != "feishu-enc" {
+			t.Errorf("feishu env 未生效: %q / %q", cfg.IMFeishuWebhookURL(), cfg.IMFeishuSecret())
+		}
+		if cfg.IMDingtalkWebhookURL() != "https://oapi.dingtalk.com/robot/send?access_token=x" || cfg.IMDingtalkSecret() != "ding-sec" {
+			t.Errorf("dingtalk env 未生效: %q / %q", cfg.IMDingtalkWebhookURL(), cfg.IMDingtalkSecret())
+		}
+		if cfg.IMWecomWebhookURL() != "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x" || cfg.IMWecomSecret() != "wecom-token" {
+			t.Errorf("wecom env 未生效: %q / %q", cfg.IMWecomWebhookURL(), cfg.IMWecomSecret())
+		}
+	})
+}

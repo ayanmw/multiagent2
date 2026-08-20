@@ -157,7 +157,7 @@ func (e *BudgetExhaustedError) Error() string   { return "预算耗尽，待恢�
 func (e *BudgetExhaustedError) Unwrap() error    { return ErrBudgetExhausted }
 
 // resolveExecutorMode 解析本次运行的执行器模式（M4-06）：自主化 Channel
-// （cron/webhook/recover）强制无人值守 —— 这些入口无人实时值守，ask 危险命令必须
+// （cron/webhook/recover/im）强制无人值守 —— 这些入口无人实时值守，ask 危险命令必须
 // 落到人工检查点队列排队，绝不允许交互确认（无人确认即卡死）；Web/CLI 等有人值守
 // Channel 跟随 RUN_MODE 配置（默认 unattended，安全默认）。
 func (g *Gateway) resolveExecutorMode(ch Channel) executor.Mode {
@@ -165,7 +165,7 @@ func (g *Gateway) resolveExecutorMode(ch Channel) executor.Mode {
 		return g.cfg.ExecutorMode
 	}
 	switch ch.Kind() {
-	case ChannelCron.Kind(), ChannelWebhook.Kind(), ChannelRecover.Kind():
+	case ChannelCron.Kind(), ChannelWebhook.Kind(), ChannelRecover.Kind(), ChannelIM.Kind():
 		return executor.ModeUnattended
 	default:
 		return g.cfg.ExecutorMode
