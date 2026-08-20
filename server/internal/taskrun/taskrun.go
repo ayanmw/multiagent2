@@ -122,7 +122,12 @@ func (h *WorktreeHook) OnRunUpdate(ctx context.Context, run taskrunruntime.Run) 
 // executorMode 为 worker 子代理的执行器运行模式（M4-06）：后台任务本质上是无人值守场景，
 // 调用方应传入 executor.ModeUnattended（ask 危险命令生成人工检查点排队），保证 24h 自主
 // Loop 派生的子任务同样受护栏约束、命中 ask 时落检查点而非卡死或盲目放行。
-func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver, executorMode executor.Mode) runner.AgentFactory {
+//
+// backend/dockerOpts 为 worker 子代理的代码执行后端（M8-02）：BackendHost（宿主机，
+// 默认）或 BackendDocker（一次性容器沙箱，逃逸命令在容器内被拒）。注意 docker 后端下
+// Git 工具要求容器镜像内置 git；worktree 钩子的 git 操作（add/merge 宿主仓库结构）仍走
+// 宿主机执行，不受此参数影响（见 LEARNINGS M8-02）。
+func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver, executorMode executor.Mode, backend executor.Backend, dockerOpts executor.DockerOptions) runner.AgentFactory {
 	resolveModel := res.ResolveModel
 	resolveWorkdir := res.ResolveWorkdir
 	if resolveModel == nil {
@@ -194,6 +199,8 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver, 
 			Auditor:      auditor,
 			Checkpointer: checkpointer,
 			ExecutorMode: executorMode,
+			Backend:      backend,     // M8-02：worker 执行后端（host/docker）
+			Docker:       dockerOpts,  // M8-02：docker 后端容器配置
 		})
 	}
 }

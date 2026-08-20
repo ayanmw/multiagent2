@@ -116,6 +116,13 @@ type ModelConfig struct {
 	// 无需人盯；Interactive 下 ask 直接 deny（有人值守调试会话）。经 codeagent.Deps
 	// 下传 Coder 子代理；单代理模式的工具由 api 层直接传入 NewCodeActWithGit。
 	ExecutorMode executor.Mode
+	// Backend 是代码执行后端（M8-02）：executor.BackendHost（宿主机 cwd 约束，默认）
+	// 或 executor.BackendDocker（一次性容器沙箱：无网络 + 只读根 + /workspace 挂载，
+	// 逃逸命令在容器内被拒）。team 模式下经 codeagent.Deps 下传 Coder 子代理；
+	// 单代理模式的工具由 api 层直接传入（见 chat.go/sse.go）。零值回落 host。
+	Backend executor.Backend
+	// Docker 是 Backend=BackendDocker 时的容器配置（镜像/网络/只读/CLI/超时，M8-02）。
+	Docker executor.DockerOptions
 	// InstructionOverride 是「可优化并写回」的 Agent 系统提示词覆盖（M5-06 promptiter）。
 	// 非空时单代理模式用其值替换内置 defaultInstruction（不叠加 skillCtx），使 promptiter
 	// 的 GEPA 反射式优化能把改进后提示词注入生产对话；为空则回退内置默认，向后兼容。
@@ -236,6 +243,8 @@ func New(cfg ModelConfig) (*Engine, error) {
 			Auditor:      cfg.Auditor,
 			Checkpointer: cfg.Checkpointer,
 			ExecutorMode: cfg.ExecutorMode,
+			Backend:      cfg.Backend, // M8-02：Coder 执行后端（host/docker）
+			Docker:       cfg.Docker,  // M8-02：docker 后端容器配置
 		}, cfg.Team)
 		if oerr != nil {
 			return nil, oerr

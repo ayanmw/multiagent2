@@ -106,6 +106,12 @@ type Deps struct {
 	// 无需人盯；Interactive 下 ask 直接 deny（有人值守调试会话，无同步确认通道）。
 	// 非法/零值由 codectool.normalizeExecutorMode 回落 Unattended（安全默认）。
 	ExecutorMode executor.Mode
+	// Backend 是代码执行后端（M8-02）：executor.BackendHost（宿主机 cwd 约束，
+	// 默认）或 executor.BackendDocker（一次性容器沙箱：无网络 + 只读根 +
+	// /workspace 挂载，逃逸命令在容器内被拒）。零值回落 host（向后兼容）。
+	Backend executor.Backend
+	// Docker 是 Backend=BackendDocker 时的容器配置（镜像/网络/只读/CLI/超时）。
+	Docker executor.DockerOptions
 }
 
 // validate 校验依赖完整性。
@@ -120,18 +126,19 @@ func (d Deps) validate() error {
 }
 
 // NewCoder 构造 Coder 子代理：带完整 CodeAct 工具集（shell_exec/file_read/file_write/file_edit）。
-// 工具内部已经过危险命令策略与路径边界约束（见 codectool.NewCodeAct）。
+// 工具内部已经过危险命令策略与路径边界约束（见 codectool.NewCodeActWithBackend）；
+// 执行后端由 d.Backend 决定（host 宿主机 / docker 容器沙箱，M8-02）。
 func NewCoder(d Deps) (agent.Agent, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	tools, err := codectool.NewCodeAct(d.Workdir, d.Auditor, d.Checkpointer, d.ExecutorMode)
+	tools, err := codectool.NewCodeActWithBackend(d.Workdir, d.Auditor, d.Checkpointer, d.ExecutorMode, d.Backend, d.Docker)
 	if err != nil {
 		return nil, err
 	}
 	// M2-01：Coder 同时持有 Git 工具集（git_status/git_diff/git_commit/git_log/git_branch），
 	// 使其在完成代码改动后能显式提交到 workspace 的 git 仓库。
-	gitTools, gerr := codectool.NewGitTools(d.Workdir, d.Auditor, d.Checkpointer, d.ExecutorMode)
+	gitTools, gerr := codectool.NewGitToolsWithBackend(d.Workdir, d.Auditor, d.Checkpointer, d.ExecutorMode, d.Backend, d.Docker)
 	if gerr != nil {
 		return nil, gerr
 	}

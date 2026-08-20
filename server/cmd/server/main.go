@@ -391,7 +391,9 @@ func buildGateway(db *repo.DB, cfg *config.Config, stateStore artifact.Store, en
 		ToolSearchEnabled:  cfg.ToolSearchEnabled(),
 		ToolSearchProvider: toolSearchProvider,
 		CheckpointEnabled:  cfg.CheckpointEnabled(),
-		ExecutorMode:       cfg.ExecutorMode(), // M4-06：执行器运行模式（默认 unattended）
+		ExecutorMode:       cfg.ExecutorMode(),       // M4-06：执行器运行模式（默认 unattended）
+		ExecutorBackend:    cfg.ExecutorBackend(),    // M8-02：执行后端 host/docker
+		Docker:             cfg.DockerOptions(),      // M8-02：docker 后端容器配置
 		KnowledgeRetriever: buildKnowledgeRetriever(db, cfg),
 	})
 }
@@ -542,7 +544,7 @@ func main() {
 			}
 		},
 	}
-	workerFactory := taskrun.BuildAgentFactory(cfg.GuardrailConfig(), workerResolver, executor.ModeUnattended)
+	workerFactory := taskrun.BuildAgentFactory(cfg.GuardrailConfig(), workerResolver, executor.ModeUnattended, cfg.ExecutorBackend(), cfg.DockerOptions())
 	rawTaskRunController, ctrlErr := taskrun.NewController(
 		context.Background(),
 		codeagent.RoleCoder,
@@ -564,6 +566,20 @@ func main() {
 	// 串行锁与同一套引擎构造（Team 取 Web 默认配置；自主化 Loop 通过 TeamOverride 强制
 	// 开启子代理 + 目标契约）。
 	gw := buildGateway(db, cfg, stateStore, enableState, taskRunController, taskRunSession, buildToolSearchProvider(db, cfg.EncryptionKey))
+
+	// M8-02：docker 执行后端启动探测（best-effort）。docker CLI/daemon 不可用时打 [WARN]
+	// 提示但不阻断启动——Agent 代码执行工具在真实调用时会返回 ErrDockerUnavailable 的
+	// 可读错误（「请安装 docker 或改用 EXECUTOR_BACKEND=host」），避免启动即崩。
+	if cfg.ExecutorBackend() == executor.BackendDocker {
+		if dex, derr := executor.NewDockerExecutor(cfg.WorkspaceRoot, cfg.DockerOptions()); derr == nil {
+			if cerr := dex.Check(); cerr != nil {
+				log.Printf("[WARN] EXECUTOR_BACKEND=docker 但 docker 探测失败：%v（Agent 代码执行将报错；请安装 docker 或改用 EXECUTOR_BACKEND=host）", cerr)
+			} else {
+				dopts := cfg.DockerOptions()
+				log.Printf("[INFO] EXECUTOR_BACKEND=docker：Agent 代码执行已切换容器沙箱（image=%s network=%s read_only=%v）", dopts.Image, dopts.Network, dopts.ReadOnly != nil && *dopts.ReadOnly)
+			}
+		}
+	}
 
 	// 技能进化飞轮（M5-03）：后台异步扫描已结束 session 的 transcript，经 LLM 提取候选
 	// SKILL.md，质量门控 + 去重后写入 skill_candidates 表（pending），等待人工审批（M5-04）。

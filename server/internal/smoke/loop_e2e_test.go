@@ -94,7 +94,7 @@ func runLoopE2E(t *testing.T) {
 		ResolveWorkdir: func(_ context.Context, _ string) (string, error) { return repoDir, nil },
 		Worktree:       &taskrun.WorktreeHook{Enabled: true, Manager: wtMgr},
 	}
-	workerFactory := taskrun.BuildAgentFactory(codeagent.GuardrailConfig{}, resolver, executor.ModeUnattended)
+	workerFactory := taskrun.BuildAgentFactory(codeagent.GuardrailConfig{}, resolver, executor.ModeUnattended, executor.BackendHost, executor.DockerOptions{})
 	rawCtrl, err := taskrun.NewController(context.Background(), codeagent.RoleCoder, workerFactory, inprocess.NewMemoryStore(), nil, resolver.Worktree)
 	if err != nil {
 		t.Fatalf("NewController: %v", err)

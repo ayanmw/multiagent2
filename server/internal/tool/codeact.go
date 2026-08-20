@@ -231,8 +231,10 @@ func normalizeExecutorMode(mode executor.Mode) executor.Mode {
 }
 
 // NewCodeAct 构造一组经危险命令策略包装的 CodeAct 工具（M1-06 业务入口）。
+// 等价于 NewCodeActWithBackend(..., executor.BackendHost, executor.DockerOptions{})：
+// 在宿主机受限工作目录执行（M8-02 之前的默认行为，向后兼容）。
 // workdir 必须存在（调用方负责创建，api 层按 WorkspaceRoot/<uid> 自动建）；
-// 内部使用 NewSafeExecutor(HostExecutor, 危险命令策略(mode), auditor, nil, cp)，
+// 内部使用 NewSafeExecutor(<后端执行器>, 危险命令策略(mode), auditor, nil, cp)，
 // 禁止裸用 HostExecutor（见 LEARNINGS M1-05）。
 // auditor 为审计器：nil 时回落到日志审计（LogAuditor），不阻断命令执行；
 // 业务层在请求级/worker 级传入 repo.NewDBAuditor（M3-01 执行审计落库）。
@@ -241,10 +243,21 @@ func normalizeExecutorMode(mode executor.Mode) executor.Mode {
 // mode 为执行器运行模式（M4-06）：Unattended 时 ask→检查点/deny（自主 Loop 安全默认）；
 // Interactive 时 ask→deny（有人值守调试会话）；非法值回落 Unattended。
 func NewCodeAct(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) ([]tool.Tool, error) {
+	return NewCodeActWithBackend(workdir, auditor, cp, mode, executor.BackendHost, executor.DockerOptions{})
+}
+
+// NewCodeActWithBackend 是 NewCodeAct 的后端可切换版本（M8-02）：
+// backend 为 executor.BackendHost（宿主机 cwd 约束）或 executor.BackendDocker
+// （一次性容器沙箱：无网络 + 只读根 + /workspace 挂载，逃逸命令在容器内被拒）。
+// docker 后端下，危险命令策略（SafeExecutor）与 resolveSafePath 依然生效——
+// 容器是「文件系统/网络隔离」的强保证，策略是「命令语义」的第一道闸，二者叠加。
+// 注意：docker 后端要求宿主机安装 docker CLI，且容器镜像含所需工具链
+// （如 git 工具需镜像内置 git，见 LEARNINGS M8-02）。
+func NewCodeActWithBackend(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode, backend executor.Backend, dopts executor.DockerOptions) ([]tool.Tool, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
-	host, err := executor.NewHostExecutor(workdir)
+	inner, err := executor.NewBackendExecutor(backend, workdir, dopts)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +265,7 @@ func NewCodeAct(workdir string, auditor executor.Auditor, cp executor.Checkpoint
 		auditor = executor.NewLogAuditor(nil)
 	}
 	ex := executor.NewSafeExecutor(
-		host,
+		inner,
 		executor.NewDangerousCommandPolicy(normalizeExecutorMode(mode)),
 		auditor,
 		nil, // 无人值守：ask 类命令不交交互确认

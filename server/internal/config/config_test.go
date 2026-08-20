@@ -208,3 +208,75 @@ func TestLogFormatLevel_EnvDriven(t *testing.T) {
 		}
 	})
 }
+
+// TestExecutorBackend_Default 验收 M8-02：EXECUTOR_BACKEND 默认 host（向后兼容），
+// 非法值回落 host。
+func TestExecutorBackend_Default(t *testing.T) {
+	var c Config
+	if got := c.ExecutorBackend(); got != executor.BackendHost {
+		t.Errorf("零值 ExecutorBackend() = %q, want host", got)
+	}
+}
+
+func TestExecutorBackend_EnvDriven(t *testing.T) {
+	t.Run("default_host", func(t *testing.T) {
+		t.Setenv("EXECUTOR_BACKEND", "")
+		if Load().ExecutorBackend() != executor.BackendHost {
+			t.Fatal("EXECUTOR_BACKEND 未设置时应默认 host")
+		}
+	})
+	t.Run("docker", func(t *testing.T) {
+		t.Setenv("EXECUTOR_BACKEND", "docker")
+		if Load().ExecutorBackend() != executor.BackendDocker {
+			t.Fatal("EXECUTOR_BACKEND=docker 应返回 BackendDocker")
+		}
+	})
+	t.Run("invalid_falls_back_host", func(t *testing.T) {
+		t.Setenv("EXECUTOR_BACKEND", "vm")
+		if Load().ExecutorBackend() != executor.BackendHost {
+			t.Fatal("非法 EXECUTOR_BACKEND 应回落 host")
+		}
+	})
+}
+
+// TestDockerOptions_Defaults 验收 M8-02：DockerOptions 默认安全配置——
+// 无网络(none) + 只读根(true) + alpine 镜像 + docker CLI + 60s 超时。
+func TestDockerOptions_Defaults(t *testing.T) {
+	var c Config
+	opts := c.DockerOptions()
+	if opts.Image != "" || opts.Network != "" || opts.Bin != "" || opts.Timeout != 0 {
+		t.Errorf("零值 Config 的 DockerOptions 应留空交由 executor 回落默认, got %+v", opts)
+	}
+	// Load 后（未设 env）：config 显式给默认，与 executor 包常量一致。
+	t.Setenv("EXECUTOR_BACKEND", "")
+	cfg := Load()
+	opts = cfg.DockerOptions()
+	if opts.Image != executor.DefaultDockerImage || opts.Network != executor.DefaultDockerNetwork || opts.Bin != executor.DefaultDockerBin {
+		t.Errorf("默认 DockerOptions 与 executor 常量不一致: %+v", opts)
+	}
+	if opts.ReadOnly == nil || !*opts.ReadOnly {
+		t.Error("默认 ReadOnly 应为 true（只读根）")
+	}
+	if opts.Timeout != 60*time.Second {
+		t.Errorf("默认 Timeout = %v, want 60s", opts.Timeout)
+	}
+}
+
+func TestDockerOptions_EnvDriven(t *testing.T) {
+	t.Setenv("EXECUTOR_BACKEND", "docker")
+	t.Setenv("DOCKER_IMAGE", "ubuntu:24.04")
+	t.Setenv("DOCKER_NETWORK", "bridge")
+	t.Setenv("DOCKER_READ_ONLY", "false")
+	t.Setenv("DOCKER_BIN", "podman")
+	t.Setenv("DOCKER_TIMEOUT_SECONDS", "120")
+	opts := Load().DockerOptions()
+	if opts.Image != "ubuntu:24.04" || opts.Network != "bridge" || opts.Bin != "podman" {
+		t.Errorf("env 覆盖未生效: %+v", opts)
+	}
+	if opts.ReadOnly == nil || *opts.ReadOnly {
+		t.Error("DOCKER_READ_ONLY=false 应使 ReadOnly=false")
+	}
+	if opts.Timeout != 120*time.Second {
+		t.Errorf("Timeout = %v, want 120s", opts.Timeout)
+	}
+}

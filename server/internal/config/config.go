@@ -129,6 +129,20 @@ type Config struct {
 	// EVOLUTION_INTERVAL_SECONDS（默认 3600）为扫描周期。
 	evolutionEnabled  bool
 	evolutionInterval time.Duration
+	// 执行后端（M8-02）：env EXECUTOR_BACKEND = host | docker（默认 host）。
+	// host：宿主机受限工作目录执行（cwd 约束 + 危险命令策略）；
+	// docker：一次性容器沙箱（--network none 无网络 + --read-only 只读根 +
+	// 工作目录挂载 /workspace），逃逸命令（写系统目录/出网/读宿主文件）在容器内被拒。
+	// docker 后端需宿主机安装 docker CLI，且容器镜像需包含所需工具链（git 等）。
+	executorBackend executor.Backend
+	// Docker 执行后端细节（M8-02）：DOCKER_IMAGE（默认 alpine:3.20）/
+	// DOCKER_NETWORK（默认 none）／DOCKER_READ_ONLY（默认 true）／
+	// DOCKER_BIN（默认 docker）／DOCKER_TIMEOUT_SECONDS（默认 60）。
+	dockerImage    string
+	dockerNetwork  string
+	dockerReadOnly bool
+	dockerBin      string
+	dockerTimeout  time.Duration
 }
 
 // DefaultMaxReviewRounds 是 CodeTeam「实现→审阅→修复」默认回环轮数上限（M1-09）。
@@ -446,6 +460,27 @@ func Load() *Config {
 	}
 	cfg.evolutionInterval = time.Duration(evoInterval) * time.Second
 
+	// 执行后端（M8-02）：默认 host（向后兼容——旧部署不设 EXECUTOR_BACKEND 行为不变）。
+	// docker 需宿主机安装 docker CLI；启动时若探测不可用会打 [WARN]（见 main.go）。
+	backend := executor.Backend(envOrDefault("EXECUTOR_BACKEND", string(executor.BackendHost)))
+	if backend != executor.BackendHost && backend != executor.BackendDocker {
+		log.Printf("[WARN] EXECUTOR_BACKEND=%q 非法，使用默认 %q", backend, executor.BackendHost)
+		backend = executor.BackendHost
+	}
+	cfg.executorBackend = backend
+	// Docker 后端细节：默认与 executor.DockerOptions 零值回落一致（见 executor 包常量），
+	// 此处显式给默认便于运维按 env 覆盖；非法数值回落默认并告警。
+	cfg.dockerImage = envOrDefault("DOCKER_IMAGE", executor.DefaultDockerImage)
+	cfg.dockerNetwork = envOrDefault("DOCKER_NETWORK", executor.DefaultDockerNetwork)
+	cfg.dockerReadOnly = envOrDefaultBool("DOCKER_READ_ONLY", true)
+	cfg.dockerBin = envOrDefault("DOCKER_BIN", executor.DefaultDockerBin)
+	dts := envOrDefaultInt("DOCKER_TIMEOUT_SECONDS", 60)
+	if dts <= 0 {
+		log.Printf("[WARN] DOCKER_TIMEOUT_SECONDS must be positive; using default 60")
+		dts = 60
+	}
+	cfg.dockerTimeout = time.Duration(dts) * time.Second
+
 	return cfg
 }
 
@@ -749,6 +784,36 @@ func (c *Config) EvolutionInterval() time.Duration {
 		return time.Hour
 	}
 	return c.evolutionInterval
+}
+
+// ExecutorBackend returns the configured execution backend (M8-02):
+// executor.BackendHost (default) or executor.BackendDocker. When nil or unset,
+// host is returned (backward compatible: old deployments behave unchanged).
+func (c *Config) ExecutorBackend() executor.Backend {
+	if c == nil || c.executorBackend == "" {
+		return executor.BackendHost
+	}
+	return c.executorBackend
+}
+
+// DockerOptions returns the Docker execution backend configuration (M8-02),
+// mirroring the env overrides (DOCKER_IMAGE/DOCKER_NETWORK/DOCKER_READ_ONLY/
+// DOCKER_BIN/DOCKER_TIMEOUT_SECONDS). Only meaningful when ExecutorBackend() ==
+// BackendDocker; fields left at executor zero values fall back to the safe
+// defaults inside the executor package (alpine + none + read-only).
+func (c *Config) DockerOptions() executor.DockerOptions {
+	if c == nil {
+		return executor.DockerOptions{}
+	}
+	ro := c.dockerReadOnly
+	timeout := c.dockerTimeout
+	return executor.DockerOptions{
+		Image:    c.dockerImage,
+		Network:  c.dockerNetwork,
+		ReadOnly: &ro,
+		Bin:      c.dockerBin,
+		Timeout:  timeout,
+	}
 }
 
 // IsUnattended reports whether the server runs in unattended mode (M4-06).

@@ -71,6 +71,12 @@ type GatewayConfig struct {
 	// 自主化 Channel（cron/webhook/recover）由 Gateway 强制覆盖为无人值守，保证
 	// 无人盯守下 ask 危险命令落到检查点队列、预算护栏全程生效。
 	ExecutorMode executor.Mode
+	// ExecutorBackend 是代码执行后端（M8-02）：executor.BackendHost（宿主机 cwd 约束，
+	// 默认）或 executor.BackendDocker（一次性容器沙箱：无网络 + 只读根 + /workspace 挂载，
+	// 逃逸命令在容器内被拒）。零值回落 host（向后兼容）。
+	ExecutorBackend executor.Backend
+	// Docker 是 ExecutorBackend=BackendDocker 时的容器配置（镜像/网络/只读/CLI/超时）。
+	Docker executor.DockerOptions
 	// Notifier 是运行结果/检查点通知出口（M4-07，可空：nil 时不发通知）。
 	Notifier notify.Notifier
 	// KnowledgeRetriever 是可选的「对话前知识检索注入」（M5-02，可空：nil 时不检索）。
@@ -313,7 +319,9 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 	}
 	var tools []tool.Tool
 	if !team.EnableSubAgents {
-		t, tErr := codectool.NewCodeActWithGit(workdir, repo.NewDBAuditor(g.cfg.DB, uid), checkpointer, exMode)
+		// M8-02：单代理模式的根 Agent 工具集按配置后端切换（host 宿主机 /
+		// docker 容器沙箱）；docker 下 git 工具需镜像内置 git。
+		t, tErr := codectool.NewCodeActWithGitBackend(workdir, repo.NewDBAuditor(g.cfg.DB, uid), checkpointer, exMode, g.cfg.ExecutorBackend, g.cfg.Docker)
 		if tErr != nil {
 			return nil, fmt.Errorf("构建代码执行工具失败: %w", tErr)
 		}
@@ -346,6 +354,8 @@ func (g *Gateway) prepareRun(ctx context.Context, req Request, sessionKey string
 		Auditor:            repo.NewDBAuditor(g.cfg.DB, uid),
 		Checkpointer:       checkpointer,
 		ExecutorMode:       exMode,
+		Backend:            g.cfg.ExecutorBackend, // M8-02：team 模式 Coder 执行后端
+		Docker:             g.cfg.Docker,          // M8-02：docker 后端容器配置
 		InstructionOverride: instrOverride,
 	})
 	if eErr != nil {

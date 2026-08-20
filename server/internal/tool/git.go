@@ -46,17 +46,28 @@ func GitToolNames() []string {
 }
 
 // NewGitExecutor 为工作目录构造一个经危险命令策略包装的执行器（M2-01），
-// 供 Git 工具与 workspace 创建时的自动 git init 复用。workdir 必须存在且为目录。
+// 供 Git 工具与 workspace 创建时的自动 git init 复用。等价于
+// NewGitExecutorWithBackend(..., executor.BackendHost, ...)：宿主机执行（向后兼容）。
+// workdir 必须存在且为目录。
 // auditor 为审计器：nil 时回落到日志审计（LogAuditor）；业务层传入 repo.NewDBAuditor
 // 可使 git 命令同样写入审计日志（M3-01 执行审计落库）。
 // cp 为无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05），语义同 NewCodeAct。
 // mode 为执行器运行模式（M4-06）：Unattended 时 ask→检查点/deny；Interactive 时 ask→deny；
 // 非法值回落 Unattended。
 func NewGitExecutor(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) (executor.Executor, error) {
+	return NewGitExecutorWithBackend(workdir, auditor, cp, mode, executor.BackendHost, executor.DockerOptions{})
+}
+
+// NewGitExecutorWithBackend 是 NewGitExecutor 的后端可切换版本（M8-02）：
+// backend=docker 时 git 命令在一次性容器内执行（容器镜像需内置 git，否则报错）。
+// 仅当调用方明确把 Agent 的 git 工具也切到容器沙箱时使用；平台自身的 git 基础设施
+// （worktree add/merge、workspace 自动 init 等操作宿主机仓库结构的路径）必须保持
+// BackendHost，不能切容器（见 LEARNINGS M8-02）。
+func NewGitExecutorWithBackend(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode, backend executor.Backend, dopts executor.DockerOptions) (executor.Executor, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
-	host, err := executor.NewHostExecutor(workdir)
+	inner, err := executor.NewBackendExecutor(backend, workdir, dopts)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +78,7 @@ func NewGitExecutor(workdir string, auditor executor.Auditor, cp executor.Checkp
 		auditor = executor.NewLogAuditor(nil)
 	}
 	return executor.NewSafeExecutor(
-		host,
+		inner,
 		executor.NewDangerousCommandPolicy(normalizeExecutorMode(mode)),
 		auditor,
 		nil, // 无人值守：ask 类命令不交交互确认
@@ -246,15 +257,48 @@ func gitBranchTool(ex executor.Executor) tool.Tool {
 }
 
 // NewGitTools 构造一组经危险命令策略包装的 Git 工具（M2-01）。
+// 等价于 NewGitToolsWithBackend(..., executor.BackendHost, ...)：宿主机执行（向后兼容）。
 // workdir 必须存在（调用方负责创建，api 层按 workspace 本地目录传入），
 // 内部使用 NewGitExecutor 包装 SafeExecutor，禁止裸用 HostExecutor.Run。
 // auditor 为审计器（nil 回落日志审计）；传入 repo.NewDBAuditor 可使 git 命令落库审计（M3-01）。
 // mode 为执行器运行模式（M4-06），语义同 NewGitExecutor。
 func NewGitTools(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) ([]tool.Tool, error) {
+	return NewGitToolsWithBackend(workdir, auditor, cp, mode, executor.BackendHost, executor.DockerOptions{})
+}
+
+// NewCodeActWithGit 返回「CodeAct 工具集 + Git 工具集」（M2-01），用于单代理模式的根 Agent：
+// 既有文件读写/执行能力，又能显式 git 提交与查看变更。team 模式下则改由 Coder 子代理持有
+// （见 codeagent.NewCoder），二者不要重复装配以免工具名冲突。
+// 等价于 NewCodeActWithGitBackend(..., executor.BackendHost, ...)：宿主机执行（向后兼容）。
+// auditor 为审计器（nil 回落日志审计）；传入 repo.NewDBAuditor 可使本次会话全部命令落库审计（M3-01）。
+// cp 为无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05），语义同 NewCodeAct。
+// mode 为执行器运行模式（M4-06），语义同 NewCodeAct/NewGitTools。
+func NewCodeActWithGit(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) ([]tool.Tool, error) {
+	return NewCodeActWithGitBackend(workdir, auditor, cp, mode, executor.BackendHost, executor.DockerOptions{})
+}
+
+// NewCodeActWithGitBackend 是 NewCodeActWithGit 的后端可切换版本（M8-02）：
+// 把 CodeAct 与 Git 工具集统一切到指定执行后端（host 或 docker 容器沙箱）。
+// 注意：docker 后端下 Git 工具要求容器镜像内置 git（默认 alpine 不含，需
+// DOCKER_IMAGE 指向含 git 的镜像），否则 git 命令在容器内报 command not found。
+func NewCodeActWithGitBackend(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode, backend executor.Backend, dopts executor.DockerOptions) ([]tool.Tool, error) {
+	code, err := NewCodeActWithBackend(workdir, auditor, cp, mode, backend, dopts)
+	if err != nil {
+		return nil, err
+	}
+	git, err := NewGitToolsWithBackend(workdir, auditor, cp, mode, backend, dopts)
+	if err != nil {
+		return nil, err
+	}
+	return append(code, git...), nil
+}
+
+// NewGitToolsWithBackend 是 NewGitTools 的后端可切换版本（M8-02）。
+func NewGitToolsWithBackend(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode, backend executor.Backend, dopts executor.DockerOptions) ([]tool.Tool, error) {
 	if workdir == "" {
 		return nil, fmt.Errorf("codectool: workdir 不能为空")
 	}
-	ex, err := NewGitExecutor(workdir, auditor, cp, mode)
+	ex, err := NewGitExecutorWithBackend(workdir, auditor, cp, mode, backend, dopts)
 	if err != nil {
 		return nil, err
 	}
@@ -265,22 +309,4 @@ func NewGitTools(workdir string, auditor executor.Auditor, cp executor.Checkpoin
 		gitLogTool(ex),
 		gitBranchTool(ex),
 	}, nil
-}
-
-// NewCodeActWithGit 返回「CodeAct 工具集 + Git 工具集」（M2-01），用于单代理模式的根 Agent：
-// 既有文件读写/执行能力，又能显式 git 提交与查看变更。team 模式下则改由 Coder 子代理持有
-// （见 codeagent.NewCoder），二者不要重复装配以免工具名冲突。
-// auditor 为审计器（nil 回落日志审计）；传入 repo.NewDBAuditor 可使本次会话全部命令落库审计（M3-01）。
-// cp 为无人值守下 ask 危险命令的「人工检查点」落库回调（M3-05），语义同 NewCodeAct。
-// mode 为执行器运行模式（M4-06），语义同 NewCodeAct/NewGitTools。
-func NewCodeActWithGit(workdir string, auditor executor.Auditor, cp executor.Checkpointer, mode executor.Mode) ([]tool.Tool, error) {
-	code, err := NewCodeAct(workdir, auditor, cp, mode)
-	if err != nil {
-		return nil, err
-	}
-	git, err := NewGitTools(workdir, auditor, cp, mode)
-	if err != nil {
-		return nil, err
-	}
-	return append(code, git...), nil
 }
