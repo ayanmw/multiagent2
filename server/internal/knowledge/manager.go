@@ -36,14 +36,34 @@ const (
 )
 
 // Manager 管理用户知识库的索引与检索。
+// 向量存储后端可切换（M8-04）：默认 SQLite（本地基线）；NewManagerWithStoreFactory
+// 可注入 pgvector 等外部后端工厂，业务层（Index/Search/Delete/List）无感知。
 type Manager struct {
 	db       *gorm.DB
 	embedder *embed.LocalEmbedder
+	newStore func(kbID string) (store.VectorStore, error)
 }
 
-// NewManager 构造知识库管理器（内部使用本地离线嵌入器）。
+// NewManager 构造知识库管理器（默认 SQLite 向量后端，内部使用本地离线嵌入器）。
 func NewManager(db *gorm.DB) *Manager {
-	return &Manager{db: db, embedder: embed.NewLocalEmbedder(embed.DefaultLocalDim)}
+	m := &Manager{db: db, embedder: embed.NewLocalEmbedder(embed.DefaultLocalDim)}
+	m.newStore = func(kbID string) (store.VectorStore, error) {
+		return store.New(m.db, kbID)
+	}
+	return m
+}
+
+// NewManagerWithStoreFactory 构造知识库管理器并注入自定义向量存储工厂
+// （如 pgvector 后端，见 store.NewPGPool/ForKB）。factory 返回 nil 时回落默认 SQLite。
+func NewManagerWithStoreFactory(db *gorm.DB, factory func(kbID string) (store.VectorStore, error)) *Manager {
+	m := &Manager{db: db, embedder: embed.NewLocalEmbedder(embed.DefaultLocalDim)}
+	m.newStore = factory
+	if m.newStore == nil {
+		m.newStore = func(kbID string) (store.VectorStore, error) {
+			return store.New(m.db, kbID)
+		}
+	}
+	return m
 }
 
 // SearchHit 是检索命中的单条切片。
@@ -75,7 +95,7 @@ func (m *Manager) IndexDocument(ctx context.Context, kbID uint, name, content, c
 	}
 
 	kbIDStr := strconv.FormatUint(uint64(kbID), 10)
-	vs, err := store.New(m.db, kbIDStr)
+	vs, err := m.newStore(kbIDStr)
 	if err != nil {
 		return 0, err
 	}
@@ -117,7 +137,7 @@ func (m *Manager) Search(ctx context.Context, kbID uint, query string, topK int)
 		topK = 5
 	}
 	kbIDStr := strconv.FormatUint(uint64(kbID), 10)
-	vs, err := store.New(m.db, kbIDStr)
+	vs, err := m.newStore(kbIDStr)
 	if err != nil {
 		return nil, err
 	}
@@ -212,12 +232,12 @@ func (m *Manager) RetrieveContext(ctx context.Context, userIDStr, query string, 
 }
 
 // ListDocuments 列出某知识库的文档（来源）与切片数。
-func (m *Manager) ListDocuments(_ context.Context, kbID uint) ([]DocInfo, error) {
-	vs, err := store.New(m.db, strconv.FormatUint(uint64(kbID), 10))
+func (m *Manager) ListDocuments(ctx context.Context, kbID uint) ([]DocInfo, error) {
+	vs, err := m.newStore(strconv.FormatUint(uint64(kbID), 10))
 	if err != nil {
 		return nil, err
 	}
-	raw, err := vs.ListDocuments()
+	raw, err := vs.ListDocuments(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -229,12 +249,12 @@ func (m *Manager) ListDocuments(_ context.Context, kbID uint) ([]DocInfo, error)
 }
 
 // DeleteDocument 删除某知识库内指定来源的文档（全部切片）。
-func (m *Manager) DeleteDocument(_ context.Context, kbID uint, docName string) (int64, error) {
-	vs, err := store.New(m.db, strconv.FormatUint(uint64(kbID), 10))
+func (m *Manager) DeleteDocument(ctx context.Context, kbID uint, docName string) (int64, error) {
+	vs, err := m.newStore(strconv.FormatUint(uint64(kbID), 10))
 	if err != nil {
 		return 0, err
 	}
-	n, err := vs.DeleteDocument(docName)
+	n, err := vs.DeleteDocument(ctx, docName)
 	if err != nil {
 		return 0, err
 	}
@@ -244,7 +264,7 @@ func (m *Manager) DeleteDocument(_ context.Context, kbID uint, docName string) (
 
 // DeleteKnowledge 删除某知识库的全部向量（KB 元数据由调用方在 repo 层删除）。
 func (m *Manager) DeleteKnowledge(ctx context.Context, kbID uint) error {
-	vs, err := store.New(m.db, strconv.FormatUint(uint64(kbID), 10))
+	vs, err := m.newStore(strconv.FormatUint(uint64(kbID), 10))
 	if err != nil {
 		return err
 	}
@@ -258,15 +278,16 @@ func vectorstoreDeleteAll() vectorstore.DeleteOption {
 
 // refreshCounts 依据向量库实况回写知识库的文档数/切片数。
 func (m *Manager) refreshCounts(kbID uint) error {
-	vs, err := store.New(m.db, strconv.FormatUint(uint64(kbID), 10))
+	vs, err := m.newStore(strconv.FormatUint(uint64(kbID), 10))
 	if err != nil {
 		return err
 	}
-	docs, err := vs.ListDocuments()
+	ctx := context.Background()
+	docs, err := vs.ListDocuments(ctx)
 	if err != nil {
 		return err
 	}
-	chunks, err := vs.Count(context.Background())
+	chunks, err := vs.Count(ctx)
 	if err != nil {
 		return err
 	}

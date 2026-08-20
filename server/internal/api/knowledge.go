@@ -172,7 +172,8 @@ func UpdateKnowledgeBaseHandler(db *gorm.DB) gin.HandlerFunc {
 
 // DeleteKnowledgeBaseHandler 处理 DELETE /api/knowledge/:id（需 knowledge:write，owner 隔离）。
 // 删除知识库元数据及其全部向量（向量库按 kb_id 逻辑隔离，整库清空）。
-func DeleteKnowledgeBaseHandler(db *gorm.DB) gin.HandlerFunc {
+// mgr 由装配层按 KB_STORE 构造（M8-04：sqlite 或 pgvector 后端）。
+func DeleteKnowledgeBaseHandler(db *gorm.DB, mgr *knowledge.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -194,7 +195,6 @@ func DeleteKnowledgeBaseHandler(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "knowledge base not found"})
 			return
 		}
-		mgr := knowledge.NewManager(db)
 		if derr := mgr.DeleteKnowledge(context.Background(), id); derr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete knowledge vectors"})
 			return
@@ -209,7 +209,8 @@ func DeleteKnowledgeBaseHandler(db *gorm.DB) gin.HandlerFunc {
 
 // IndexDocumentHandler 处理 POST /api/knowledge/:id/documents（需 knowledge:write，owner 隔离）。
 // 切片并索引一份文本文档到该知识库，返回切片数。content_type 为 "text"/"code"。
-func IndexDocumentHandler(db *gorm.DB) gin.HandlerFunc {
+// mgr 由装配层按 KB_STORE 构造（M8-04：sqlite 或 pgvector 后端）。
+func IndexDocumentHandler(db *gorm.DB, mgr *knowledge.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -243,7 +244,6 @@ func IndexDocumentHandler(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "content is required"})
 			return
 		}
-		mgr := knowledge.NewManager(db)
 		n, err := mgr.IndexDocument(context.Background(), id, body.Name, body.Content, body.ContentType)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -254,7 +254,8 @@ func IndexDocumentHandler(db *gorm.DB) gin.HandlerFunc {
 }
 
 // ListKnowledgeDocumentsHandler 处理 GET /api/knowledge/:id/documents（需 knowledge:read，owner 隔离）。
-func ListKnowledgeDocumentsHandler(db *gorm.DB) gin.HandlerFunc {
+// mgr 由装配层按 KB_STORE 构造（M8-04：sqlite 或 pgvector 后端）。
+func ListKnowledgeDocumentsHandler(db *gorm.DB, mgr *knowledge.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -275,7 +276,6 @@ func ListKnowledgeDocumentsHandler(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "knowledge base not found"})
 			return
 		}
-		mgr := knowledge.NewManager(db)
 		docs, err := mgr.ListDocuments(context.Background(), id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list documents"})
@@ -291,7 +291,8 @@ func ListKnowledgeDocumentsHandler(db *gorm.DB) gin.HandlerFunc {
 
 // DeleteKnowledgeDocumentHandler 处理 DELETE /api/knowledge/:id/documents/:name
 // （需 knowledge:write，owner 隔离）。删除某来源文档的全部切片。
-func DeleteKnowledgeDocumentHandler(db *gorm.DB) gin.HandlerFunc {
+// mgr 由装配层按 KB_STORE 构造（M8-04：sqlite 或 pgvector 后端）。
+func DeleteKnowledgeDocumentHandler(db *gorm.DB, mgr *knowledge.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -317,7 +318,6 @@ func DeleteKnowledgeDocumentHandler(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "document name required"})
 			return
 		}
-		mgr := knowledge.NewManager(db)
 		n, err := mgr.DeleteDocument(context.Background(), id, docName)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete document"})
@@ -329,7 +329,8 @@ func DeleteKnowledgeDocumentHandler(db *gorm.DB) gin.HandlerFunc {
 
 // SearchKnowledgeHandler 处理 POST /api/knowledge/:id/search（需 knowledge:read，owner 隔离）。
 // 在该知识库内检索 query，返回 top_k 命中（按相似度降序）。
-func SearchKnowledgeHandler(db *gorm.DB) gin.HandlerFunc {
+// mgr 由装配层按 KB_STORE 构造（M8-04：sqlite 或 pgvector 后端）。
+func SearchKnowledgeHandler(db *gorm.DB, mgr *knowledge.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, ok := currentUserID(c)
 		if !ok {
@@ -362,7 +363,6 @@ func SearchKnowledgeHandler(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "query is required"})
 			return
 		}
-		mgr := knowledge.NewManager(db)
 		hits, err := mgr.Search(context.Background(), id, body.Query, body.TopK)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "search failed"})

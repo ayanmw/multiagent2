@@ -341,3 +341,82 @@ func TestTaskRunQueueOptions_EnvDriven(t *testing.T) {
 		t.Errorf("TaskRunQueueMaxAttempts() = %d, want 7", got)
 	}
 }
+
+// --- M8-04：知识库向量库后端（KB_STORE sqlite|pgvector） ---
+
+// TestKnowledgeStore_Default 验收 M8-04：KB_STORE 默认 sqlite（向后兼容，零外部依赖），
+// 零值 getter 同样回落 sqlite。
+func TestKnowledgeStore_Default(t *testing.T) {
+	var c Config
+	if got := c.KnowledgeStore(); got != "sqlite" {
+		t.Errorf("零值 KnowledgeStore() = %q, want sqlite", got)
+	}
+	if got := c.KnowledgePGDim(); got != 256 {
+		t.Errorf("零值 KnowledgePGDim() = %d, want 256", got)
+	}
+	if got := c.KnowledgePGPoolSize(); got != 10 {
+		t.Errorf("零值 KnowledgePGPoolSize() = %d, want 10", got)
+	}
+}
+
+func TestKnowledgeStore_EnvDriven(t *testing.T) {
+	t.Run("default_sqlite", func(t *testing.T) {
+		t.Setenv("KB_STORE", "")
+		t.Setenv("KB_PG_DSN", "")
+		cfg := Load()
+		if got := cfg.KnowledgeStore(); got != "sqlite" {
+			t.Fatalf("KB_STORE 未设置时应默认 sqlite, got %q", got)
+		}
+	})
+	t.Run("pgvector", func(t *testing.T) {
+		t.Setenv("KB_STORE", "pgvector")
+		t.Setenv("KB_PG_DSN", "postgres://u:p@localhost:5432/codeagent")
+		cfg := Load()
+		if got := cfg.KnowledgeStore(); got != "pgvector" {
+			t.Fatalf("KB_STORE=pgvector 应返回 pgvector, got %q", got)
+		}
+		if got := cfg.KnowledgePGDSN(); got != "postgres://u:p@localhost:5432/codeagent" {
+			t.Fatalf("KnowledgePGDSN() = %q 不匹配", got)
+		}
+	})
+	t.Run("invalid_falls_back_sqlite", func(t *testing.T) {
+		t.Setenv("KB_STORE", "redis")
+		cfg := Load()
+		if got := cfg.KnowledgeStore(); got != "sqlite" {
+			t.Fatalf("非法 KB_STORE 应回落 sqlite, got %q", got)
+		}
+	})
+}
+
+// TestKnowledgeStore_PGParams 验收 M8-04：pgvector 模式的维度/连接池参数解析与非法回落。
+func TestKnowledgeStore_PGParams(t *testing.T) {
+	t.Setenv("KB_STORE", "pgvector")
+	t.Setenv("KB_PG_DSN", "postgres://u:p@localhost:5432/codeagent")
+	t.Setenv("KB_PG_DIM", "512")
+	t.Setenv("KB_PG_POOL", "24")
+	cfg := Load()
+	if got := cfg.KnowledgePGDim(); got != 512 {
+		t.Errorf("KnowledgePGDim() = %d, want 512", got)
+	}
+	if got := cfg.KnowledgePGPoolSize(); got != 24 {
+		t.Errorf("KnowledgePGPoolSize() = %d, want 24", got)
+	}
+}
+
+// TestKnowledgeStore_Validate 验收 M8-04：后端校验纯函数——pgvector 缺 DSN 必须报错
+//（config.Load 内该场景走 log.Fatalf，杜绝「以为切了 PG 实际还在用 sqlite」的静默退化）；
+// sqlite 合法；非法值报错（Load 内告警回落）。
+func TestKnowledgeStore_Validate(t *testing.T) {
+	if err := validateKnowledgeStore("sqlite", ""); err != nil {
+		t.Errorf("sqlite 不应报错: %v", err)
+	}
+	if err := validateKnowledgeStore("pgvector", "postgres://u:p@h:5432/db"); err != nil {
+		t.Errorf("pgvector + DSN 不应报错: %v", err)
+	}
+	if err := validateKnowledgeStore("pgvector", "  "); err == nil {
+		t.Error("pgvector + 空 DSN 必须报错（fatal 路径）")
+	}
+	if err := validateKnowledgeStore("redis", ""); err == nil {
+		t.Error("非法后端值必须报错（回落路径）")
+	}
+}

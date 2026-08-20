@@ -312,3 +312,11 @@ server/
 - **测试「节点崩溃」的确定性写法**：不要用 `runtime.Goexit()` 模拟崩溃后让崩溃节点继续轮询（它会再次领取任务与健康节点竞争，结果 flaky——实测 result 在 ok-a/ok-b 间抖动）；应让崩溃节点「领取任务后整体消失」（不启动 poller、不续约、不写终态，对象直接丢弃），由健康节点重拾——确定性 100%。
 - **多节点测试=共享同一 SQLite 文件**：两个 `SQLiteQueue` 实例各自 `sql.Open` 同一路径即模拟两个节点（进程内两连接池、跨连接靠文件锁 + busy_timeout）；未来换 Redis 只需实现 `queue.Queue` 接口（存储层完全解耦）。
 
+### 2026-08-20 | 架构 | Knowledge RAG 升级 PG/pgvector 的可复用设计（M8-04，重要）
+- **后端可切换的关键是「存储接口 + 工厂」而非 Manager 分支**：`store.VectorStore` 接口 = 框架 `vectorstore.VectorStore` + `ListDocuments(ctx)` + `DeleteDocument(ctx, name)`（Manager 特有的文档聚合能力）；`knowledge.Manager` 加 `newStore func(kbID string) (store.VectorStore, error)` 字段，`NewManager` 默认 SQLite 工厂、`NewManagerWithStoreFactory` 注入 PG 工厂——Manager/API 业务层零分支，后端切换只发生在 main.go 装配层（`buildKnowledgeManager` 按 `KB_STORE` 分支一次）。**签名统一带 ctx**：SQLite 旧实现 `ListDocuments()` 无 ctx，PG 需要 ctx 执行 SQL，接口必须统一为带 ctx 版本（改 SQLite 签名是必要的，不是破坏）。
+- **Go 语法坑：参数列表不允许「匿名类型 + 命名参数」混排**。`func (s *X) DeleteDocument(context.Context, docName string)` 报 `syntax error: missing parameter name`（Go 解析器把 `context.Context, docName` 当 IdentifierList 处理）；必须显式命名 `_ context.Context, docName string`。接口方法签名也要一致（不能接口带名、实现匿名）。
+- **pgx stdlib（database/sql）的参数绑定限制**：`database/sql` 只走 `driver.Value`（string/bool/int/float64/[]byte 等），**不能直接绑 `[]string`/`[]float64`/map**（报 `unsupported type`）。规避：一律「字符串字面量 + SQL cast」——向量 `$n::vector` + `"[0.1,0.2]"`、JSON `$n::jsonb` + `json.Marshal` 字符串、ID 数组 `$n::text[]` + `"{id1,id2}"`。这样参数全部是 string，任何 database/sql 驱动都兼容。
+- **pgvector 列维度是硬约束**：`embedding vector(N)` 建表时固定；表已存在且维度 ≠ 配置 → 启动报错（`parseVectorDim` 解析 `format_type` 输出的 `vector(256)`），提示 `DROP TABLE kb_vectors` 重建——换嵌入器维度属破坏性变更。索引三级降级：HNSW（pgvector ≥ 0.5.0）→ IVFFlat（lists=100）→ 无索引警告；扩展未安装（`pg_extension` 查不到 vector）→ 明确报错并指路 `CREATE EXTENSION vector`，**绝不静默回落 sqlite**（用户以为切了 PG 实际没用是更危险的失败）。
+- **config 校验抽纯函数再 fatal**：`log.Fatalf` 路径在单测里不可达（os.Exit 会杀测试进程），把校验逻辑抽成 `validateKnowledgeStore(store, dsn) error` 纯函数，Load 内 fatal、测试直调纯函数断言——与 M8-03 的 queue 配置同款模式。
+- **万级/并发验收测试的环境策略**：集成测试读 `PG_TEST_DSN`，未设置 t.Skip（本机沙箱/CI 默认跳过，有 PG 的 runner 真跑）；万级数据测试再套 `PG_SCALE_TEST=1` 开关（避免 CI 每次跑 1 万条插入）；性能数字**只输出不硬断言**（P50/P95/P99 打印进报告，环境抖动不 flaky）——与 M8-02 docker 集成测试同款「环境变量 + Skip 兜底」策略。
+

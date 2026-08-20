@@ -242,8 +242,20 @@ func (s *SQLiteVectorStore) GetMetadata(_ context.Context, opts ...vectorstore.G
 // Close 共享 DB，无需关闭。
 func (s *SQLiteVectorStore) Close() error { return nil }
 
+// VectorStore 是 knowledge.Manager 依赖的向量存储子集：框架 vectorstore.VectorStore
+// 接口 + 文档聚合能力（ListDocuments/DeleteDocument）。SQLiteVectorStore 与
+// PGVectorStore 均实现它，Manager 经 store 工厂按后端切换，业务层无感知（M8-04）。
+type VectorStore interface {
+	vectorstore.VectorStore
+	ListDocuments(ctx context.Context) ([]DocInfo, error)
+	DeleteDocument(ctx context.Context, docName string) (int64, error)
+}
+
+// 编译期断言：SQLiteVectorStore 满足 VectorStore 接口。
+var _ VectorStore = (*SQLiteVectorStore)(nil)
+
 // ListDocuments 返回本 kb 的文档（来源）列表与切片数（按 doc_name 聚合）。
-func (s *SQLiteVectorStore) ListDocuments() ([]DocInfo, error) {
+func (s *SQLiteVectorStore) ListDocuments(context.Context) ([]DocInfo, error) {
 	type agg struct {
 		DocName    string
 		ChunkCount int
@@ -265,7 +277,7 @@ func (s *SQLiteVectorStore) ListDocuments() ([]DocInfo, error) {
 }
 
 // DeleteDocument 删除某来源文档的全部切片。
-func (s *SQLiteVectorStore) DeleteDocument(docName string) (int64, error) {
+func (s *SQLiteVectorStore) DeleteDocument(_ context.Context, docName string) (int64, error) {
 	res := s.db.Where("kb_id = ? AND doc_name = ?", s.kbID, docName).Delete(&vectorRow{})
 	return res.RowsAffected, res.Error
 }

@@ -2,6 +2,8 @@ package config
 
 import (
 	"crypto/sha256"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -13,6 +15,27 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/skillrepo"
 )
+
+// validateKnowledgeStore 校验知识库向量后端配置（M8-04）：
+//   - "sqlite"：合法，零外部依赖（默认）；
+//   - "pgvector"：需提供非空 KB_PG_DSN（指向已启用 pgvector 扩展的 PostgreSQL）；
+//   - 其他：非法。
+//
+// Load 内对「非法值」告警回落 sqlite、对「合法值但配置不完整」直接 fatal；
+// 抽成纯函数便于测试直调。
+func validateKnowledgeStore(store, dsn string) error {
+	switch store {
+	case "sqlite":
+		return nil
+	case "pgvector":
+		if strings.TrimSpace(dsn) == "" {
+			return errors.New("KB_STORE=pgvector 但未配置 KB_PG_DSN（postgres://user:pass@host:5432/db）——请先部署 PostgreSQL 并启用 pgvector 扩展（见 docs/knowledge-pgvector.md）")
+		}
+		return nil
+	default:
+		return fmt.Errorf("KB_STORE=%q 非法（可选值 sqlite|pgvector）", store)
+	}
+}
 
 // DefaultEngineTimeout is the fallback streaming timeout when ENGINE_TIMEOUT_SECONDS
 // is unset or invalid. A single LLM run is aborted after this duration.
@@ -72,6 +95,13 @@ type Config struct {
 	// 知识库 RAG 检索注入（M5-02）：env KNOWLEDGE_ENABLED（默认 true）。
 	// 开启后对话前检索用户知识库相关切片并前缀注入用户消息；关闭则不做检索注入。
 	knowledgeEnabled bool // 是否开启知识库检索注入（env KNOWLEDGE_ENABLED，默认 true），M5-02
+	// 知识库向量库后端（M8-04）：KB_STORE=sqlite（默认，本地基线，零外部依赖）| pgvector
+	// （PostgreSQL + pgvector 扩展，万级 chunk 检索 P99 达标、并发检索无退化，生产推荐）。
+	// pgvector 模式需 KB_PG_DSN 指向已启用 vector 扩展的 PostgreSQL（部署见 docs/knowledge-pgvector.md）。
+	kbStore  string // 知识库向量存储后端（env KB_STORE，默认 sqlite），M8-04
+	kbPgDSN  string // pgvector 后端连接串（env KB_PG_DSN，如 postgres://user:pass@host:5432/db），M8-04
+	kbPgDim  int    // pgvector 向量维度（env KB_PG_DIM，默认 256，须与嵌入器维度一致），M8-04
+	kbPgPool int    // pgvector 连接池大小（env KB_PG_POOL，默认 10，并发检索支撑），M8-04
 	// 平台级预算护栏总开关（M3-04）：env BUDGET_ENABLED（默认 true）。
 	// 关闭后所有预算检查直接放行（仅本地调试 / 紧急恢复用）；具体阈值由 DB 中的 BudgetPolicy 配置。
 	budgetEnabled bool // 是否开启预算护栏（env BUDGET_ENABLED，默认 true），M3-04
@@ -375,6 +405,31 @@ func Load() *Config {
 	// 知识库 RAG 检索注入（M5-02）：默认开启；对话前检索用户知识库相关切片前缀注入。
 	// KNOWLEDGE_ENABLED=false 可关闭（纯调试 / 无需知识库场景）。
 	cfg.knowledgeEnabled = envOrDefaultBool("KNOWLEDGE_ENABLED", true)
+
+	// 知识库向量库后端（M8-04）：默认 sqlite（本地基线）；切 pgvector 需
+	// PostgreSQL + pgvector 扩展，支撑万级 chunk 检索与并发（部署见 docs/knowledge-pgvector.md）。
+	cfg.kbStore = envOrDefault("KB_STORE", "sqlite")
+	cfg.kbPgDSN = envOrDefault("KB_PG_DSN", "")
+	cfg.kbPgDim = envOrDefaultInt("KB_PG_DIM", 256)
+	if cfg.kbPgDim <= 0 {
+		log.Printf("[WARN] KB_PG_DIM must be positive; using default 256")
+		cfg.kbPgDim = 256
+	}
+	cfg.kbPgPool = envOrDefaultInt("KB_PG_POOL", 10)
+	if cfg.kbPgPool <= 0 {
+		log.Printf("[WARN] KB_PG_POOL must be positive; using default 10")
+		cfg.kbPgPool = 10
+	}
+	// 非法后端值回落 sqlite（告警）；合法但配置不完整（pgvector 缺 DSN）直接 fatal——
+	// 防止「以为切了 PG 实际还在用 sqlite」的静默退化。
+	if err := validateKnowledgeStore(cfg.kbStore, cfg.kbPgDSN); err != nil {
+		if cfg.kbStore != "sqlite" && cfg.kbStore != "pgvector" {
+			log.Printf("[WARN] %v；使用默认 sqlite", err)
+			cfg.kbStore = "sqlite"
+		} else {
+			log.Fatalf("%v", err)
+		}
+	}
 
 	// 平台级预算护栏（M3-04）：默认开启；具体阈值由 DB 中的 BudgetPolicy 配置。
 	// BUDGET_ENABLED=false 可整体关闭拦截（紧急恢复 / 纯调试，非生产环境不建议）。
@@ -690,6 +745,44 @@ func (c *Config) ToolSearchEnabled() bool {
 // message. When off, no retrieval is performed.
 func (c *Config) KnowledgeEnabled() bool {
 	return c != nil && c.knowledgeEnabled
+}
+
+// KnowledgeStore reports the knowledge vector-store backend (M8-04): "sqlite"
+// (default, local baseline, zero external dependency) or "pgvector"
+// (PostgreSQL + pgvector extension, recommended for 10k+ chunks and concurrent
+// retrieval). Invalid values are rejected at load time with a fallback to sqlite.
+func (c *Config) KnowledgeStore() string {
+	if c == nil || c.kbStore == "" {
+		return "sqlite"
+	}
+	return c.kbStore
+}
+
+// KnowledgePGDSN returns the PostgreSQL DSN for the pgvector knowledge backend
+// (only meaningful when KnowledgeStore() == "pgvector").
+func (c *Config) KnowledgePGDSN() string {
+	if c == nil {
+		return ""
+	}
+	return c.kbPgDSN
+}
+
+// KnowledgePGDim returns the vector dimension for the pgvector backend. It must
+// match the embedder dimension (default 256 for the built-in local embedder).
+func (c *Config) KnowledgePGDim() int {
+	if c == nil || c.kbPgDim <= 0 {
+		return 256
+	}
+	return c.kbPgDim
+}
+
+// KnowledgePGPoolSize returns the pgvector connection pool size (concurrent
+// retrieval support). Defaults to 10.
+func (c *Config) KnowledgePGPoolSize() int {
+	if c == nil || c.kbPgPool <= 0 {
+		return 10
+	}
+	return c.kbPgPool
 }
 
 // BudgetEnabled reports whether the platform-level budget guardrail (M3-04) is

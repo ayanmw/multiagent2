@@ -28,6 +28,7 @@ import (
 	"github.com/ayanmw/multiagent2/server/internal/evolution"
 	"github.com/ayanmw/multiagent2/server/internal/executor"
 	"github.com/ayanmw/multiagent2/server/internal/knowledge"
+	"github.com/ayanmw/multiagent2/server/internal/knowledge/store"
 	"github.com/ayanmw/multiagent2/server/internal/metrics"
 	"github.com/ayanmw/multiagent2/server/internal/middleware"
 	"github.com/ayanmw/multiagent2/server/internal/model"
@@ -93,6 +94,9 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 	protected.Use(middleware.AuthMiddleware(cfg.JWTSecret, db.DB))
 	{
 		protected.GET("/me", api.MeHandler(db.DB))
+
+		// 知识库管理器（M5-02/M8-04）：按 KB_STORE 构造一次，供 RAG 路由与引擎检索注入共用。
+		kmgr := buildKnowledgeManager(db, cfg)
 
 		// Admin-only sub-group
 		admin := protected.Group("/admin")
@@ -220,17 +224,18 @@ func buildRouter(db *repo.DB, cfg *config.Config, disc *provider.Discoverer, sta
 		protected.PUT("/skills/:name", middleware.RequirePermission(db.DB, "skills", "write"), api.UpdateSkillHandler(cfg.SkillsRoot(), cfg.SkillsDataDir()))
 		protected.DELETE("/skills/:name", middleware.RequirePermission(db.DB, "skills", "write"), api.DeleteSkillHandler(cfg.SkillsRoot(), cfg.SkillsDataDir()))
 
-		// 知识库 RAG（M5-02）：用户归属的知识库 CRUD + 文档索引/检索（owner 隔离）。
+		// 知识库 RAG（M5-02/M8-04）：用户归属的知识库 CRUD + 文档索引/检索（owner 隔离）。
+		// 向量后端按 KB_STORE 切换（sqlite 基线 / pgvector 万级检索），manager 由装配层构造。
 		// 读操作需 knowledge:read，写操作（建/更新/删/索引/删文档）需 knowledge:write（RBAC）。
 		protected.GET("/knowledge", middleware.RequirePermission(db.DB, "knowledge", "read"), api.ListKnowledgeBasesHandler(db.DB))
 		protected.POST("/knowledge", middleware.RequirePermission(db.DB, "knowledge", "write"), api.CreateKnowledgeBaseHandler(db.DB))
 		protected.GET("/knowledge/:id", middleware.RequirePermission(db.DB, "knowledge", "read"), api.GetKnowledgeBaseHandler(db.DB))
 		protected.PUT("/knowledge/:id", middleware.RequirePermission(db.DB, "knowledge", "write"), api.UpdateKnowledgeBaseHandler(db.DB))
-		protected.DELETE("/knowledge/:id", middleware.RequirePermission(db.DB, "knowledge", "write"), api.DeleteKnowledgeBaseHandler(db.DB))
-		protected.GET("/knowledge/:id/documents", middleware.RequirePermission(db.DB, "knowledge", "read"), api.ListKnowledgeDocumentsHandler(db.DB))
-		protected.POST("/knowledge/:id/documents", middleware.RequirePermission(db.DB, "knowledge", "write"), api.IndexDocumentHandler(db.DB))
-		protected.DELETE("/knowledge/:id/documents/:name", middleware.RequirePermission(db.DB, "knowledge", "write"), api.DeleteKnowledgeDocumentHandler(db.DB))
-		protected.POST("/knowledge/:id/search", middleware.RequirePermission(db.DB, "knowledge", "read"), api.SearchKnowledgeHandler(db.DB))
+		protected.DELETE("/knowledge/:id", middleware.RequirePermission(db.DB, "knowledge", "write"), api.DeleteKnowledgeBaseHandler(db.DB, kmgr))
+		protected.GET("/knowledge/:id/documents", middleware.RequirePermission(db.DB, "knowledge", "read"), api.ListKnowledgeDocumentsHandler(db.DB, kmgr))
+		protected.POST("/knowledge/:id/documents", middleware.RequirePermission(db.DB, "knowledge", "write"), api.IndexDocumentHandler(db.DB, kmgr))
+		protected.DELETE("/knowledge/:id/documents/:name", middleware.RequirePermission(db.DB, "knowledge", "write"), api.DeleteKnowledgeDocumentHandler(db.DB, kmgr))
+		protected.POST("/knowledge/:id/search", middleware.RequirePermission(db.DB, "knowledge", "read"), api.SearchKnowledgeHandler(db.DB, kmgr))
 
 		// 后台任务管控（M2-04）：列表/详情/取消/transcript，owner 隔离 + RBAC。
 		// 读操作需 taskruns:read，取消写操作需 taskruns:write。
@@ -411,12 +416,37 @@ func (a *knowledgeRetrieverAdapter) Retrieve(ctx context.Context, userID, query 
 }
 
 // buildKnowledgeRetriever 按配置构造知识库检索注入器（M5-02）。KNOWLEDGE_ENABLED=false 时返回 nil，
-// 引擎不做任何检索注入；开启时返回包装 knowledge.Manager 的适配器。
+// 引擎不做任何检索注入；开启时返回包装 knowledge.Manager（向量后端按 KB_STORE 切换）的适配器。
 func buildKnowledgeRetriever(db *repo.DB, cfg *config.Config) engine.KnowledgeRetriever {
 	if !cfg.KnowledgeEnabled() {
 		return nil
 	}
-	return &knowledgeRetrieverAdapter{mgr: knowledge.NewManager(db.DB), maxChars: 4000}
+	return &knowledgeRetrieverAdapter{mgr: buildKnowledgeManager(db, cfg), maxChars: 4000}
+}
+
+// buildKnowledgeManager 按 KB_STORE 构造知识库管理器（M8-04）：
+//   - sqlite（默认）：本地 SQLite 向量基线，零外部依赖、单文件；
+//   - pgvector：连接 PostgreSQL + pgvector 扩展，建表/HNSW 索引幂等初始化，
+//     支撑万级 chunk 检索（P99 达标）与并发检索（连接池）。
+//
+// pgvector 模式连接/初始化失败直接 fatal——显式配置了后端就必须可用，不静默回落
+// （避免「以为切了 PG 实际还在用 sqlite」）。返回的 manager 供 RAG 路由与检索注入共用。
+func buildKnowledgeManager(db *repo.DB, cfg *config.Config) *knowledge.Manager {
+	if cfg.KnowledgeStore() != "pgvector" {
+		return knowledge.NewManager(db.DB)
+	}
+	pool, err := store.NewPGPool(context.Background(), store.PGConfig{
+		DSN:      cfg.KnowledgePGDSN(),
+		Dim:      cfg.KnowledgePGDim(),
+		PoolSize: cfg.KnowledgePGPoolSize(),
+	})
+	if err != nil {
+		log.Fatalf("初始化 pgvector 知识库后端失败（KB_STORE=pgvector）: %v", err)
+	}
+	log.Printf("知识库向量后端已切换为 pgvector（dim=%d, pool=%d）", pool.Dim(), cfg.KnowledgePGPoolSize())
+	return knowledge.NewManagerWithStoreFactory(db.DB, func(kbID string) (store.VectorStore, error) {
+		return pool.ForKB(kbID), nil
+	})
 }
 
 func main() {
