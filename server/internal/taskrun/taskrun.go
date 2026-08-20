@@ -12,6 +12,7 @@ package taskrun
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -90,11 +91,17 @@ func (h *WorktreeHook) OnRunUpdate(ctx context.Context, run taskrunruntime.Run) 
 	// 键解析：优先 run.ID（v1.10.0 下 Create 侧用 runID 注册）；历史调用以
 	// ChildSessionID 为键注册的 entry 也能命中（向后兼容）。
 	key := run.ID
-	if key == "" || !h.Manager.Lookup(key) {
+	matched := h.Manager.Lookup(key)
+	if key == "" || !matched {
 		if run.ChildSessionID != "" {
 			key = run.ChildSessionID
+			matched = h.Manager.Lookup(key)
 		}
 	}
+	// M7.5-03 压测诊断：并发扇出时键不匹配会导致 Finalize 空跑（产物丢失），
+	// 保留一行可观测日志便于排查。
+	log.Printf("[taskrun] OnRunUpdate run=%s child=%s status=%s key=%s matched=%v",
+		run.ID, run.ChildSessionID, run.Status, key, matched)
 	h.Manager.Finalize(ctx, key, string(run.Status))
 }
 
@@ -155,6 +162,10 @@ func BuildAgentFactory(guardrail codeagent.GuardrailConfig, res WorkerResolver, 
 			if s, isStr := v.(string); isStr && s != "" {
 				childKey = s
 			}
+		}
+		// M7.5-03 压测诊断：记录 Create 侧注册键（供 OnRunUpdate 匹配核查）。
+		if res.Worktree != nil && res.Worktree.Enabled {
+			log.Printf("[taskrun] BuildAgentFactory uid=%s childKey=%s", uid, childKey)
 		}
 		// M3-01：构造落库审计器，使 worker 子代理执行的命令写入该 owner 名下的审计日志。
 		// uid 为字符串形式的用户 id（与入口 uid 一致），解析失败则回落系统（0）。

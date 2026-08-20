@@ -2,10 +2,12 @@ package worktree
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ayanmw/multiagent2/server/internal/executor"
@@ -172,6 +174,82 @@ func TestManager_FinalizeFailureKeepsBranch(t *testing.T) {
 	}
 	// 清理保留分支，避免干扰。
 	_, _ = runGit(ctx, ex, "-C", repoDir, "branch", "-D", "taskrun/sess_fail_999")
+}
+
+// TestManager_ConcurrentFinalize 验证 M7.5-03 压测暴露的并发缺陷回归：
+// 多个后台任务同时收敛时，Observer 并发触发 Finalize → 多个 git merge --no-ff
+// 同时写同一主仓库的 index/HEAD 互相踩踏（index.lock/HEAD 竞态，多数 merge 报
+// exit_code=128，子任务产物丢失）。修复：Manager.mergeMu 串行化 merge 段。
+// 本测试并发 Finalize 6 个 worktree，断言全部 merge 成功、产物完整、无泄漏。
+func TestManager_ConcurrentFinalize(t *testing.T) {
+	skipUnlessGit(t)
+	base := t.TempDir()
+	repoDir := filepath.Join(base, "repo")
+	initRepo(t, repoDir)
+
+	m := NewManager()
+	ctx := context.Background()
+	const n = 6
+
+	// 创建 n 个 worktree，各自写独立文件并 commit（模拟 n 个后台子任务并发产出）。
+	for i := 1; i <= n; i++ {
+		key := fmt.Sprintf("taskrun:conc:%d", i)
+		wt, err := m.Create(ctx, repoDir, key)
+		if err != nil {
+			t.Fatalf("Create(%d): %v", i, err)
+		}
+		if err := os.WriteFile(filepath.Join(wt, fmt.Sprintf("task-%d.txt", i)), []byte(fmt.Sprintf("DONE-%d\n", i)), 0o644); err != nil {
+			t.Fatalf("write(%d): %v", i, err)
+		}
+		wtEx, err := codectool.NewGitExecutor(wt, nil, nil, executor.ModeUnattended)
+		if err != nil {
+			t.Fatalf("wt executor(%d): %v", i, err)
+		}
+		if _, err := codectool.GitCommit(ctx, wtEx, fmt.Sprintf("add task-%d", i)); err != nil {
+			t.Fatalf("commit(%d): %v", i, err)
+		}
+	}
+
+	// 并发 Finalize（模拟多 run 同时进入终态触发 Observer）。
+	var wg sync.WaitGroup
+	outs := make([]string, n)
+	for i := 1; i <= n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			outs[idx-1] = m.Finalize(ctx, fmt.Sprintf("taskrun:conc:%d", idx), "completed")
+		}(i)
+	}
+	wg.Wait()
+
+	// 断言 1：主分支必须出现全部 n 个文件且内容正确（任何 merge 踩踏都会丢文件）。
+	for i := 1; i <= n; i++ {
+		got, err := os.ReadFile(filepath.Join(repoDir, fmt.Sprintf("task-%d.txt", i)))
+		if err != nil {
+			t.Fatalf("主分支缺 task-%d.txt（并发 merge 丢产物）：%v", i, err)
+		}
+		if want := fmt.Sprintf("DONE-%d", i); strings.TrimSpace(string(got)) != want {
+			t.Fatalf("task-%d.txt 内容不符: got=%q want=%q", i, strings.TrimSpace(string(got)), want)
+		}
+	}
+	// 断言 2：worktree 检出目录与临时分支全部清理（Finalize 收尾完整）。
+	ex, _ := codectool.NewGitExecutor(repoDir, nil, nil, executor.ModeUnattended)
+	branches, err := runGit(ctx, ex, "-C", repoDir, "branch", "--list")
+	if err != nil {
+		t.Fatalf("list branches: %v", err)
+	}
+	if strings.Contains(branches, "taskrun/") {
+		t.Fatalf("并发 Finalize 后临时分支未清理: %s", branches)
+	}
+	wtParent := filepath.Join(base, ".taskrun-worktrees")
+	if entries, derr := os.ReadDir(wtParent); derr == nil && len(entries) > 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("并发 Finalize 后 worktree 目录未清理: %v", names)
+	}
+	_ = outs
 }
 
 // TestManager_UnknownSession 验证：终态时若无可关联 entry（重复 Finalize / 未知 id），安全返回空。

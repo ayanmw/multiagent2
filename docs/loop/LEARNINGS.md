@@ -283,3 +283,10 @@ server/
 - **对策**：冒烟套件真实路径（`SMOKE_LLM_BASE_URL` 指向网关）聚焦文本层（promptiter 写回/回滚对话、eval、evolution 门控均实测通过）；工具链 E2E 用脚本化 mock 驱动 LLM 决策（taskrun/worktree/git/goal 全部**真实执行**），并预留 `SMOKE_LLM_BASE_URL` 切换——未来接入支持 function calling 的端点后，同一测试直接切真实。**注意**：真实路径下目标契约会关闭流式（goal enforcer beforeModel），mock 桩必须同时支持流式(SSE)/非流式(单对象 JSON)双模式（与 2026-08-03 goal 测试同款约定）。
 - **模型选择**：网关默认模型 hy3 实测不可用（「所有候选模型均返回空结果」），显式 `deepseek-v4-pro`/`glm-5.1`/`auto` 可用；冒烟套件经 `SMOKE_LLM_MODEL` 指定（建议 `auto` 或具体模型 id，**未知 id 会被当显式模型、失败不回退**，故不能用 `mock-model`）。
 
+### 2026-08-20 | 并发 | worktree 并发 merge 竞态（M7.5-03 压测暴露并修复，重要）
+- **现象**：taskrun 扇出 5+ 子任务（async 并发）时，多数子任务「completed 但产物丢失」——主分支只剩 1 个 worker 的提交（`git log --all` 只见 1 个 merge commit + 1 个 worker commit），其余 worktree 分支被 `+` 检出悬置（Finalize 未走完），压测断言失败且难排查。
+- **根因**：多个子任务**同时收敛**时，`inprocess.Observer`（WorktreeHook.OnRunUpdate）**并发**触发 `worktree.Manager.Finalize`，多个 `git merge --no-ff` **同时写同一主仓库的 index/HEAD**，互相踩踏——多数 merge 报 exit_code=128（`index.lock` 已存在 / HEAD 被并发改写）。git 对同一仓库的写操作是**单写者模型**，merge 必须互斥。M2-05 验收只测单/双任务顺序收敛，未覆盖并发收敛，属隐藏缺陷。
+- **修复**：`worktree.Manager` 新增 `mergeMu sync.Mutex`，`Finalize` 的 merge 段持锁（Manager 实例粒度足够：单进程内同一主仓库由同一 Manager 管理）；merge 失败路径补 `log.Printf` 错误详情（branch/err/out），避免「完成但丢产物」不可见。回归测试 `TestManager_ConcurrentFinalize`：6 worktree 并发提交+并发 Finalize，断言全部 merge 成功、产物完整、分支与目录清理。
+- **相关时差（非缺陷，测试需适配）**：run 标记 `completed` 与 Observer **异步 Finalize（merge）**存在最终一致性时差——Orchestrator 轮询到全部 run 终态时，最后一个 merge 可能未落盘。**压测断言必须对产物（主分支文件/worktree 清理）做轮询等待**（墙钟上限兜底死锁），不能 Chat 返回后立即断言文件。
+- **排查方法（可复用）**：① merge 失败看 `[worktree] merge 失败` 日志（M7.5-03 起有）；② `git log --oneline --all` 对比 worker commit 数 vs run 数（丢 commit 即 merge 踩踏）；③ `git branch -a` 看 `+` 前缀（被 worktree 检出=Finalize 未走完）；④ `LOAD_FANOUT_DEBUG=1` 打印 mock 决策序列（Orchestrator/worker 各自动作）。
+

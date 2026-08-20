@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,13 @@ import (
 type Manager struct {
 	mu      sync.Mutex
 	entries map[string]*Entry // key = childSessionID（与 Observer 的 run.ChildSessionID 一致）
+	// mergeMu 串行化「merge 回主分支」操作（M7.5-03 压测暴露的并发缺陷）：
+	// 多个后台任务同时收敛时，Observer 并发触发 Finalize，多个 git merge --no-ff
+	// 同时写同一主仓库的 index/HEAD，互相踩踏——多数 merge 报 exit_code=128
+	// （index.lock 已存在 / HEAD 被并发改写），子任务产物丢失。git 对同一仓库
+	// 的写操作是单写者模型，故 merge 段必须互斥（Manager 实例粒度足够：
+	// 单进程内同一主仓库由同一 Manager 管理）。
+	mergeMu sync.Mutex
 }
 
 // Entry 记录一次 taskrun 的 worktree 隔离信息。
@@ -143,10 +151,18 @@ func (m *Manager) Finalize(ctx context.Context, childSessionID, status string) s
 	var sb strings.Builder
 
 	if status == string(terminalStatusCompleted) {
+		// 串行化 merge（见 Manager.mergeMu 注释）：git 对同一主仓库的写操作
+		// 是单写者模型，并发 merge 会 index.lock/HEAD 踩踏导致 128 失败。
+		m.mergeMu.Lock()
 		out, merr := runGit(ctx, ex, "-C", entry.RepoDir, "merge", "--no-ff",
 			"-m", "merge taskrun branch "+entry.Branch, entry.Branch)
+		m.mergeMu.Unlock()
 		sb.WriteString("merge: " + strings.TrimSpace(out))
 		if merr != nil {
+			// 记录失败详情（M7.5-03 并发压测暴露：并发场景下 merge 失败需要可见的错误，
+			// 否则「子任务完成但产物丢失」难以排查）。
+			log.Printf("[worktree] merge 失败 key=%s branch=%s: %v; out=%q",
+				childSessionID, entry.Branch, merr, strings.TrimSpace(out))
 			// 合并冲突：保留分支与 worktree，交人工/Reviewer，不删除、不推送远程。
 			sb.WriteString(" (冲突，保留分支待人工处理)")
 			_, _ = runGit(ctx, ex, "-C", entry.RepoDir, "worktree", "remove", entry.WorktreeDir, "--force")
