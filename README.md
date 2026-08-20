@@ -65,6 +65,7 @@
 | MX | 质量加固：工作区/MCP/Skills/任务中心前端打通·M2 测试补全·用户管理后台·安全加固（限流/CORS/日志脱敏）·部署与文档 | ✅ |
 | M6 | 可运营化加固：worktree/taskrun 测试去 skip·框架依赖收敛到 engine 层·生产迁移治理·种子技能库+warm-start E2E·自动化韧性·真实模型冒烟套件 | ✅ |
 | M7 | 生产交付：CI 流水线·容器化收尾（.dockerignore/HEALTHCHECK）·K8s 清单·Alertmanager 告警·Grafana 看板·日志聚合+trace 贯通·**部署文档与 quickstart（本任务）** | ✅ |
+| M8 | 能力深化与产品化：A2A 流式+client·Docker 执行后端·多节点 taskrun·Knowledge PG/pgvector·评估集自举·前端重构·IM Channel·连接器市场·多租户隔离·**文档与示例（架构图+24h 演示复现手册）** | ✅*（M8-10 切 PG 条件触发延后） |
 
 ---
 
@@ -348,6 +349,9 @@ go build -o gmctl .
 
 - `docs/loop/PLAN.md` —— 任务规划与里程碑
 - `docs/loop/LEARNINGS.md` —— 必读约定（Executor 封装、危险命令策略、路径约束等）
+- `docs/ARCHITECTURE.md` —— **系统架构（mermaid 架构图 + 安全/企业化/部署）**
+- `docs/DEMO-24H.md` —— **24h 自主演示复现手册（场景案例 + 视频分镜脚本）**
+- `examples/automations/` —— 可拷贝的自动化与场景示例（curl + goal prompt）
 - `docs/DEPLOYMENT.md` —— **生产部署手册（运维向：CI/CD·K8s·监控·日志·密钥·备份·排障）**
 - `docs/02-框架能力全景与自主化升级规划.md` —— 框架能力全景
 - `docs/03-M1规划与M0评审.md` —— M1 阶段规划

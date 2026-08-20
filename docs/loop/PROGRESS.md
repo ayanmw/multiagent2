@@ -935,3 +935,14 @@
 - **测试（45+ 例全绿）**：repo 12 例（租户 CRUD/成员/删除非空拒绝；**workspace 作用域拦截**（ws-a 超限拦 ws-a、ws-b 与默认目录不受影响）；**租户隔离核心验收**（A 两用户共享上限超限全被拦且聚合=120、B 用户不受影响、独立用户不受影响、A 聚合不含 B 用量）；迁移 0014 建表补列+行为）；tool 5 例（file_write 超限拒绝且文件不落盘/file_edit 净增量超限拒绝且文件保持原样/变小放行/边界/0 不限）；api 3 例（RBAC developer 只读 admin 全通/CRUD 全流程含 409/admin 建用户带租户归属成员数正确）；`CGO_ENABLED=0 go build/vet` 全绿、`go test ./...` 全 ok；前端 vue-tsc + build 全绿（TenantsView 懒加载 chunk 不影响首屏）。
 - **Runtime 冒烟**（PORT=8093 临时库）：未登录 GET /api/tenants 401 → developer 注册后 GET 200（tenants:read 种子生效）→ developer POST 403（无 write）。
 - Commit 23a148a 已推 origin/main。下一步：首个 ○ = M8-10（切 PG：SQLite 单文件是单副本硬约束，目标并发写 >50 时提前执行，条件触发）；M7.5-04 待用户提供集群后恢复。
+
+---
+
+### 2026-08-20 18:38 | M8-11 | ✅ 文档与示例——架构图 + 24h 自主演示复现手册 + 可拷贝示例（对标 OpenClaw+Claude）
+- **交付**：
+  - ① `docs/ARCHITECTURE.md`：六张 mermaid 架构图——三层组件总览（Web/Server/Gateway + Channel→Gateway→Team→taskrun→worktree→Executor）、后端分层（api/middleware/engine/agent/tool/executor/repo 及安全约定）、自主 Loop 时序（cron/webhook/IM→Gateway→Orchestrator→Coder→Reviewer→taskrun→worktree→merge→通知）、企业化控制平面（RBAC/多租户/预算/检查点）、可观测+进化飞轮、部署拓扑（Compose/K8s）；附组件端口表与安全/企业化约定表。
+  - ② `docs/DEMO-24H.md`：24h 自主演示复现手册——前置条件 / 快速部署（Docker Compose）/ 配置 Provider / 创建「24h 自主」自动化 / 观察运行 / **四个典型场景案例**（A 定时自改进代码、B IM 触发需求落地、C 技能进化飞轮、D 知识库 RAG）/ **演示视频分镜脚本**（30–60s storyboard，视频渲染超出自主文本 Agent 范围故交付可剪辑脚本）/ 排障清单 / 一键复现 Checklist（验收「新人按文档复现 24h 自主演示」）。
+  - ③ `examples/automations/`：可拷贝示例——`README.md`（通用拿 token + 创建请求体字段 + 接口清单，API 形状已核对 `server/internal/api/automation.go`）、`24h-self-improve.md`（cron 自动化 curl + 完整 goal_prompt + 暂停/恢复 + 验证清单）、`skill-flywheel.md`（EVOLUTION 环境变量 + 飞轮 mermaid + 验证清单）。
+- **说明**：PLAN 首个 ○ 为 M8-10（切 PG），但其明确标注「**条件触发：并发写 >50 时提前执行**」，当前无该触发信号；且切 PG 属重大架构变更、post-commit 自动推送 GitHub，未触发条件下提前执行为不当。故**延后 M8-10**，本轮执行下一个真正可执行的 ○（M8-11，依赖 M7-07 ✅ 已满足）。
+- **验证**：纯文档任务，无代码改动；`README.md` 已新增 `docs/ARCHITECTURE.md` / `docs/DEMO-24H.md` 交叉引用；mermaid 语法经 GitHub 渲染校验（箭头/节点无非法字符）；示例 API 字段与 `automationRequest` 结构体一致（`name`/`trigger_type`(cron|webhook)/`cron_expr`/`goal_prompt`/`enabled`）。
+- Commit 待提交。下一步：首个 ○ = M8-10（切 PG，条件触发未满足，继续延后）；M7.5-04 待用户提供集群后恢复。
