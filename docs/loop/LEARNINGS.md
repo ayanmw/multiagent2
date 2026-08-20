@@ -312,6 +312,14 @@ server/
 - **测试「节点崩溃」的确定性写法**：不要用 `runtime.Goexit()` 模拟崩溃后让崩溃节点继续轮询（它会再次领取任务与健康节点竞争，结果 flaky——实测 result 在 ok-a/ok-b 间抖动）；应让崩溃节点「领取任务后整体消失」（不启动 poller、不续约、不写终态，对象直接丢弃），由健康节点重拾——确定性 100%。
 - **多节点测试=共享同一 SQLite 文件**：两个 `SQLiteQueue` 实例各自 `sql.Open` 同一路径即模拟两个节点（进程内两连接池、跨连接靠文件锁 + busy_timeout）；未来换 Redis 只需实现 `queue.Queue` 接口（存储层完全解耦）。
 
+### 2026-08-20 | 架构 | 评估集自举的可复用设计（M8-05，重要）
+- **M8-05 是什么**：把 M5-08 regression.Register 的「1 条粗糙用例」（Expected=技能名，模型提名字即过，太弱）升级为「从技能正文反向自举生成多条可验证用例 + 回归分数可比」，兑现「新技能自动进 eval 集；回归分数可比」。
+- **用例生成 = 纯函数，不落库不调 LLM**：`GenerateCases(cand)` 解析 SKILL.md 正文产出三类用例（全 Grader=contains 召回式，防 flaky）——① 保底知识用例（Input 问技能用途，Expected=技能名，任何正文至少 1 条，保证「自动进评估集」不因格式异常中断）；② 标题用例（`## / ###` 小节即技能子能力，Expected=标题关键词：**最长 CJK 片段**优先——「PR / 合并流程」→「合并流程」4 字 > PR，纯英文取首个 ≥3 字母词，兜底标题原文）；③ 命令用例（行内代码 `` `...` `` 提取命令词干：去尖括号参数 `<dir>` 后取前两个字母开头的词——`git worktree add <dir>` → `git worktree`；单词/flag 太泛返回空）。数量上限 MaxCasesPerSkill=8（标题 ≤4、命令 ≤3）。
+- **幂等用「Input 唯一」而非哈希**：Register 生成多条后，与已有 cases 按 `map[Input]bool` 比对、缺失才 Create——dataset 已存在（如旧版注册过 1 条）时自动补足新用例，重复注册零重复。**无需给 EvalCase 加来源/哈希列**（改表有迁移成本，Input 去重零迁移）。
+- **分数可比 = 基线对比，抽纯函数可测**：`baselineOf(runs, currentID)` 从 ListEvalRuns（已按 created_at desc）里找「最近一次 done 且非本次运行」记录，返回基线平均分/通过率；Report 增 BaselineScoreAvg/PassRate + ScoreDelta/PassRateDelta（`round4` 保留 4 位防浮点噪声）。Check 跑完 RunSync 后查历史补基线——**不调 LLM 也能测**（直接构造 runs 列表测 baselineOf）。
+- **Go 测试坑（再记一条）**：raw string（反引号定界）**正文内不能含反引号**——测试 body 里要模拟 `` `git worktree` `` 行内代码必须用「raw string 常量 + 双引号字符串拼接」构造（如 `cmdRichBody = gitFlowLikeBody + "\n... `git worktree add <dir> ...`\n"`）。
+- **vet 坑**：结构体字面量直接写**嵌入字段的提升名**（如 `EvalRun{CreatedAt: ...}`）在部分 vet 版本报 `unknown field CreatedAt`——虽然 go build 通过，vet 拒；改用内嵌类型字面量显式携带：`EvalRun{Model: gorm.Model{ID: 1, CreatedAt: now}}`。
+
 ### 2026-08-20 | 架构 | Knowledge RAG 升级 PG/pgvector 的可复用设计（M8-04，重要）
 - **后端可切换的关键是「存储接口 + 工厂」而非 Manager 分支**：`store.VectorStore` 接口 = 框架 `vectorstore.VectorStore` + `ListDocuments(ctx)` + `DeleteDocument(ctx, name)`（Manager 特有的文档聚合能力）；`knowledge.Manager` 加 `newStore func(kbID string) (store.VectorStore, error)` 字段，`NewManager` 默认 SQLite 工厂、`NewManagerWithStoreFactory` 注入 PG 工厂——Manager/API 业务层零分支，后端切换只发生在 main.go 装配层（`buildKnowledgeManager` 按 `KB_STORE` 分支一次）。**签名统一带 ctx**：SQLite 旧实现 `ListDocuments()` 无 ctx，PG 需要 ctx 执行 SQL，接口必须统一为带 ctx 版本（改 SQLite 签名是必要的，不是破坏）。
 - **Go 语法坑：参数列表不允许「匿名类型 + 命名参数」混排**。`func (s *X) DeleteDocument(context.Context, docName string)` 报 `syntax error: missing parameter name`（Go 解析器把 `context.Context, docName` 当 IdentifierList 处理）；必须显式命名 `_ context.Context, docName string`。接口方法签名也要一致（不能接口带名、实现匿名）。

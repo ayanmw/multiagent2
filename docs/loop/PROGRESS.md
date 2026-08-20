@@ -877,3 +877,15 @@
 - 测试：单测 5 例（向量文本往返/DSN 脱敏/维度解析/空 DSN）；集成 7 例（`PG_TEST_DSN` 设置才跑否则 Skip：CRUD+余弦排序+metadata 过滤 / 三种删除 / 文档聚合删除 / 并发 20×50 无退化 / kb 隔离 / 万级 1 万 chunk 插 1 万检索输出 P50/P95/P99——`PG_SCALE_TEST=1` 才跑，输出不硬断言防 flaky）；config 5 例；manager SQLite 回归全绿。
 - 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test -count=1 ./...` 全 ok（cmd/server 29.9s、api 7.4s 含既有套件回归）；前端无改动。
 - 提交后下一步：首个 ○ = M8-05（评估集自举：evolution 提取的技能反向生成 eval case）；M7.5-04 待用户提供集群后恢复。
+
+### 2026-08-20 13:45 | M8-05 | ✅ 评估集自举——技能正文反向生成 eval 用例 + 回归基线可比（飞轮×回归自强化）
+- **背景**：M8 能力深化第五项（依赖 M5-05 已完成）。M5-08 regression.Register 只生成 1 条粗糙用例（Expected=技能名，模型提名字即过，回归形同虚设）；M8-05 把「新技能自动进 eval 集」升级为「从技能正文自举生成多条可验证用例」，并让「回归分数可比」落到实处。
+- **`internal/regression/selfgen.go`（新，纯函数不落库不调 LLM）**：`GenerateCases(cand)` 解析 SKILL.md 正文产出三类用例（全 Grader=contains 召回式防 flaky，上限 MaxCasesPerSkill=8）——
+  - ① 保底知识用例：Input 问技能用途/适用场景，Expected=技能名（任何正文至少 1 条，保证自动进评估集不因格式异常中断）；
+  - ② 标题用例：`## / ###` 小节即技能子能力/步骤，Input 让模型按该小节作答，Expected=标题关键词（`headingKey`：**最长 CJK 片段**优先——「PR / 合并流程」→「合并流程」；纯英文取首个 ≥3 字母词；兜底原文）；
+  - ③ 命令用例：行内代码 `` `...` `` 提取命令词干（`commandStem`：去尖括号参数 `<dir>` 后取前两个字母开头词——`git worktree add <dir>` → `git worktree`；单词/flag 太泛返回空），Input 问命令使用场景，Expected=词干。
+- **Register 升级（幂等多 case）**：生成后用 `map[Input]bool` 与已有 cases 比对、缺失才 Create——dataset 已存在（旧版注册过 1 条）自动补足，重复注册零重复；无需给 EvalCase 加来源/哈希列（零迁移）。
+- **分数可比（Report 基线）**：Report 增 `BaselineScoreAvg/BaselinePassRate/ScoreDelta/PassRateDelta`；`baselineOf(runs, currentID)` 纯函数从 ListEvalRuns（created_at desc）取「最近一次 done 且非本次」作基线，Check 跑完 RunSync 后补基线——`ScoreDelta>0` 即本次优于上次，技能/提示词改动前后分数可对比。
+- **测试（9 例全绿）**：`selfgen_test.go` 6 例（真实技能正文三类用例全命中 / 琐碎正文仅保底 / 超长技能截断 ≤8 / nil·空名报错 / commandStem 去参数·flag 过滤 / headingKey CJK 优先）+ `regression_test.go` 扩展 3 例（Register 自举多 case 且重复幂等 / baselineOf 跳过 running·failed·本次取最近 done / 无历史 found=false）。
+- 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test -count=1 ./...` 39 包全 ok（cmd/server 25.8s，regression 0.18s 含新用例，其余无回归）；前端无改动。
+- Commit 43174cc 已推 origin/main。下一步：首个 ○ = M8-06（前端重构：拆分大 View + 删 PlaceholderView 死代码 + naive-ui 按需 + manualChunks，首屏 <500KB gzip）；M7.5-04 待用户提供集群后恢复。

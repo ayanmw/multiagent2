@@ -224,7 +224,7 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | M8-02 | **Docker 执行后端**：真·文件系统沙箱（容器+只读根+网络白名单），Executor 接口下可切换 | ✅ | 逃逸命令在容器内被拒；Host/Docker 后端可配置切换 | M1-04 |
 | M8-03 | **多节点 taskrun**：外部队列（Redis/DB 轮询）+ lease，突破 inprocess 单进程 | ✅ | 两节点并发派生子任务均收敛；节点崩溃任务可重拾 | M2-04 |
 | M8-04 | **Knowledge RAG 升级 PG/pgvector**：本地 sqlite/bolt → pgvector，支撑更大文档集与并发 | ✅ | 万级 chunk 检索 P99 达标；并发检索无退化 | M5-02 |
-| M8-05 | **评估集自举**：evolution 提取的技能反向生成 eval case，飞轮×回归自强化 | ○ | 新技能自动进 eval 集；回归分数可比 | M5-05 |
+| M8-05 | **评估集自举**：evolution 提取的技能反向生成 eval case，飞轮×回归自强化 | ✅ | 新技能自动进 eval 集（自举生成保底+标题+命令多用例）；回归分数可比（Report 附历史基线与 delta） | M5-05 |
 | M8-06 | **前端重构（补 S7）**：拆分 ChatView/AutomationView 等大 View；删 PlaceholderView 死代码；naive-ui 按需引入 + manualChunks | ○ | 首屏 <500KB gzip；vue-tsc 绿；功能不回归 | M0-17 |
 | M8-07 | **IM Channel**：飞书/钉钉/企微 Channel，Loop 可从 IM 触发与回发 | ○ | IM 消息触发 Loop；完成通知回发 IM | M4-04 |
 | M8-08 | **连接器市场**：预置 GitHub/GitLab/Slack/Jira 等 MCP 模板 | ○ | 一键导入模板建 MCP 配置 | M2-02 |
