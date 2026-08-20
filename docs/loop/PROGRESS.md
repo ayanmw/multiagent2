@@ -813,3 +813,13 @@
   - 另外明确「run 终态 ↔ 异步 Finalize merge」的最终一致性时差：Orchestrator 轮询到全部 run completed 时最后一个 merge 可能未落盘，压测断言对主分支文件与 worktree 清理做轮询等待（墙钟上限兜底死锁），worktree/taskrun 包补 `OnRunUpdate`/`BuildAgentFactory` 键匹配可观测日志（M7.5-03 排查中确认该时差是预期行为而非缺陷）。
 - 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test ./internal/...` 全绿（含 load 套件 3 连跑稳定、放大规模 50 用户/25 SSE/10 扇出/32+8 写者全 PASS、worktree 并发回归 PASS）；`cmd/server` 集成测试绿；前端无改动。压测指标汇总：并发对话 P99≈68-76ms、SSE P99≈202-208ms、扇出 10 任务 1.6s、SQLite 1000 写 0 锁错——**无死锁、无连接泄漏**。
 - Commit 待提交（feat(M7.5-03): 并发与压测套件 + 修复 worktree 并发 merge 竞态）。下一步：M7.5-04（K8s 实测，依赖 M7-03/M7-07，需用户目标集群环境）。
+
+### 2026-08-20 08:55 | M7.5-05 | ✅ 安全复核——四项防线集成测试 5/5 + runtime curl 实测全绿（M7.5-04 标记阻塞）
+- **背景**：M7.5-04（K8s 实测）需用户目标集群环境，本机无 kubectl/docker/kind/kubeconfig，无法在自动化环境完成 → PLAN.md 标记 **❌ 阻塞**（用户提供集群后恢复为 ○），本轮转向可本机验证的 M7.5-05。
+- **交付物**：
+  - 新增 `server/cmd/server/security_test.go`（M7.5-05 集成级安全复核套件，5 用例，走完整 buildRouter 中间件链，`config.Load()`+`t.Setenv` 注入低阈值/白名单）：
+    ① `TestSecurity_HighFreqLoginRateLimited` 登录限流（阈值 3/60s，4 连发 → 401/401/401/429）；② `TestSecurity_ChatRateLimited` 对话按用户限流（注册用户 4 连发 /api/chat → 502/502/502/429，前 3 次到达 handler、第 4 次中间件拦截）；③ `TestSecurity_CORSWhitelist` CORS 白名单（白名单源预检 204+ACAO 回显+Allow-Credentials:true；非白名单源无 ACAO 头，无反射回显）；④ `TestSecurity_AccessLog_NoPlaintext` 访问日志脱敏（obslog 捕获，明文 Authorization/X-API-Key/body 密码 0 命中）；⑤ `TestSecurity_AlertsWebhookToken` Alertmanager webhook 共享密钥（无/错 token 401，Bearer 与 X-Alert-Token 双通道 200）。
+  - 新增 **安全复核报告** `docs/security-review.md`：四项防线「代码审查 + 集成测试 + runtime 验证」三层结论、配置项、残留风险（进程内限流器多副本不共享；alerts 路由在 buildRouter 外由 main() 注册；生产须配 ALERT_WEBHOOK_TOKEN 与显式 CORS_ALLOWED_ORIGINS）。
+- **runtime 实测**（真实服务 PORT=8091 低阈值配置）：① 登录 4 连发 → 401/401/401/**429**；② 带明文敏感头请求后检索访问日志 → token/apikey/密码 3 个明文串 0 命中；③ CORS 预检 → 白名单源 204+ACAO:localhost:5173+Credentials，非白名单源 204 无 ACAO。
+- 验证：`CGO_ENABLED=0 go build/vet ./...` 全绿；`go test -count=1 -v ./cmd/server/ -run 'TestSecurity_'` 5/5 PASS；`go test -count=1 ./cmd/server/` 全量绿（含既有测试无回归）；前端无改动。
+- Commit 待提交（feat(M7.5-05): 安全复核集成测试套件 + 复核报告）。下一步：M8-01（A2A 流式 + client，依赖 M5-07 已完成）；M7.5-04 待用户提供集群后恢复。

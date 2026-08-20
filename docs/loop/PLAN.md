@@ -209,8 +209,8 @@ M0-01 ~ M0-19 全部 ✅（Auth / Provider·Model / AG-UI SSE 流式 / Session �
 | M7.5-01 | **CI 真跑闭环**：push/PR 触发后观察 GitHub Actions 三作业；修 ubuntu runner 才暴露的问题 | ✅ | 连续 3 次 main 分支 CI 全绿（server/web/docker 三作业） | M7-01 |
 | M7.5-02 | **真实模型端到端冒烟**：用本地网关（127.0.0.1:8088，hy3→deepseek-v4-pro 回退）跑 M6-06 冒烟套件 + 一条完整自主 Loop（goal→taskrun→worktree→merge） | ✅ | 冒烟套件真实路径全绿；Loop 全链路成功 ×2（LLM 决策脚本化驱动——WorkBuddy 网关不支持 function calling，工具链全真实执行，见 LEARNINGS 2026-08-20） | M6-06, M2-05 |
 | M7.5-03 | **并发与压测**：多用户并发对话、SSE 长连接稳定性、taskrun 扇出 5+ 子任务、SQLite 写锁 | ✅ | 压测报告：P99 时延、无死锁、无连接泄漏 | M2-04 |
-| M7.5-04 | **K8s 实测**：按 M7-07 文档 apply 到真实集群；验证 ingress 分流、SSE 不缓冲、崩溃自动重启、PVC 持久化 | ○ | `kubectl apply -f k8s/` 后端到端对话走通 | M7-03, M7-07 |
-| M7.5-05 | **安全复核**：登录/对话限流（MX-07）、CORS 白名单、日志脱敏生效（M7-06 securelogging）、Alertmanager webhook token | ○ | 高频登录被限流；日志无明文 token | MX-07, M7-06 |
+| M7.5-04 | **K8s 实测**：按 M7-07 文档 apply 到真实集群；验证 ingress 分流、SSE 不缓冲、崩溃自动重启、PVC 持久化 | ❌（阻塞：需真实集群环境，本机无 kubectl/docker/kind，用户提供目标集群后恢复为 ○） | `kubectl apply -f k8s/` 后端到端对话走通 | M7-03, M7-07 |
+| M7.5-05 | **安全复核**：登录/对话限流（MX-07）、CORS 白名单、日志脱敏生效（M7-06 securelogging）、Alertmanager webhook token | ✅ | 高频登录被限流；日志无明文 token（集成测试 5/5 + runtime curl 实测，详见 docs/security-review.md） | MX-07, M7-06 |
 
 ---
 
