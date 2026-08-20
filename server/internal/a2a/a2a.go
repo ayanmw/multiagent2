@@ -11,7 +11,15 @@ const ProtocolVersion = "0.2.0"
 const (
 	MethodMessageSend   = "message/send"
 	MethodTasksSend     = "tasks/send"
-	MethodMessageStream = "message/stream" // 预留：当前服务端仅实现非流式 message/send
+	MethodMessageStream = "message/stream" // M8-01：流式任务入口（SSE 事件流，见 Event* 常量）
+)
+
+// message/stream 的 SSE 事件名（Google A2A 规范 0.2.x）。
+// 约定：首帧是 JSON-RPC 响应信封（result=Task，初始状态）；其后的帧带 event: 行，
+// 分别携带任务状态更新（task.status_update）与产物更新（task.artifact_update）。
+const (
+	EventTaskStatusUpdate   = "task.status_update"
+	EventTaskArtifactUpdate = "task.artifact_update"
 )
 
 // Part 是消息/产物的一个内容块（A2A 规范支持 text/file/data）。
@@ -135,6 +143,22 @@ func JSONRPCError(id any, code int, msg string) JSONRPCResponse {
 		ID:      id,
 		Error:   &RPCError{Code: code, Message: msg},
 	}
+}
+
+// TaskStatusUpdateEvent 是 message/stream 流的中间/终止状态事件
+// （SSE 帧：event: task.status_update，data 为本结构 JSON）。
+// 中间帧的 Status.Message 携带增量进度文本（role=agent）；终帧 state=completed/failed。
+type TaskStatusUpdateEvent struct {
+	ID     string     `json:"id"`
+	Status TaskStatus `json:"status"`
+}
+
+// TaskArtifactUpdateEvent 是 message/stream 流的产物事件
+// （SSE 帧：event: task.artifact_update，data 为本结构 JSON）。
+// 服务端在任务完成时推送一条（如完整回复作为 reply.txt 产物），外部 client 可展示/落盘。
+type TaskArtifactUpdateEvent struct {
+	ID       string   `json:"id"`
+	Artifact Artifact `json:"artifact"`
 }
 
 // NowRFC3339 返回当前 UTC 时间戳（供 TaskStatus.Timestamp 使用）。
