@@ -921,3 +921,17 @@
 - **测试**：marketplace 8 例 + api 7 例（列表/导入 GitHub 占位符替换·密文落库·不回显/覆盖字段/409/404·400/RBAC/跨用户 owner 隔离+同名按用户隔离）+ repo 迁移 0013 单测（重建复合 + 双用户同名插入成功 + 同用户同名冲突）；CGO_ENABLED=0 build/vet 全绿、go test ./... **36 包全 ok**（新增 marketplace）；前端 vue-tsc + build 全绿（McpView 12.39KB gzip 4.63KB，naive-ui chunk 与基线持平）。
 - **Runtime 冒烟**（PORT=8091 临时库）：模板列表 8 个 → 导入 github 201（header_keys=['Authorization']）→ 用户2 导入同名 github 201（复合唯一生效）→ 用户1 重复导入 409 → 导入 fetch enabled:false 落库 0（修复生效）→ DB headers_enc 均为 AES 密文。
 - Commit 待提交。下一步：首个 ○ = M8-09（多租户隔离强化：workspace 级配额、租户预算上限、资源隔离）；M7.5-04 待用户提供集群后恢复。
+
+### 2026-08-20 17:55 | M8-09 | ✅ 多租户隔离强化——租户预算上限 + workspace 级配额（token+磁盘）+ 资源隔离
+- **背景**：M3-04 已有 user/session/automation 三级预算；M8-09 补齐多租户隔离三件套：租户预算上限、workspace 级配额（token + 磁盘）、租户间资源隔离（验收「租户 A 超配额不影响 B」）。
+- **交付**：
+  - ① `model/tenant.go`（tenants 表：name 唯一/status/CreatedBy）+ `users.tenant_id`（可空，nil=独立用户向后兼容）+ 迁移 `0014_add_tenant_and_quota_columns`（建表 + 幂等补 users.tenant_id / usage_records.workspace_key / workspaces.disk_quota_bytes 三列，AutoMigrate 补齐缺失列）。
+  - ② **预算作用域扩展**（`repo.EvaluateBudgets` 签名加 workspaceKey，五级 user→session→workspace→tenant→automation）：`tenant` 按 `user_id IN (SELECT id FROM users WHERE tenant_id=?)` 聚合租户内全部用户——**租户 A 用量只来自 A 的用户，天然不污染 B**；`workspace` 按 `usage_records.workspace_key` 聚合（会话绑定 workspace 时生效）。
+  - ③ **用量落 workspace**：`usage_records.workspace_key`（可空索引）+ `recordEngineUsage` 带 wsKey；`Gateway.prepareRun` 顺序调整（workspace 解析提前到预算检查之前，拿 wsKey/wsQuota），`preparedRun` 新增 wsKey/wsQuota。
+  - ④ **磁盘配额**：`workspaces.disk_quota_bytes`（0=不限）+ `codectool.enforceQuota(workdir, quota, delta)`——file_write（delta=len(content)）/file_edit（delta=(len(new)-len(old))*count）写前递归 Walk 目录总大小，超限返 `ErrDiskQuotaExceeded` 拒绝（目录边界独立统计=workspace 间互不影响）；`NewCodeActWithBackend/NewCodeActWithGitBackend` 增 quotaBytes 参数（旧入口传 0 向后兼容；team 模式 Coder 按 0 处理，产物 merge 回主 workspace 由单代理路径兜底）。
+  - ⑤ **API**：`api/tenant.go` 租户 CRUD + 成员加入/移出（`tenants:read/write`，developer 只读/admin 全权限；删除有成员 409；停用不可加成员）；`api/admin.go` 用户创建/更新支持 tenant_id；`api/workspace.go` PUT 支持 disk_quota_bytes；main.go 注册 `/api/tenants*` 路由。
+  - ⑥ 前端：`api/tenant.ts`（租户 + budgets upsert 封装）、`TenantsView.vue`（admin 专属：租户表格/创建/启停用/删除 + 成员管理抽屉（listUsers 按 tenant_id 分组）+ 租户预算弹窗（scope=tenant））、路由与菜单（非 admin 隐藏）。
+  - ⑦ 文档 `docs/tenant-isolation.md`（模型/迁移/拦截链路/配额/API/测试/边界）。
+- **测试（45+ 例全绿）**：repo 12 例（租户 CRUD/成员/删除非空拒绝；**workspace 作用域拦截**（ws-a 超限拦 ws-a、ws-b 与默认目录不受影响）；**租户隔离核心验收**（A 两用户共享上限超限全被拦且聚合=120、B 用户不受影响、独立用户不受影响、A 聚合不含 B 用量）；迁移 0014 建表补列+行为）；tool 5 例（file_write 超限拒绝且文件不落盘/file_edit 净增量超限拒绝且文件保持原样/变小放行/边界/0 不限）；api 3 例（RBAC developer 只读 admin 全通/CRUD 全流程含 409/admin 建用户带租户归属成员数正确）；`CGO_ENABLED=0 go build/vet` 全绿、`go test ./...` 全 ok；前端 vue-tsc + build 全绿（TenantsView 懒加载 chunk 不影响首屏）。
+- **Runtime 冒烟**（PORT=8093 临时库）：未登录 GET /api/tenants 401 → developer 注册后 GET 200（tenants:read 种子生效）→ developer POST 403（无 write）。
+- Commit 23a148a 已推 origin/main。下一步：首个 ○ = M8-10（切 PG：SQLite 单文件是单副本硬约束，目标并发写 >50 时提前执行，条件触发）；M7.5-04 待用户提供集群后恢复。
